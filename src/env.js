@@ -1,0 +1,31 @@
+// Tiny .env loader — no dependency needed. Values already in process.env win.
+const fs = require('fs');
+const path = require('path');
+
+const envPath = path.join(__dirname, '..', '.env');
+if (fs.existsSync(envPath)) {
+  for (const line of fs.readFileSync(envPath, 'utf8').split('\n')) {
+    const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/);
+    if (!m || line.trim().startsWith('#')) continue;
+    const [, key, raw] = m;
+    if (process.env[key] === undefined) {
+      process.env[key] = raw.replace(/^["']|["']$/g, '');
+    }
+  }
+}
+
+module.exports = {
+  PORT: parseInt(process.env.PORT || '3000', 10),
+  BASE_URL: process.env.BASE_URL || 'http://localhost:3000',
+  DB_PATH: process.env.DB_PATH || path.join(__dirname, '..', 'data', 'aqui.db'),
+  API_KEY: process.env.API_KEY || '',
+
+  SENDGRID_API_KEY: process.env.SENDGRID_API_KEY || '',
+  EMAIL_FROM: process.env.EMAIL_FROM || 'alerts@aqui.online',
+
+  WHATSAPP_TOKEN: process.env.WHATSAPP_TOKEN || '',
+  WHATSAPP_PHONE_NUMBER_ID: process.env.WHATSAPP_PHONE_NUMBER_ID || '',
+  WHATSAPP_VERIFY_TOKEN: process.env.WHATSAPP_VERIFY_TOKEN || 'aqui-verify',
+
+  TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN || ''
+};

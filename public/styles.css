@@ -1,0 +1,83 @@
+:root {
+  --bg: #f7f7f5;
+  --fg: #1a1a1a;
+  --accent: #c0392b;
+  --card: #ffffff;
+  --border: #ddd;
+  --muted: #666;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+  line-height: 1.5;
+}
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  background: var(--accent);
+  color: #fff;
+}
+header a { color: #fff; text-decoration: none; margin-left: 0.75rem; }
+.brand { font-weight: 700; font-size: 1.2rem; margin-left: 0; }
+nav .cta {
+  background: #fff;
+  color: var(--accent);
+  padding: 0.35rem 0.75rem;
+  border-radius: 6px;
+  font-weight: 600;
+}
+main { max-width: 640px; margin: 0 auto; padding: 1rem; }
+footer { max-width: 640px; margin: 2rem auto; padding: 0 1rem; color: var(--muted); font-size: 0.85rem; }
+h1 { font-size: 1.5rem; }
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  margin: 0.75rem 0;
+}
+.card h3 { margin: 0 0 0.25rem; }
+.card .meta { color: var(--muted); font-size: 0.8rem; margin-bottom: 0; }
+.card time { color: var(--muted); font-size: 0.85rem; }
+.badge {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #fff;
+}
+.badge.ok { background: #27ae60; }
+.badge.warn { background: #e67e22; }
+.badge.bad { background: #c0392b; }
+.badge.grave { background: #2c3e50; }
+.badge.muted { background: #95a5a6; }
+form.stack { display: grid; gap: 0.6rem; margin: 1rem 0; }
+input, select, textarea, button {
+  font: inherit;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  width: 100%;
+}
+button {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  font-weight: 600;
+  cursor: pointer;
+}
+button:hover { opacity: 0.92; }
+.search-row { display: flex; gap: 0.5rem; }
+.search-row input { flex: 1; }
+.search-row button { width: auto; }
+.notice { background: #eaf7ee; border: 1px solid #b7e0c2; padding: 0.6rem 0.9rem; border-radius: 6px; }
+.error { background: #fdecea; border: 1px solid #f5c6c2; padding: 0.6rem 0.9rem; border-radius: 6px; }
+label { font-weight: 600; font-size: 0.9rem; }
+label span { display: block; margin-bottom: 0.2rem; }
+.subtle { color: var(--muted); font-size: 0.9rem; }
