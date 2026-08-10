@@ -68,7 +68,7 @@ ${
 }
 `,
           {
-            fullTitle: 'aqui.online — Encuentro y reporto a personas por nombre o por reconocimiento facial',
+            fullTitle: 'aqui.online — Encuentra y reporta personas por nombre o por reconocimiento facial',
             description:
               'Tras el terremoto en Colombia del 10 de agosto. Información provista por voluntarios y extraída de bases de datos públicas.',
             path: '/'

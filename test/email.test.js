@@ -168,3 +168,33 @@ test('diag gives an actionable verdict for each failure mode', async (t) => {
   assert.equal(diag.email.test.status, 403);
   assert.match(diag.email.veredicto, /no está verificado|Sender Authentication/);
 });
+
+test('transactional emails disable click tracking so links are not rewritten', async (t) => {
+  const sg = await fakeSendgrid();
+  const app = await startApp();
+  t.after(() => {
+    sg.server.close();
+    app.server.close();
+    delete process.env.SENDGRID_API_KEY;
+    delete process.env.SENDGRID_API_BASE;
+  });
+  process.env.SENDGRID_API_KEY = 'SG.test-key';
+  process.env.SENDGRID_API_BASE = sg.base;
+
+  const { person } = await app.store.findOrCreatePerson('Beatriz Lozano');
+  await fetch(`${app.base}/person/${person.id}/subscribe`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ email: 'beatriz@ejemplo.com' }),
+    redirect: 'manual'
+  });
+
+  assert.equal(sg.received.length, 1);
+  const body = sg.received[0].body;
+  // SendGrid's tracking domain returned 403 in production, which broke every
+  // verification link. Links must go straight to aqui.online.
+  assert.equal(body.tracking_settings.click_tracking.enable, false);
+  assert.equal(body.tracking_settings.click_tracking.enable_text, false);
+  assert.equal(body.tracking_settings.open_tracking.enable, false);
+  assert.match(body.content[0].value, /https?:\/\/[^\s]*\/verify\?token=/);
+});
