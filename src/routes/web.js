@@ -78,7 +78,7 @@ function webRoutes(store, matcher) {
 </div>
 <div class="big-actions">
   <a class="big-btn report" href="/report">
-    <span class="btn-eyebrow">🚑 🚒 👮 🏥 Rescatistas, bomberos, policía y hospitales: reporten aquí</span>
+    <span class="btn-eyebrow">🚑 🚒 👮 🏥 Voluntarios, rescatistas, bomberos, policía y hospitales:</span>
     <span class="btn-title">📢 Reportar estado de alguien</span>
   </a>
   <a class="big-btn search" href="/buscar">
