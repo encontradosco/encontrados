@@ -120,6 +120,10 @@ function createStore(adapter) {
     return adapter.countQueryPhotos(subscriptionId);
   }
 
+  async function photosMissingFaceId(limit = 100) {
+    return adapter.photosMissingFaceId(limit);
+  }
+
   return {
     STATUSES,
     getPerson,
@@ -140,6 +144,7 @@ function createStore(adapter) {
     setPhotoFaceId,
     photosByFaceIds,
     countQueryPhotos,
+    photosMissingFaceId,
     close: () => adapter.close()
   };
 }

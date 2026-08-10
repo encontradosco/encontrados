@@ -187,6 +187,11 @@ async function createSqliteAdapter(dbPath) {
         )
         .all(...faceIds);
     },
+    async photosMissingFaceId(limit) {
+      return db
+        .prepare('SELECT * FROM photos WHERE face_id IS NULL ORDER BY id LIMIT ?')
+        .all(limit);
+    },
     async countQueryPhotos(subscriptionId) {
       return db
         .prepare("SELECT COUNT(*) AS n FROM photos WHERE subscription_id = ? AND kind = 'query'")

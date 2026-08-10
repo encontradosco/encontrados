@@ -203,6 +203,9 @@ async function createPostgresAdapter(connectionString) {
         [faceIds]
       );
     },
+    async photosMissingFaceId(limit) {
+      return all('SELECT * FROM photos WHERE face_id IS NULL ORDER BY id LIMIT $1', [limit]);
+    },
     async countQueryPhotos(subscriptionId) {
       const r = await one(
         "SELECT COUNT(*)::int AS n FROM photos WHERE subscription_id = $1 AND kind = 'query'",

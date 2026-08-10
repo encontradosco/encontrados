@@ -2,7 +2,7 @@ const express = require('express');
 const env = require('../env');
 const { notifySubscribers, sendVerificationEmail } = require('../notify');
 const { STATUSES } = require('../people');
-const { processPhoto, MAX_QUERY_PHOTOS } = require('../facematch');
+const { processPhoto, backfillUnindexedPhotos, MAX_QUERY_PHOTOS } = require('../facematch');
 
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
@@ -151,6 +151,16 @@ function apiRoutes(store, matcher) {
     })
   );
 
+  // POST/GET /api/reindex — index photos stored while matching was down and
+  // notify anyone whose search now matches. Safe to run repeatedly.
+  router.all(
+    '/reindex',
+    wrap(async (req, res) => {
+      const limit = Math.min(parseInt(req.query.limit || '100', 10) || 100, 500);
+      res.json(await backfillUnindexedPhotos(store, matcher, limit));
+    })
+  );
+
   // GET /api/diag — configuration and live self-test. Never exposes secrets.
   // ?email=you@example.com sends a real test email and reports the result.
   router.get(
@@ -181,6 +191,11 @@ function apiRoutes(store, matcher) {
         const recent = await store.getRecentUpdates(1);
         out.database.ok = true;
         out.database.recent_updates = recent.length;
+        const pending = await store.photosMissingFaceId(500);
+        out.faces.photos_pending_indexing = pending.length;
+        if (pending.length) {
+          out.faces.hint = 'Ejecuta /api/reindex para indexarlas y avisar coincidencias.';
+        }
       } catch (e) {
         out.database.error = e.message;
       }
