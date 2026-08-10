@@ -14,9 +14,17 @@ if (fs.existsSync(envPath)) {
   }
 }
 
+// On Vercel, derive the public URL from the deployment env so email links work
+// even without BASE_URL configured.
+const defaultBaseUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL
+  ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
+  : process.env.VERCEL_URL
+    ? `https://${process.env.VERCEL_URL}`
+    : 'http://localhost:3000';
+
 module.exports = {
   PORT: parseInt(process.env.PORT || '3000', 10),
-  BASE_URL: process.env.BASE_URL || 'http://localhost:3000',
+  BASE_URL: process.env.BASE_URL || defaultBaseUrl,
   DB_PATH: process.env.DB_PATH || path.join(__dirname, '..', 'data', 'aqui.db'),
   API_KEY: process.env.API_KEY || '',
 
