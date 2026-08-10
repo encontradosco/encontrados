@@ -86,7 +86,7 @@ test('web: multipart report with photo stores it', async (t) => {
   fd.set('photo', new File([photoBytes('andres')], 'foto.jpg', { type: 'image/jpeg' }));
 
   const res = await fetch(`${base}/report`, { method: 'POST', body: fd, redirect: 'manual' });
-  assert.equal(res.status, 302);
+  assert.equal(res.status, 303);
   assert.equal(matcher.calls.index, 1);
 
   const [person] = await store.searchPeople('andres castro');
@@ -111,7 +111,7 @@ test('web: subscribe form accepts up to 3 query photos', async (t) => {
     body: fd,
     redirect: 'manual'
   });
-  assert.equal(res.status, 302);
+  assert.equal(res.status, 303);
   const [sub] = await store.getSubscriptions(person.id);
   // capped at 3 even though 4 were sent (multer rejects the extra file)
   assert.ok((await store.countQueryPhotos(sub.id)) <= 3);
@@ -215,7 +215,7 @@ test('subscribe alias: POST /person/:id works like /subscribe', async (t) => {
     body: new URLSearchParams({ email: 'alias@ejemplo.com' }),
     redirect: 'manual'
   });
-  assert.equal(res.status, 302);
+  assert.equal(res.status, 303);
   assert.match(res.headers.get('location'), /revisa-tu-correo/);
 });
 
@@ -230,7 +230,7 @@ test('report without name but with photo creates unidentified person', async (t)
   fd.set('message', 'Encontrada inconsciente cerca del parque');
   fd.set('photo', new File([photoBytes('desconocida')], 'foto.jpg', { type: 'image/jpeg' }));
   const res = await fetch(`${base}/report`, { method: 'POST', body: fd, redirect: 'manual' });
-  assert.equal(res.status, 302);
+  assert.equal(res.status, 303);
 
   const page = await fetch(`${base}${res.headers.get('location')}`);
   assert.match(await page.text(), /Persona sin identificar/);

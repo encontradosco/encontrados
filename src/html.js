@@ -144,7 +144,6 @@ function layout(title, body, meta = {}) {
 ${body}
 </main>
 <footer>
-  <p>aqui.online — información de personas en emergencias. Las fotos que subas nunca se comparten ni se muestran: solo se usan para reconocimiento facial.</p>
   <p><a href="/privacidad">Política de privacidad</a> · <a href="/terminos">Términos de servicio</a></p>
 </footer>
 ${RESIZE_SCRIPT}

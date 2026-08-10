@@ -94,7 +94,7 @@ test('web: home renders, report form flow works', async (t) => {
     }),
     redirect: 'manual'
   });
-  assert.equal(report.status, 302);
+  assert.equal(report.status, 303);
   const personUrl = report.headers.get('location');
 
   const page = await fetch(`${base}${personUrl}`);
