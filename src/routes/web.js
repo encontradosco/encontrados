@@ -52,8 +52,14 @@ function webRoutes(store, matcher) {
   <p class="subhead">Información provista por voluntarios y extraída de bases de datos públicas.</p>
 </div>
 <div class="big-actions">
-  <a class="big-btn report" href="/report">📢 Reportar estado de alguien</a>
-  <a class="big-btn search" href="/buscar">🔎 Buscar a alguien</a>
+  <a class="big-btn report" href="/report">
+    <span class="btn-title">📢 Reportar estado de alguien</span>
+    <span class="btn-sub">Tuyo o de otra persona</span>
+  </a>
+  <a class="big-btn search" href="/buscar">
+    <span class="btn-title">🔎 Buscar a alguien</span>
+    <span class="btn-sub">Por nombre o reconocimiento facial</span>
+  </a>
 </div>
 ${
   recent.length
