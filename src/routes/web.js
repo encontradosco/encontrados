@@ -220,7 +220,8 @@ document.addEventListener('submit', function (ev) {
         const { sub, needsVerification } = await store.subscribe(person.id, 'email', email);
         await attachQueryPhotos(person, sub, files);
         if (needsVerification) {
-          sendVerificationEmail(person, sub).catch((e) => console.error('[buscar verify]', e));
+          // MUST await: on serverless the function freezes once we respond.
+          await sendVerificationEmail(person, sub);
           return res.redirect(303, checkEmailUrl(q ? `/buscar?q=${encodeURIComponent(q)}` : '/buscar'));
         }
         notice = '<p class="notice">🔔 Te avisaremos cuando haya novedades.</p>';
@@ -322,7 +323,7 @@ ${LOCATION_SCRIPT}`,
         source: 'web',
         reporter
       });
-      notifySubscribers(store, person, update).catch((e) => console.error('[web notify]', e));
+      await notifySubscribers(store, person, update);
       if (req.file) {
         await processPhoto(store, matcher, {
           personId: person.id,
@@ -398,7 +399,7 @@ ${
     const { sub, needsVerification } = await store.subscribe(person.id, 'email', email);
     await attachQueryPhotos(person, sub, req.files);
     if (needsVerification) {
-      sendVerificationEmail(person, sub).catch((e) => console.error('[verify email]', e));
+      await sendVerificationEmail(person, sub);
       return res.redirect(303, checkEmailUrl(`/person/${person.id}`));
     }
     res.redirect(303, `/person/${person.id}?subscribed=1`);
@@ -421,7 +422,7 @@ ${
       const { sub, needsVerification } = await store.subscribe(person.id, 'email', email.trim());
       await attachQueryPhotos(person, sub, req.files);
       if (needsVerification) {
-        sendVerificationEmail(person, sub).catch((e) => console.error('[verify email]', e));
+        await sendVerificationEmail(person, sub);
         return res.redirect(303, checkEmailUrl(`/person/${person.id}`));
       }
       res.redirect(303, `/person/${person.id}?subscribed=1`);

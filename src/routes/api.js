@@ -88,7 +88,7 @@ function apiRoutes(store, matcher) {
         source: 'api',
         reporter
       });
-      notifySubscribers(store, person, update).catch((e) => console.error('[api notify]', e));
+      await notifySubscribers(store, person, update);
       const photo = decodePhoto(req.body.photo);
       if (photo) {
         await processPhoto(store, matcher, {
@@ -142,7 +142,7 @@ function apiRoutes(store, matcher) {
           }
         }
         if (needsVerification) {
-          sendVerificationEmail(person, sub).catch((e) => console.error('[api verify email]', e));
+          await sendVerificationEmail(person, sub);
         }
         res.status(201).json({ ok: true, pending_verification: needsVerification, photos_stored: photosStored });
       } catch (e) {

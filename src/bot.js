@@ -106,9 +106,7 @@ async function handleInbound(store, { channel, from, text, photo, matcher = null
       source: channel,
       reporter: from
     });
-    notifySubscribers(store, person, update, { skipAddress: from }).catch((e) =>
-      console.error('[bot notify]', e)
-    );
+    await notifySubscribers(store, person, update, { skipAddress: from });
     if (photo) {
       await processPhoto(store, matcher, {
         personId: person.id,

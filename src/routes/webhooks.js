@@ -31,7 +31,8 @@ function webhookRoutes(store, matcher) {
   });
 
   router.post('/whatsapp', async (req, res) => {
-    res.sendStatus(200); // ack fast; Meta retries on timeouts
+    // Process BEFORE acknowledging: on serverless, responding first freezes
+    // the function and the outbound reply never leaves. Meta allows ~20s.
     try {
       const changes = (req.body.entry || []).flatMap((e) => e.changes || []);
       for (const change of changes) {
@@ -71,6 +72,7 @@ function webhookRoutes(store, matcher) {
     } catch (e) {
       console.error('[webhook:whatsapp]', e);
     }
+    res.sendStatus(200);
   });
 
   return router;
