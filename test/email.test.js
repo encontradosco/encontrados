@@ -107,3 +107,64 @@ test('a SendGrid rejection is surfaced, not swallowed', async (t) => {
   assert.equal(result.status, 403);
   assert.match(result.error, /verified Sender Identity/);
 });
+
+test('a failed verification email is shown on screen, never silently swallowed', async (t) => {
+  // SendGrid rejecting the sender is the classic production failure.
+  const sg = http.createServer((req, res) => {
+    res.writeHead(403, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ errors: [{ message: 'The from address does not match a verified Sender Identity.' }] }));
+  });
+  await new Promise((r) => sg.listen(0, r));
+  const app = await startApp();
+  t.after(() => {
+    sg.close();
+    app.server.close();
+    delete process.env.SENDGRID_API_KEY;
+    delete process.env.SENDGRID_API_BASE;
+  });
+  process.env.SENDGRID_API_KEY = 'SG.test-key';
+  process.env.SENDGRID_API_BASE = `http://127.0.0.1:${sg.address().port}`;
+
+  const { person } = await app.store.findOrCreatePerson('Nubia Cárdenas');
+  const res = await fetch(`${app.base}/person/${person.id}/subscribe`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ email: 'nadie@ejemplo.com' })
+  });
+  assert.equal(res.status, 502);
+  const html = await res.text();
+  assert.match(html, /No pudimos enviar el correo/);
+  assert.match(html, /verified Sender Identity/);
+});
+
+test('diag gives an actionable verdict for each failure mode', async (t) => {
+  const app = await startApp();
+  t.after(() => {
+    app.server.close();
+    delete process.env.SENDGRID_API_KEY;
+    delete process.env.SENDGRID_API_BASE;
+  });
+
+  // No key configured at all
+  delete process.env.SENDGRID_API_KEY;
+  const noKey = await (await fetch(`${app.base}/api/diag`)).json();
+  assert.equal(noKey.email.sendgrid_key_present, false);
+  assert.equal(noKey.runtime.fetch_available, true);
+
+  // Key present but SendGrid rejects the sender
+  const sg = http.createServer((req, res) => {
+    res.writeHead(403, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ errors: [{ message: 'The from address does not match a verified Sender Identity.' }] }));
+  });
+  await new Promise((r) => sg.listen(0, r));
+  t.after(() => sg.close());
+  process.env.SENDGRID_API_KEY = 'SG.abc';
+  process.env.SENDGRID_API_BASE = `http://127.0.0.1:${sg.address().port}`;
+
+  const app2 = await startApp();
+  t.after(() => app2.server.close());
+  const diag = await (await fetch(`${app2.base}/api/diag?email=x@ejemplo.com`)).json();
+  assert.equal(diag.email.test.ok, false);
+  assert.equal(diag.email.test.status, 403);
+  assert.match(diag.email.veredicto, /no está verificado|Sender Authentication/);
+});

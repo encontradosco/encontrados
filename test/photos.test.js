@@ -5,6 +5,7 @@ const { createStore } = require('../src/people');
 const { createApp } = require('../src/server');
 const { handleInbound } = require('../src/bot');
 const { processPhoto } = require('../src/facematch');
+const { fakeSendgrid } = require('./helpers');
 
 // Fake matcher: identical bytes = same face. Lets us test the whole match
 // pipeline without AWS.
@@ -97,8 +98,12 @@ test('web: multipart report with photo stores it', async (t) => {
 
 test('web: subscribe form accepts up to 3 query photos', async (t) => {
   const matcher = fakeMatcher();
+  const sg = await fakeSendgrid();
   const { server, base, store } = await startApp(matcher);
-  t.after(() => server.close());
+  t.after(() => {
+    server.close();
+    sg.stop();
+  });
 
   const { person } = await store.findOrCreatePerson('Rosa Elvira Gil');
   const fd = new FormData();
@@ -189,6 +194,7 @@ test('buscar: photo search returns immediate face matches', async (t) => {
   const { person } = await store.findOrCreatePerson('Sofía Herrera');
   const update = await store.addUpdate(person.id, { status: 'safe', source: 'web' });
   const { processPhoto } = require('../src/facematch');
+const { fakeSendgrid } = require('./helpers');
   await processPhoto(store, matcher, {
     personId: person.id, kind: 'report', updateId: update.id,
     bytes: photoBytes('sofia'), contentType: 'image/jpeg'
@@ -206,8 +212,12 @@ test('buscar: photo search returns immediate face matches', async (t) => {
 });
 
 test('subscribe alias: POST /person/:id works like /subscribe', async (t) => {
+  const sg = await fakeSendgrid();
   const { server, base, store } = await startApp(fakeMatcher());
-  t.after(() => server.close());
+  t.after(() => {
+    server.close();
+    sg.stop();
+  });
   const { person } = await store.findOrCreatePerson('Iván Prieto');
   const res = await fetch(`${base}/person/${person.id}`, {
     method: 'POST',

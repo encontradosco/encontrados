@@ -20,6 +20,32 @@ function decodePhoto(p) {
   }
 }
 
+// Turn SendGrid's raw response into an actionable sentence in Spanish.
+function emailVerdict(email) {
+  if (!email.sendgrid_key_present) {
+    return 'SENDGRID_API_KEY no está definida en este entorno de Vercel. Agrégala en Settings → Environment Variables (Production) y vuelve a desplegar.';
+  }
+  if (!email.sendgrid_key_looks_valid) {
+    return `La clave no empieza por "SG." (empieza por "${email.sendgrid_key_prefix}"), así que no parece una API key de SendGrid. Genera una en SendGrid → Settings → API Keys con permiso "Mail Send".`;
+  }
+  const t = email.test || {};
+  if (t.ok) return 'Correo enviado correctamente. Si no llega, revisa spam y la Activity Feed de SendGrid.';
+  const err = String(t.error || '');
+  if (t.status === 401) {
+    return 'SendGrid rechazó la clave (401). Genera una nueva API key con permiso "Mail Send" y actualízala en Vercel.';
+  }
+  if (t.status === 403) {
+    if (/Sender Identity|from address/i.test(err)) {
+      return `SendGrid rechaza el remitente ${email.from} (403): no está verificado. Verifícalo en SendGrid → Settings → Sender Authentication (Single Sender o dominio). Alternativa inmediata: define EMAIL_FROM en Vercel con un remitente ya verificado.`;
+    }
+    return `SendGrid devolvió 403: la clave existe pero no tiene permiso "Mail Send", o el remitente ${email.from} no está verificado.`;
+  }
+  if (t.error && /fetch/i.test(err)) {
+    return 'El entorno no pudo hacer la petición HTTP a SendGrid (fetch falló). Revisa la versión de Node en Vercel.';
+  }
+  return `SendGrid respondió ${t.status || 'sin estado'}: ${err.slice(0, 300)}`;
+}
+
 function apiRoutes(store, matcher) {
   const router = express.Router();
   router.use(express.json({ limit: '16mb' }));
@@ -161,6 +187,63 @@ function apiRoutes(store, matcher) {
     })
   );
 
+  // GET /api/diag/sendgrid — ask SendGrid about deliverability for an address:
+  // suppressions (bounce/block/spam/invalid), verified senders, and whether the
+  // sending domain is authenticated (SPF/DKIM). A 202 from the send API only
+  // means "accepted"; these are the reasons mail still never lands.
+  router.get(
+    '/diag/sendgrid',
+    wrap(async (req, res) => {
+      const key = (process.env.SENDGRID_API_KEY || env.SENDGRID_API_KEY || '').trim();
+      if (!key) return res.status(400).json({ error: 'SENDGRID_API_KEY no configurada' });
+      const address = String(req.query.email || '').trim();
+
+      const get = async (path) => {
+        try {
+          const r = await fetch(`https://api.sendgrid.com${path}`, {
+            headers: { Authorization: `Bearer ${key}` }
+          });
+          const text = await r.text();
+          let body;
+          try {
+            body = JSON.parse(text);
+          } catch {
+            body = text.slice(0, 300);
+          }
+          return { status: r.status, body };
+        } catch (e) {
+          return { error: e.message };
+        }
+      };
+
+      const [bounces, blocks, spam, invalid, senders, domains] = await Promise.all([
+        address ? get(`/v3/suppression/bounces/${encodeURIComponent(address)}`) : { skipped: true },
+        address ? get(`/v3/suppression/blocks/${encodeURIComponent(address)}`) : { skipped: true },
+        address ? get(`/v3/suppression/spam_reports/${encodeURIComponent(address)}`) : { skipped: true },
+        address ? get(`/v3/suppression/invalid_emails/${encodeURIComponent(address)}`) : { skipped: true },
+        get('/v3/verified_senders'),
+        get('/v3/whitelabel/domains')
+      ]);
+
+      const domainList = Array.isArray(domains.body) ? domains.body : [];
+      const fromDomain = env.EMAIL_FROM.split('@')[1];
+      const matching = domainList.find((d) => d.domain === fromDomain);
+
+      res.json({
+        from: env.EMAIL_FROM,
+        checked_address: address || '(pasa ?email= para revisar supresiones)',
+        suppressions: { bounces, blocks, spam, invalid },
+        verified_senders_status: senders.status,
+        verified_senders: Array.isArray(senders.body?.results)
+          ? senders.body.results.map((v) => ({ email: v.from_email, verified: v.verified }))
+          : senders.body,
+        domain_authentication: matching
+          ? { domain: matching.domain, valid: matching.valid, dns_ok: matching.valid }
+          : `El dominio ${fromDomain} NO está autenticado en SendGrid (solo remitente único). Sin SPF/DKIM propios, Gmail y Outlook suelen mandar el correo a spam o descartarlo — sobre todo si el destinatario es del mismo dominio que el remitente.`
+      });
+    })
+  );
+
   // GET /api/diag — configuration and live self-test. Never exposes secrets.
   // ?email=you@example.com sends a real test email and reports the result.
   router.get(
@@ -169,14 +252,28 @@ function apiRoutes(store, matcher) {
       if (typeof matcher.ensureReady === 'function') {
         await matcher.ensureReady();
       }
+      // Read the key live: config captured at module load can be stale.
+      const liveKey = (process.env.SENDGRID_API_KEY || env.SENDGRID_API_KEY || '').trim();
       const out = {
         base_url: env.BASE_URL,
         database: {
           driver: process.env.DATABASE_URL || process.env.POSTGRES_URL || process.env.STORAGE_URL ? 'postgres' : 'sqlite (efímero)',
           ok: false
         },
+        runtime: {
+          node: process.version,
+          vercel_env: process.env.VERCEL_ENV || '(local)',
+          fetch_available: typeof fetch === 'function'
+        },
         email: {
-          sendgrid_key_present: !!env.SENDGRID_API_KEY,
+          sendgrid_key_present: !!liveKey,
+          // Fingerprint only — never the secret itself.
+          sendgrid_key_len: liveKey.length,
+          sendgrid_key_prefix: liveKey.slice(0, 3),
+          sendgrid_key_looks_valid: /^SG\./.test(liveKey),
+          raw_key_had_whitespace:
+            !!process.env.SENDGRID_API_KEY &&
+            process.env.SENDGRID_API_KEY !== process.env.SENDGRID_API_KEY.trim(),
           from: env.EMAIL_FROM
         },
         faces: {
@@ -208,6 +305,7 @@ function apiRoutes(store, matcher) {
           'Prueba de configuración — aqui.online',
           'Si recibes este correo, el envío desde aqui.online funciona correctamente.'
         );
+        out.email.veredicto = emailVerdict(out.email);
       }
 
       res.json(out);

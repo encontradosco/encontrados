@@ -140,7 +140,8 @@ document.addEventListener('submit', function (ev) {
       const { sub, needsVerification } = await store.subscribe(person.id, 'email', email);
       await attachQueryPhotos(person, sub, files);
       if (needsVerification) {
-        await sendVerificationEmail(person, sub);
+        const sent = await sendVerificationEmail(person, sub);
+        if (!sent.ok) return emailFailurePage(res, sent, email);
         return res.redirect(303, checkEmailUrl(`/person/${person.id}`));
       }
       res.redirect(303, `/person/${person.id}?subscribed=1`);
@@ -270,7 +271,8 @@ ${newSearchButton()}`
         await attachQueryPhotos(person, sub, files);
         if (needsVerification) {
           // MUST await: on serverless the function freezes once we respond.
-          await sendVerificationEmail(person, sub);
+          const sent = await sendVerificationEmail(person, sub);
+          if (!sent.ok) return emailFailurePage(res, sent, email);
           return res.redirect(303, checkEmailUrl(q ? `/buscar?q=${encodeURIComponent(q)}` : '/buscar'));
         }
         notice = '<p class="notice">🔔 Te avisaremos cuando haya novedades.</p>';
@@ -461,6 +463,24 @@ ${
     })
   );
 
+  // If the confirmation email cannot be sent, say so on screen with the
+  // provider's own message — silence is what made this hard to diagnose.
+  function emailFailurePage(res, result, email) {
+    return res.status(502).send(
+      layout(
+        'No pudimos enviar el correo',
+        `<div class="takeover">
+  <div class="takeover-emoji">⚠️</div>
+  <h1>No pudimos enviar el correo de confirmación</h1>
+  <p>Tu alerta quedó guardada, pero el correo a <strong>${esc(email)}</strong> no salió.</p>
+  <p class="subtle">Detalle técnico: ${esc(result && (result.error || result.status) ? `${result.status || ''} ${result.error || ''}` : 'sin detalle')}</p>
+  <p class="subtle">Escríbenos a <a href="mailto:a@torrenegra.com">a@torrenegra.com</a> y te avisamos manualmente.</p>
+</div>`,
+        { fullTitle: 'Error al enviar el correo — aqui.online' }
+      )
+    );
+  }
+
   function checkEmailUrl(next) {
     return `/revisa-tu-correo${next ? `?next=${encodeURIComponent(next)}` : ''}`;
   }
@@ -477,7 +497,8 @@ ${
     const { sub, needsVerification } = await store.subscribe(person.id, 'email', email);
     await attachQueryPhotos(person, sub, req.files);
     if (needsVerification) {
-      await sendVerificationEmail(person, sub);
+      const sent = await sendVerificationEmail(person, sub);
+      if (!sent.ok) return emailFailurePage(res, sent, email);
       return res.redirect(303, checkEmailUrl(`/person/${person.id}`));
     }
     res.redirect(303, `/person/${person.id}?subscribed=1`);
@@ -500,7 +521,8 @@ ${
       const { sub, needsVerification } = await store.subscribe(person.id, 'email', email.trim());
       await attachQueryPhotos(person, sub, req.files);
       if (needsVerification) {
-        await sendVerificationEmail(person, sub);
+        const sent = await sendVerificationEmail(person, sub);
+        if (!sent.ok) return emailFailurePage(res, sent, email.trim());
         return res.redirect(303, checkEmailUrl(`/person/${person.id}`));
       }
       res.redirect(303, `/person/${person.id}?subscribed=1`);
