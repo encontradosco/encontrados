@@ -244,3 +244,42 @@ test('report without name but with photo creates unidentified person', async (t)
   });
   assert.equal(bad.status, 400);
 });
+
+test('backfill indexes photos stored while matching was down and notifies', async (t) => {
+  const { nullMatcher } = require('../src/faces');
+  const { backfillUnindexedPhotos } = require('../src/facematch');
+  const adapter = await createSqliteAdapter(':memory:');
+  const store = createStore(adapter);
+
+  // A searcher subscribed (verified) with a photo while matching was DOWN
+  const { person: buscada } = await store.findOrCreatePerson('Marta Quintero');
+  const { sub } = await store.subscribe(buscada.id, 'email', 'hermano@ejemplo.com');
+  await store.verifySubscription(sub.verify_token);
+  await processPhoto(store, nullMatcher, {
+    personId: buscada.id, kind: 'query', subscriptionId: sub.id,
+    bytes: photoBytes('marta'), contentType: 'image/jpeg'
+  });
+
+  // A report with the same face was also filed while matching was DOWN
+  const { person: nn } = await store.findOrCreatePerson('Persona sin identificar ab12');
+  const update = await store.addUpdate(nn.id, { status: 'injured', source: 'web' });
+  await processPhoto(store, nullMatcher, {
+    personId: nn.id, kind: 'report', updateId: update.id,
+    bytes: photoBytes('marta'), contentType: 'image/jpeg'
+  });
+
+  // Nothing indexed yet
+  assert.equal((await store.photosMissingFaceId(50)).length, 2);
+
+  // Matching comes back online → backfill finds the missed coincidence
+  const matcher = fakeMatcher();
+  const result = await backfillUnindexedPhotos(store, matcher, 50);
+  assert.equal(result.ok, true);
+  assert.equal(result.processed, 2);
+  assert.equal(result.notifications, 1);
+  assert.equal((await store.photosMissingFaceId(50)).length, 0);
+
+  // Running again is a no-op
+  const again = await backfillUnindexedPhotos(store, matcher, 50);
+  assert.equal(again.processed, 0);
+});
