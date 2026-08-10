@@ -9,6 +9,12 @@ async function createAdapter() {
     return createPostgresAdapter(pgUrl);
   }
   const { createSqliteAdapter } = require('./sqlite');
+  if (process.env.VERCEL) {
+    // Serverless filesystem is read-only except /tmp. This keeps the app usable
+    // before Postgres is attached, but data does NOT survive between invocations.
+    console.warn('[store] No DATABASE_URL/POSTGRES_URL set on Vercel — using EPHEMERAL SQLite in /tmp. Attach Postgres for real persistence.');
+    return createSqliteAdapter('/tmp/aqui.db');
+  }
   return createSqliteAdapter(env.DB_PATH);
 }
 
