@@ -283,3 +283,34 @@ test('backfill indexes photos stored while matching was down and notifies', asyn
   const again = await backfillUnindexedPhotos(store, matcher, 50);
   assert.equal(again.processed, 0);
 });
+
+test('buscar results replace the form with a Nueva búsqueda button', async (t) => {
+  const { server, base, store } = await startApp(fakeMatcher());
+  t.after(() => server.close());
+  await store.findOrCreatePerson('Lucía Fernández');
+  await store.addUpdate((await store.searchPeople('lucia fernandez'))[0].id, {
+    status: 'safe',
+    source: 'web'
+  });
+
+  const post = await fetch(`${base}/buscar`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ q: 'lucia fernandez' })
+  });
+  const html = await post.text();
+  assert.match(html, /Lucía Fernández/);
+  assert.match(html, /Nueva búsqueda/);
+  assert.doesNotMatch(html, /data-require-name-or-photos/); // form is hidden
+
+  const get = await fetch(`${base}/buscar?q=lucia%20fernandez`);
+  const getHtml = await get.text();
+  assert.match(getHtml, /Nueva búsqueda/);
+  assert.doesNotMatch(getHtml, /data-require-name-or-photos/);
+
+  // No match → the form stays so they can retry or subscribe
+  const none = await fetch(`${base}/buscar?q=nadie%20existente`);
+  const noneHtml = await none.text();
+  assert.match(noneHtml, /No encontramos/);
+  assert.match(noneHtml, /data-require-name-or-photos/);
+});

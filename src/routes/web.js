@@ -94,6 +94,10 @@ document.addEventListener('submit', function (ev) {
 </script>`;
   }
 
+  function newSearchButton() {
+    return '<p><a class="big-btn search" href="/buscar">🔎 Nueva búsqueda</a></p>';
+  }
+
   async function nameResultsHtml(q) {
     const matches = await store.searchPeople(q, { limit: 10 });
     if (!matches.length) return null;
@@ -113,14 +117,18 @@ document.addEventListener('submit', function (ev) {
     '/buscar',
     wrap(async (req, res) => {
       const q = (req.query.q || '').trim();
-      let resultsHtml = '';
-      if (q) {
-        resultsHtml =
-          (await nameResultsHtml(q)) ||
-          `<div class="error"><p>No encontramos reportes sobre <strong>${esc(q)}</strong>. Deja tu correo arriba y te avisamos, o <a href="/report?name=${encodeURIComponent(q)}">crea un reporte</a>.</p></div>`;
-      }
+      const found = q ? await nameResultsHtml(q) : null;
+      // With results, the form gives way to a "Nueva búsqueda" button.
+      // With no results, the form stays so they can retry or leave their email.
+      const body = found
+        ? `<h1 class="compact">Resultados</h1>${found}${newSearchButton()}`
+        : `<h1 class="compact">¿Buscas a alguien?</h1>${
+            q
+              ? `<div class="error"><p>No encontramos reportes sobre <strong>${esc(q)}</strong>. Deja tu correo abajo y te avisamos, o <a href="/report?name=${encodeURIComponent(q)}">crea un reporte</a>.</p></div>`
+              : ''
+          }${buscarForm(q)}`;
       res.send(
-        layout('Buscar', `<h1 class="compact">¿Buscas a alguien?</h1>${buscarForm(q)}${resultsHtml}`, {
+        layout('Buscar', body, {
           fullTitle: q
             ? `¿Has visto a ${q}? — aqui.online · Terremoto en Colombia`
             : 'Buscar a alguien — aqui.online · Terremoto en Colombia',
@@ -207,8 +215,14 @@ document.addEventListener('submit', function (ev) {
       res.send(
         layout(
           'Buscar',
-          `<h1 class="compact">¿Buscas a alguien?</h1>${notice}${buscarForm(q)}${sections.join('')}
-<p><a href="/report${q ? `?name=${encodeURIComponent(q)}` : ''}">➕ ¿Tienes información? Crea un reporte</a></p>`
+          `<h1 class="compact">Resultados${q ? ` para "${esc(q)}"` : ''}</h1>${notice}${sections.join('')}
+<p><a href="/report${q ? `?name=${encodeURIComponent(q)}` : ''}">➕ ¿Tienes información? Crea un reporte</a></p>
+${newSearchButton()}`,
+          {
+            fullTitle: q
+              ? `¿Has visto a ${q}? — aqui.online · Terremoto en Colombia`
+              : 'Resultados de búsqueda — aqui.online'
+          }
         )
       );
     })
