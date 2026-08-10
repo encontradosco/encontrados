@@ -36,11 +36,18 @@ test('API: report, fuzzy search, person detail, subscription', async (t) => {
   const { results } = await search.json();
   assert.equal(results.length, 1);
   assert.equal(results[0].latest_update.status, 'safe');
+  // Privacy: the raw `reporter` never comes back in the public JSON, only a
+  // masked label. 'Hermana' is a name (not phone/email), so it passes
+  // through as-is here.
+  assert.equal(results[0].latest_update.reporter, undefined);
+  assert.equal(results[0].latest_update.reporter_label, 'Hermana');
 
   const detail = await fetch(`${base}/api/people/${results[0].id}`);
   const person = await detail.json();
   assert.equal(person.updates.length, 1);
   assert.equal(person.updates[0].location, 'Cali');
+  assert.equal(person.updates[0].reporter, undefined);
+  assert.equal(person.updates[0].reporter_label, 'Hermana');
 
   const sub = await fetch(`${base}/api/people/${results[0].id}/subscriptions`, {
     method: 'POST',
@@ -90,7 +97,8 @@ test('web: home renders, report form flow works', async (t) => {
       name: 'Pedro Pablo Ramírez',
       status: 'missing',
       message: 'No contesta desde ayer',
-      location: 'Barrio Centro'
+      location: 'Barrio Centro',
+      reporter: 'María Gómez, Cruz Roja'
     }),
     redirect: 'manual'
   });
@@ -102,6 +110,27 @@ test('web: home renders, report form flow works', async (t) => {
   assert.match(html, /Pedro Pablo Ramírez/);
   assert.match(html, /DESAPARECIDO/);
   assert.match(html, /Última ubicación reportada/);
+  // Privacy: a name reporter renders masked to first-name + initial, never
+  // the full free-text reporter value.
+  assert.match(html, /Reportado por: María G\./);
+  assert.ok(!html.includes('María Gómez, Cruz Roja'));
+
+  // A reporter that looks like a phone number renders as a generic label,
+  // never the raw number.
+  const phoneReport = await fetch(`${base}/report`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      name: 'Otra Persona',
+      status: 'safe',
+      reporter: '3001234567'
+    }),
+    redirect: 'manual'
+  });
+  const phonePage = await fetch(`${base}${phoneReport.headers.get('location')}`);
+  const phoneHtml = await phonePage.text();
+  assert.match(phoneHtml, /Reportado por: Reporte ciudadano/);
+  assert.ok(!phoneHtml.includes('3001234567'));
 });
 
 test('webhook: whatsapp inbound message is processed', async (t) => {
@@ -135,4 +164,24 @@ test('webhook: whatsapp inbound message is processed', async (t) => {
   assert.equal(results.length, 1);
   assert.equal(results[0].latest_update.status, 'safe');
   assert.equal(results[0].latest_update.source, 'whatsapp');
+
+  // Privacy: bot.js sets `reporter` to the sender's raw WhatsApp phone
+  // number (see src/bot.js). That number must never reach a public reader —
+  // not the raw field, not disguised inside reporter_label.
+  const phone = '573000000000';
+  assert.equal(results[0].latest_update.reporter, undefined);
+  assert.equal(results[0].latest_update.reporter_label, 'Reporte ciudadano');
+  assert.ok(!JSON.stringify(results[0]).includes(phone));
+
+  const detail = await fetch(`${base}/api/people/${results[0].id}`);
+  const person = await detail.json();
+  assert.equal(person.updates[0].reporter, undefined);
+  assert.equal(person.updates[0].reporter_label, 'Reporte ciudadano');
+  assert.ok(!JSON.stringify(person).includes(phone));
+
+  // Same story on the public HTML person page.
+  const page = await fetch(`${base}/person/${results[0].id}`);
+  const html = await page.text();
+  assert.match(html, /Reporte ciudadano/);
+  assert.ok(!html.includes(phone));
 });

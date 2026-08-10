@@ -3,6 +3,7 @@ const env = require('../env');
 const { notifySubscribers, sendVerificationEmail } = require('../notify');
 const { STATUSES } = require('../people');
 const { processPhoto, backfillUnindexedPhotos, MAX_QUERY_PHOTOS } = require('../facematch');
+const { publicUpdate } = require('../privacy');
 
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
@@ -71,7 +72,7 @@ function apiRoutes(store, matcher) {
           id: p.id,
           full_name: p.full_name,
           score: p.score,
-          latest_update: (await store.getLatestUpdate(p.id)) || null
+          latest_update: publicUpdate(await store.getLatestUpdate(p.id))
         }))
       );
       res.json({ results });
@@ -87,7 +88,7 @@ function apiRoutes(store, matcher) {
       res.json({
         id: person.id,
         full_name: person.full_name,
-        updates: await store.getUpdates(person.id)
+        updates: (await store.getUpdates(person.id)).map(publicUpdate)
       });
     })
   );
