@@ -308,11 +308,13 @@ test('buscar results replace the form with a Nueva búsqueda button', async (t) 
   assert.match(getHtml, /Nueva búsqueda/);
   assert.doesNotMatch(getHtml, /data-require-name-or-photos/);
 
-  // No match → the form stays so they can retry or subscribe
+  // No match → the alert panel leads the page (not the search form)
   const none = await fetch(`${base}/buscar?q=nadie%20existente`);
   const noneHtml = await none.text();
   assert.match(noneHtml, /No encontramos/);
-  assert.match(noneHtml, /data-require-name-or-photos/);
+  assert.match(noneHtml, /Te avisamos apenas haya noticias/);
+  assert.match(noneHtml, /action="\/alerta"/);
+  assert.doesNotMatch(noneHtml, /data-require-name-or-photos/);
 });
 
 test('photo-only search renders a result page (not a bounce back to the form)', async (t) => {

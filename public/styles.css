@@ -259,3 +259,35 @@ pre {
   background: var(--accent);
   transition: width 0.2s ease;
 }
+
+.alert-panel {
+  background: var(--surface);
+  border: 2px solid var(--accent);
+  border-radius: 12px;
+  padding: 1rem;
+  margin: 0.75rem 0 1.25rem;
+}
+.alert-panel h2 { margin: 0 0 0.25rem; font-size: 1.15rem; }
+.alert-panel p { margin: 0 0 0.5rem; }
+.alert-panel form { margin: 0; }
+#location-field { display: block; }
+
+.choice { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.choice label {
+  flex: 1 1 45%;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  padding: 0.5rem 0.7rem;
+  background: var(--surface);
+  font-weight: 500;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+.choice input { width: auto; }
+.choice label:has(input:checked) {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(43, 108, 176, 0.15);
+}

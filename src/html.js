@@ -232,11 +232,15 @@ const LOCATION_SCRIPT = `<script>
       document.getElementById('lat').value = pos.coords.latitude.toFixed(6);
       document.getElementById('lng').value = pos.coords.longitude.toFixed(6);
       btn.textContent = '✅ Ubicación compartida';
+      // GPS is more precise than a typed address: hide the address field.
+      var field = document.getElementById('location-field');
+      if (field) field.style.display = 'none';
       fetch('https://nominatim.openstreetmap.org/reverse?format=json&lat=' + pos.coords.latitude + '&lon=' + pos.coords.longitude)
         .then(function (r) { return r.json(); })
         .then(function (d) {
           var loc = document.getElementById('location');
           if (d.display_name && !loc.value) loc.value = d.display_name.split(',').slice(0, 4).join(',');
+          if (loc && loc.value) btn.textContent = '✅ ' + loc.value;
         }).catch(function () {});
     }, function () { btn.textContent = 'No se pudo obtener la ubicación'; });
   });
