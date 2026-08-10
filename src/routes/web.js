@@ -105,6 +105,48 @@ document.addEventListener('submit', function (ev) {
 </script>`;
   }
 
+  // Highly visible "create an alert" panel — on a no-results screen this is
+  // the action that matters, so it leads the page instead of hiding in a form.
+  function alertPanel(q) {
+    const who = q ? `<strong>${esc(q)}</strong>` : 'esta persona';
+    return `
+<section class="alert-panel">
+  <h2>🔔 Te avisamos apenas haya noticias de ${who}</h2>
+  <p class="subtle">Déjanos tu correo. Si alguien reporta a ${who} —o si una foto coincide con su rostro— te escribimos de inmediato.</p>
+  <form class="stack compact" method="post" action="/alerta" enctype="multipart/form-data" data-resize-photos>
+    <input type="hidden" name="q" value="${esc(q)}">
+    <input type="email" name="email" required placeholder="Tu correo electrónico *" aria-label="Tu correo electrónico">
+    <label class="file-label"><span>📷 Fotos de la persona (opcional, hasta 3 — mejoran el reconocimiento facial)</span>
+      <input type="file" name="photos" accept="image/*" multiple></label>
+    <button>Crear alerta</button>
+  </form>
+</section>`;
+  }
+
+  // Create the alert: subscribe by email (with optional photos for face
+  // matching) and send the confirmation email.
+  router.post(
+    '/alerta',
+    upload.array('photos', 8),
+    wrap(async (req, res) => {
+      const q = (req.body.q || '').trim();
+      const email = (req.body.email || '').trim();
+      if (!EMAIL_RE.test(email)) {
+        return res.status(400).send(layout('Error', '<p class="error">Correo inválido.</p>'));
+      }
+      const files = (req.files || []).slice(0, MAX_QUERY_PHOTOS);
+      const anchorName = q || `Búsqueda por foto ${crypto.randomBytes(3).toString('hex')}`;
+      const { person } = await store.findOrCreatePerson(anchorName);
+      const { sub, needsVerification } = await store.subscribe(person.id, 'email', email);
+      await attachQueryPhotos(person, sub, files);
+      if (needsVerification) {
+        await sendVerificationEmail(person, sub);
+        return res.redirect(303, checkEmailUrl(`/person/${person.id}`));
+      }
+      res.redirect(303, `/person/${person.id}?subscribed=1`);
+    })
+  );
+
   function newSearchButton() {
     return '<p><a class="big-btn search" href="/buscar">🔎 Nueva búsqueda</a></p>';
   }
@@ -133,11 +175,13 @@ document.addEventListener('submit', function (ev) {
       // With no results, the form stays so they can retry or leave their email.
       const body = found
         ? `<h1 class="compact">Resultados</h1>${found}${newSearchButton()}`
-        : `<h1 class="compact">¿Buscas a alguien?</h1>${
-            q
-              ? `<div class="error"><p>No encontramos reportes sobre <strong>${esc(q)}</strong>. Deja tu correo abajo y te avisamos, o <a href="/report?name=${encodeURIComponent(q)}">crea un reporte</a>.</p></div>`
-              : ''
-          }${buscarForm(q)}`;
+        : q
+          ? `<h1 class="compact">Resultados para "${esc(q)}"</h1>
+${alertPanel(q)}
+<div class="error"><p>No encontramos reportes sobre <strong>${esc(q)}</strong>.</p></div>
+<p><a href="/report?name=${encodeURIComponent(q)}">➕ ¿Tienes información? Crea un reporte</a></p>
+${newSearchButton()}`
+          : `<h1 class="compact">¿Buscas a alguien?</h1>${buscarForm(q)}`;
       res.send(
         layout('Buscar', body, {
           fullTitle: q
@@ -164,6 +208,7 @@ document.addEventListener('submit', function (ev) {
       }
 
       const sections = [];
+      let foundAnything = false;
 
       // Immediate face search: compare uploaded photos against report photos.
       if (files.length) {
@@ -194,6 +239,7 @@ document.addEventListener('submit', function (ev) {
   ${latest ? `<p>${statusBadge(latest.status)} ${timeTag(latest.created_at)}</p>` : ''}
 </article>`);
           }
+          foundAnything = true;
           sections.push('<h2>Posibles coincidencias por rostro</h2>' + cards.join(''));
         } else if (matcher.enabled) {
           sections.push(
@@ -208,7 +254,10 @@ document.addEventListener('submit', function (ev) {
 
       if (q) {
         const nameHtml = await nameResultsHtml(q);
-        if (nameHtml) sections.push(nameHtml);
+        if (nameHtml) {
+          foundAnything = true;
+          sections.push(nameHtml);
+        }
         else sections.push(`<div class="error"><p>No encontramos reportes con el nombre <strong>${esc(q)}</strong>.</p></div>`);
       }
 
@@ -230,10 +279,13 @@ document.addEventListener('submit', function (ev) {
         sections.push('<p class="subtle">Deja tu correo en el formulario para avisarte si aparece una coincidencia futura.</p>');
       }
 
+      // Nothing found and no alert created yet → lead with the alert panel.
+      const nothingFound = !foundAnything && !notice;
       res.send(
         layout(
           'Buscar',
-          `<h1 class="compact">Resultados${q ? ` para "${esc(q)}"` : ''}</h1>${notice}${sections.join('')}
+          `<h1 class="compact">Resultados${q ? ` para "${esc(q)}"` : ''}</h1>
+${nothingFound ? alertPanel(q) : ''}${notice}${sections.join('')}
 <p><a href="/report${q ? `?name=${encodeURIComponent(q)}` : ''}">➕ ¿Tienes información? Crea un reporte</a></p>
 ${newSearchButton()}`,
           {
@@ -255,10 +307,14 @@ ${newSearchButton()}`,
       layout(
         'Reportar estado',
         `
-<h1 class="compact">Reportar estado <span class="subtle">(de otra persona o tuyo)</span></h1>
+<h1 class="compact">Reportar estado</h1>
 <form class="stack compact" method="post" action="/report" enctype="multipart/form-data" data-resize-photos data-require-name-or-photo>
-  <input name="name" value="${esc(req.query.name || '')}" placeholder="Nombre de la persona (si lo sabes)" aria-label="Nombre de la persona">
-  <label class="file-label"><span>📷 Foto de la persona (galería o cámara — clave si no sabes su nombre)</span>
+  <div class="choice" role="radiogroup" aria-label="¿A quién reportas?">
+    <label><input type="radio" name="subject" value="other" checked> Reporto a otra persona</label>
+    <label><input type="radio" name="subject" value="self"> Me reporto a mí mismo(a)</label>
+  </div>
+  <input name="name" id="name" value="${esc(req.query.name || '')}" placeholder="Nombre de la persona (si lo sabes)" aria-label="Nombre de la persona">
+  <label class="file-label"><span id="photo-hint">📷 Foto de la persona (galería o cámara — clave si no sabes su nombre)</span>
     <input type="file" name="photo" accept="image/*"></label>
   ${PRIVACY_NOTE}
   <select name="status" required aria-label="Estado">
@@ -266,14 +322,32 @@ ${newSearchButton()}`,
     ${options}
   </select>
   <textarea name="message" rows="2" placeholder="Nota: qué sabes, cuándo, cómo (opcional)" aria-label="Nota"></textarea>
-  <input name="location" id="location" list="location-options" autocomplete="off" placeholder="Ubicación — elige una sugerencia (opcional)" aria-label="Ubicación">
-  <datalist id="location-options"></datalist>
+  <span id="location-field">
+    <input name="location" id="location" list="location-options" autocomplete="off" placeholder="Ubicación — elige una sugerencia (opcional)" aria-label="Ubicación">
+    <datalist id="location-options"></datalist>
+  </span>
   <button type="button" id="geo-btn" class="secondary">📍 Compartir mi ubicación actual</button>
   <input type="hidden" name="lat" id="lat"><input type="hidden" name="lng" id="lng">
-  <input name="reporter" placeholder="Tu nombre o teléfono (opcional)" aria-label="Tu nombre o teléfono">
+  <input name="reporter" id="reporter" placeholder="Tu nombre o teléfono (opcional)" aria-label="Tu nombre o teléfono">
   <button>Enviar reporte</button>
 </form>
 <script>
+(function () {
+  var radios = document.querySelectorAll('input[name=subject]');
+  var name = document.getElementById('name');
+  var reporter = document.getElementById('reporter');
+  var hint = document.getElementById('photo-hint');
+  function sync() {
+    var self = document.querySelector('input[name=subject]:checked').value === 'self';
+    name.placeholder = self ? 'Tu nombre completo' : 'Nombre de la persona (si lo sabes)';
+    reporter.placeholder = self ? 'Tu teléfono (opcional)' : 'Tu nombre o teléfono (opcional)';
+    hint.textContent = self
+      ? '📷 Tu foto (galería o cámara — ayuda a que te encuentren)'
+      : '📷 Foto de la persona (galería o cámara — clave si no sabes su nombre)';
+  }
+  for (var i = 0; i < radios.length; i++) radios[i].addEventListener('change', sync);
+  sync();
+})();
 document.addEventListener('submit', function (ev) {
   var f = ev.target;
   if (!f.matches('form[data-require-name-or-photo]')) return;
@@ -301,8 +375,9 @@ ${LOCATION_SCRIPT}`,
     '/report',
     upload.single('photo'),
     wrap(async (req, res) => {
-      const { name, status, message, location, reporter } = req.body;
+      const { name, status, message, location, reporter, subject } = req.body;
       const hasName = name && name.trim();
+      const isSelf = subject === 'self';
       if (!STATUSES.includes(status) || (!hasName && !req.file)) {
         return res
           .status(400)
@@ -321,7 +396,10 @@ ${LOCATION_SCRIPT}`,
         lat: parseFloat(req.body.lat),
         lng: parseFloat(req.body.lng),
         source: 'web',
-        reporter
+        // A first-hand report is a stronger signal than a second-hand one.
+        reporter: isSelf
+          ? `${(reporter || '').trim() ? `${reporter.trim()} · ` : ''}la propia persona`
+          : reporter
       });
       await notifySubscribers(store, person, update);
       if (req.file) {
