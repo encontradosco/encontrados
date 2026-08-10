@@ -25,7 +25,7 @@ header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 0.75rem 1rem;
+  padding: 0.5rem 1rem;
   background: var(--azul);
   color: #fff;
 }
@@ -42,23 +42,24 @@ nav .cta {
   background: var(--amarillo);
   color: #1a1a1a;
   text-align: center;
-  padding: 0.5rem 1rem;
-  font-size: 0.95rem;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.85rem;
   border-bottom: 1px solid #e0b900;
 }
-main { max-width: 640px; margin: 0 auto; padding: 1rem; }
+main { max-width: 640px; margin: 0 auto; padding: 0.75rem 1rem; }
 footer { max-width: 640px; margin: 2rem auto; padding: 0 1rem; color: var(--muted); font-size: 0.85rem; }
 h1 { font-size: 1.5rem; }
-.hero { text-align: center; padding: 1.5rem 0 0.5rem; }
-.hero h1 { font-size: 1.7rem; margin-bottom: 0.4rem; }
-.hero p { color: var(--muted); }
-.big-actions { display: grid; gap: 0.9rem; margin: 1.5rem 0 2rem; }
+h1.compact { font-size: 1.2rem; margin: 0.4rem 0 0.6rem; }
+h1.compact .subtle { font-weight: 400; font-size: 0.85rem; }
+.hero { text-align: center; padding: 0.5rem 0 0; }
+.hero h1 { font-size: 1.35rem; margin: 0.3rem 0; }
+.big-actions { display: grid; gap: 0.7rem; margin: 0.8rem 0 1.2rem; }
 .big-btn {
   display: block;
   text-align: center;
-  padding: 1.1rem 1rem;
+  padding: 1rem;
   border-radius: 10px;
-  font-size: 1.25rem;
+  font-size: 1.15rem;
   font-weight: 700;
   text-decoration: none;
   color: #fff;
@@ -91,6 +92,9 @@ h1 { font-size: 1.5rem; }
 .badge.grave { background: #2c3e50; }
 .badge.muted { background: #95a5a6; }
 form.stack { display: grid; gap: 0.6rem; margin: 1rem 0; }
+form.stack.compact { gap: 0.45rem; margin: 0.5rem 0; }
+.file-label { display: flex; flex-direction: column; gap: 0.15rem; }
+.file-label span { font-weight: 500; font-size: 0.85rem; color: var(--muted); }
 input, select, textarea, button {
   font: inherit;
   padding: 0.55rem 0.7rem;
@@ -113,7 +117,7 @@ button.secondary { background: #fff; color: var(--azul); border: 1px solid var(-
 .search-row button { width: auto; }
 .notice { background: #eaf7ee; border: 1px solid #b7e0c2; padding: 0.6rem 0.9rem; border-radius: 6px; }
 .error { background: #fdecea; border: 1px solid #f5c6c2; padding: 0.6rem 0.9rem; border-radius: 6px; }
-.privacy { background: #eef2fb; border: 1px solid #c5d1ee; padding: 0.6rem 0.9rem; border-radius: 6px; font-size: 0.9rem; }
+.privacy { background: #eef2fb; border: 1px solid #c5d1ee; padding: 0.4rem 0.7rem; border-radius: 6px; font-size: 0.8rem; margin: 0; }
 label { font-weight: 600; font-size: 0.9rem; }
 label span { display: block; margin-bottom: 0.2rem; }
 .subtle { color: var(--muted); font-size: 0.9rem; }

@@ -41,15 +41,12 @@ function webRoutes(store, matcher) {
     '/',
     wrap(async (req, res) => {
       if (req.query.q) return res.redirect(`/buscar?q=${encodeURIComponent(req.query.q)}`);
-      const recent = await store.getRecentUpdates(8);
+      const recent = await store.getRecentUpdates(5);
       res.send(
         layout(
           'Inicio',
           `
-<div class="hero">
-  <h1>¿Tu familia y amigos están bien?</h1>
-  <p>Reporta y encuentra personas afectadas por el terremoto en Colombia del lunes 10 de agosto.</p>
-</div>
+<div class="hero"><h1>¿Tu familia y amigos están bien?</h1></div>
 <div class="big-actions">
   <a class="big-btn report" href="/report">📢 Reportar estado de alguien</a>
   <a class="big-btn search" href="/buscar">🔎 Buscar a alguien</a>
@@ -82,8 +79,8 @@ ${
 <h2>Recibir aviso cuando haya noticias</h2>
 <form class="stack" method="post" action="/subscribe-by-name" enctype="multipart/form-data" data-resize-photos>
   <input type="hidden" name="name" value="${esc(q)}">
-  <label><span>Tu correo electrónico</span><input type="email" name="email" required placeholder="tucorreo@ejemplo.com"></label>
-  <label><span>Fotos de la persona (opcional, 2 o 3 fotos ayudan al reconocimiento facial)</span>
+  <input type="email" name="email" required placeholder="Tu correo electrónico *" aria-label="Tu correo electrónico">
+  <label class="file-label"><span>📷 Fotos de la persona (opcional, 2–3 ayudan al reconocimiento)</span>
     <input type="file" name="photos" accept="image/*" multiple></label>
   ${PRIVACY_NOTE}
   <button>🔔 Avisarme cuando haya noticias de ${esc(q)}</button>
@@ -127,23 +124,22 @@ ${resultsHtml}
       layout(
         'Reportar estado',
         `
-<h1>Reportar el estado de una persona</h1>
-<p class="subtle">Puede ser otra persona o tú mismo(a).</p>
-<form class="stack" method="post" action="/report" enctype="multipart/form-data" data-resize-photos>
-  <label><span>Nombre completo de la persona *</span>
-    <input name="name" required value="${esc(req.query.name || '')}" placeholder="Juan Carlos Pérez"></label>
-  <label><span>Estado *</span><select name="status" required>${options}</select></label>
-  <label><span>Nota (qué sabes, cuándo, cómo)</span>
-    <textarea name="message" rows="3" placeholder="Hablé con él a las 3pm, está en el albergue"></textarea></label>
-  <label><span>Ubicación (empieza a escribir y elige una sugerencia)</span>
-    <input name="location" id="location" list="location-options" autocomplete="off" placeholder="Albergue San José, Mocoa">
-    <datalist id="location-options"></datalist></label>
-  <button type="button" id="geo-btn" class="secondary">📍 Compartir mi ubicación actual (opcional)</button>
+<h1 class="compact">Reportar estado <span class="subtle">(de otra persona o tuyo)</span></h1>
+<form class="stack compact" method="post" action="/report" enctype="multipart/form-data" data-resize-photos>
+  <input name="name" required value="${esc(req.query.name || '')}" placeholder="Nombre completo de la persona *" aria-label="Nombre completo de la persona">
+  <select name="status" required aria-label="Estado">
+    <option value="" disabled selected>Estado *</option>
+    ${options}
+  </select>
+  <textarea name="message" rows="2" placeholder="Nota: qué sabes, cuándo, cómo (opcional)" aria-label="Nota"></textarea>
+  <input name="location" id="location" list="location-options" autocomplete="off" placeholder="Ubicación — elige una sugerencia (opcional)" aria-label="Ubicación">
+  <datalist id="location-options"></datalist>
+  <button type="button" id="geo-btn" class="secondary">📍 Compartir mi ubicación actual</button>
   <input type="hidden" name="lat" id="lat"><input type="hidden" name="lng" id="lng">
-  <label><span>Foto de la persona (opcional — desde tu galería o tomándola con la cámara)</span>
+  <label class="file-label"><span>📷 Foto (opcional, galería o cámara)</span>
     <input type="file" name="photo" accept="image/*"></label>
+  <input name="reporter" placeholder="Tu nombre o teléfono (opcional)" aria-label="Tu nombre o teléfono">
   ${PRIVACY_NOTE}
-  <label><span>Tu nombre o teléfono (opcional)</span><input name="reporter" placeholder="María Gómez, 300 123 4567"></label>
   <button>Enviar reporte</button>
 </form>
 ${LOCATION_SCRIPT}`
@@ -208,10 +204,9 @@ ${
     : '<p class="subtle">Sin reportes todavía.</p>'
 }
 <h2>Recibir avisos por correo</h2>
-<form class="stack" method="post" action="/person/${person.id}/subscribe" enctype="multipart/form-data" data-resize-photos>
-  <label><span>Tu correo electrónico</span>
-    <input type="email" name="email" required placeholder="tucorreo@ejemplo.com"></label>
-  <label><span>Fotos de la persona (opcional, 2 o 3 fotos ayudan al reconocimiento facial)</span>
+<form class="stack compact" method="post" action="/person/${person.id}/subscribe" enctype="multipart/form-data" data-resize-photos>
+  <input type="email" name="email" required placeholder="Tu correo electrónico *" aria-label="Tu correo electrónico">
+  <label class="file-label"><span>📷 Fotos de la persona (opcional, 2–3 ayudan al reconocimiento)</span>
     <input type="file" name="photos" accept="image/*" multiple></label>
   ${PRIVACY_NOTE}
   <button>🔔 Suscribirme a novedades de ${esc(person.full_name)}</button>
