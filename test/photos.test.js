@@ -218,3 +218,29 @@ test('subscribe alias: POST /person/:id works like /subscribe', async (t) => {
   assert.equal(res.status, 302);
   assert.match(res.headers.get('location'), /checkemail=1/);
 });
+
+test('report without name but with photo creates unidentified person', async (t) => {
+  const matcher = fakeMatcher();
+  const { server, base, store } = await startApp(matcher);
+  t.after(() => server.close());
+
+  const fd = new FormData();
+  fd.set('name', '');
+  fd.set('status', 'injured');
+  fd.set('message', 'Encontrada inconsciente cerca del parque');
+  fd.set('photo', new File([photoBytes('desconocida')], 'foto.jpg', { type: 'image/jpeg' }));
+  const res = await fetch(`${base}/report`, { method: 'POST', body: fd, redirect: 'manual' });
+  assert.equal(res.status, 302);
+
+  const page = await fetch(`${base}${res.headers.get('location')}`);
+  assert.match(await page.text(), /Persona sin identificar/);
+  assert.equal(matcher.calls.index, 1);
+
+  // no name and no photo → rejected
+  const bad = await fetch(`${base}/report`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ name: '', status: 'safe' })
+  });
+  assert.equal(bad.status, 400);
+});

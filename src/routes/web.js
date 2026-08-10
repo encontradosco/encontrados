@@ -225,8 +225,10 @@ document.addEventListener('submit', function (ev) {
         'Reportar estado',
         `
 <h1 class="compact">Reportar estado <span class="subtle">(de otra persona o tuyo)</span></h1>
-<form class="stack compact" method="post" action="/report" enctype="multipart/form-data" data-resize-photos>
-  <input name="name" required value="${esc(req.query.name || '')}" placeholder="Nombre completo de la persona *" aria-label="Nombre completo de la persona">
+<form class="stack compact" method="post" action="/report" enctype="multipart/form-data" data-resize-photos data-require-name-or-photo>
+  <input name="name" value="${esc(req.query.name || '')}" placeholder="Nombre de la persona (si lo sabes)" aria-label="Nombre de la persona">
+  <label class="file-label"><span>📷 Foto de la persona (galería o cámara — clave si no sabes su nombre)</span>
+    <input type="file" name="photo" accept="image/*"></label>
   <select name="status" required aria-label="Estado">
     <option value="" disabled selected>Estado *</option>
     ${options}
@@ -236,12 +238,23 @@ document.addEventListener('submit', function (ev) {
   <datalist id="location-options"></datalist>
   <button type="button" id="geo-btn" class="secondary">📍 Compartir mi ubicación actual</button>
   <input type="hidden" name="lat" id="lat"><input type="hidden" name="lng" id="lng">
-  <label class="file-label"><span>📷 Foto (opcional, galería o cámara)</span>
-    <input type="file" name="photo" accept="image/*"></label>
   <input name="reporter" placeholder="Tu nombre o teléfono (opcional)" aria-label="Tu nombre o teléfono">
   ${PRIVACY_NOTE}
   <button>Enviar reporte</button>
 </form>
+<script>
+document.addEventListener('submit', function (ev) {
+  var f = ev.target;
+  if (!f.matches('form[data-require-name-or-photo]')) return;
+  var name = f.querySelector('input[name=name]').value.trim();
+  var ph = f.querySelector('input[type=file]').files.length;
+  if (!name && !ph) {
+    ev.preventDefault();
+    ev.stopImmediatePropagation();
+    alert('Escribe el nombre de la persona o sube una foto (al menos uno de los dos).');
+  }
+}, true);
+</script>
 ${LOCATION_SCRIPT}`,
         {
           fullTitle: 'Reportar el estado de una persona — Aquí · Terremoto en Colombia',
@@ -258,10 +271,18 @@ ${LOCATION_SCRIPT}`,
     upload.single('photo'),
     wrap(async (req, res) => {
       const { name, status, message, location, reporter } = req.body;
-      if (!name || !name.trim() || !STATUSES.includes(status)) {
-        return res.status(400).send(layout('Error', '<p class="error">Faltan datos del reporte.</p>'));
+      const hasName = name && name.trim();
+      if (!STATUSES.includes(status) || (!hasName && !req.file)) {
+        return res
+          .status(400)
+          .send(layout('Error', '<p class="error">Faltan datos: indica el estado y el nombre o una foto de la persona.</p>'));
       }
-      const { person } = await store.findOrCreatePerson(name);
+      // Unknown/unconscious person: anchor on a uniquely-named placeholder;
+      // the photo becomes the identifier via face matching.
+      const personName = hasName
+        ? name
+        : `Persona sin identificar ${crypto.randomBytes(2).toString('hex')}`;
+      const { person } = await store.findOrCreatePerson(personName);
       const update = await store.addUpdate(person.id, {
         status,
         message,
