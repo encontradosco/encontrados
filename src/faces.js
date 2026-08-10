@@ -11,6 +11,7 @@ const THRESHOLD = parseFloat(process.env.FACE_MATCH_THRESHOLD || '90');
 
 const nullMatcher = {
   enabled: false,
+  status: 'deshabilitado (sin credenciales de AWS o error de inicialización)',
   async indexFace() {
     return null;
   },
@@ -43,8 +44,10 @@ async function createMatcher() {
     }
   }
 
+  console.log(`[faces] Rekognition ready (collection ${COLLECTION_ID}, region ${process.env.AWS_REGION || 'us-east-1'})`);
   return {
     enabled: true,
+    status: `activo (colección ${COLLECTION_ID})`,
     // Returns the provider face id, or null when no face is detected.
     async indexFace(bytes, externalId) {
       const res = await client.send(
@@ -56,7 +59,17 @@ async function createMatcher() {
           QualityFilter: 'AUTO'
         })
       );
-      return res.FaceRecords?.[0]?.Face?.FaceId || null;
+      const faceId = res.FaceRecords?.[0]?.Face?.FaceId || null;
+      if (!faceId) {
+        console.warn(
+          `[faces] no face detected in photo ${externalId} (unindexed:`,
+          JSON.stringify(res.UnindexedFaces || []),
+          ')'
+        );
+      } else {
+        console.log(`[faces] indexed photo ${externalId} as ${faceId}`);
+      }
+      return faceId;
     },
     // Returns [{ faceId, similarity }] above the threshold.
     async searchByImage(bytes) {
@@ -69,17 +82,64 @@ async function createMatcher() {
             MaxFaces: 10
           })
         );
-        return (res.FaceMatches || []).map((m) => ({
+        const matches = (res.FaceMatches || []).map((m) => ({
           faceId: m.Face.FaceId,
           similarity: m.Similarity
         }));
+        console.log(`[faces] search returned ${matches.length} match(es)`);
+        return matches;
       } catch (e) {
         // "no face in the image" is a normal outcome, not an error
-        if (e.name === 'InvalidParameterException') return [];
+        if (e.name === 'InvalidParameterException') {
+          console.warn('[faces] search: no face detected in the uploaded photo');
+          return [];
+        }
+        console.error('[faces] search failed:', e.name, e.message);
         throw e;
       }
     }
   };
 }
 
-module.exports = { createMatcher, nullMatcher };
+// Serverless instances are long-lived: if Rekognition failed to initialize at
+// boot (transient error, credentials added moments later), a permanently
+// disabled matcher would silently break matching for that whole instance.
+// This wrapper retries initialization on demand, at most once a minute.
+function createLazyMatcher() {
+  let real = null;
+  let lastTry = 0;
+  const RETRY_MS = 60000;
+
+  async function get(now) {
+    if (real && real.enabled) return real;
+    if (now - lastTry < RETRY_MS) return real || nullMatcher;
+    lastTry = now;
+    try {
+      real = await createMatcher();
+    } catch (e) {
+      console.error('[faces] init failed:', e.message);
+      real = nullMatcher;
+    }
+    return real;
+  }
+
+  return {
+    get enabled() {
+      return !!(real && real.enabled);
+    },
+    get status() {
+      return (real && real.status) || 'sin inicializar';
+    },
+    async indexFace(bytes, externalId) {
+      return (await get(Date.now())).indexFace(bytes, externalId);
+    },
+    async searchByImage(bytes) {
+      return (await get(Date.now())).searchByImage(bytes);
+    },
+    async ensureReady() {
+      return get(Date.now());
+    }
+  };
+}
+
+module.exports = { createMatcher, createLazyMatcher, nullMatcher };

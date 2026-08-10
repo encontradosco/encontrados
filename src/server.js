@@ -3,14 +3,18 @@ const express = require('express');
 const env = require('./env');
 const { createAdapter } = require('./store');
 const { createStore } = require('./people');
-const { createMatcher } = require('./faces');
+const { createLazyMatcher } = require('./faces');
 const { webRoutes } = require('./routes/web');
 const { apiRoutes } = require('./routes/api');
 const { webhookRoutes } = require('./routes/webhooks');
 
 async function createApp(adapter, matcher) {
   const store = createStore(adapter || (await createAdapter()));
-  const faceMatcher = matcher || (await createMatcher());
+  const faceMatcher = matcher || createLazyMatcher();
+  if (!matcher) {
+    // Warm it up so boot logs show Rekognition status immediately.
+    faceMatcher.ensureReady().catch((e) => console.error('[faces] warmup', e));
+  }
   const app = express();
   app.disable('x-powered-by');
 

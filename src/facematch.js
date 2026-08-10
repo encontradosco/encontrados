@@ -26,7 +26,14 @@ function matchText(matchedPerson, similarity, sub) {
 }
 
 async function notifyFaceMatch(store, sub, matchedPerson, similarity) {
-  if (!sub || !sub.verified) return;
+  if (!sub) return;
+  if (!sub.verified) {
+    console.warn(`[facematch] match found but subscription ${sub.id} is unverified — no alert sent`);
+    return;
+  }
+  console.log(
+    `[facematch] notifying sub ${sub.id} (${sub.channel}) about ${matchedPerson.full_name} @ ${Math.round(similarity)}%`
+  );
   const text = matchText(matchedPerson, similarity, sub);
   if (sub.channel === 'email') {
     await sendEmail(sub.address, `Posible coincidencia sobre la persona que buscas — Aquí`, text);
@@ -47,9 +54,16 @@ async function processPhoto(store, matcher, { personId, kind, updateId, subscrip
     contentType
   });
 
+  if (!matcher.enabled) {
+    console.warn('[facematch] matcher disabled — photo stored without face indexing');
+    return photo;
+  }
   try {
     // Search BEFORE indexing so the photo never matches itself.
     const matches = await matcher.searchByImage(bytes);
+    console.log(
+      `[facematch] photo ${photo.id} (${kind}) → ${matches.length} raw match(es)`
+    );
     const faceId = await matcher.indexFace(bytes, photo.id);
     if (faceId) await store.setPhotoFaceId(photo.id, faceId);
     if (!matches.length) return photo;

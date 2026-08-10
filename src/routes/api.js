@@ -151,6 +151,53 @@ function apiRoutes(store, matcher) {
     })
   );
 
+  // GET /api/diag — configuration and live self-test. Never exposes secrets.
+  // ?email=you@example.com sends a real test email and reports the result.
+  router.get(
+    '/diag',
+    wrap(async (req, res) => {
+      if (typeof matcher.ensureReady === 'function') {
+        await matcher.ensureReady();
+      }
+      const out = {
+        base_url: env.BASE_URL,
+        database: {
+          driver: process.env.DATABASE_URL || process.env.POSTGRES_URL || process.env.STORAGE_URL ? 'postgres' : 'sqlite (efímero)',
+          ok: false
+        },
+        email: {
+          sendgrid_key_present: !!env.SENDGRID_API_KEY,
+          from: env.EMAIL_FROM
+        },
+        faces: {
+          aws_key_present: !!process.env.AWS_ACCESS_KEY_ID,
+          aws_region: process.env.AWS_REGION || '(sin definir → us-east-1)',
+          matcher_enabled: !!matcher.enabled,
+          status: matcher.status || 'desconocido'
+        }
+      };
+
+      try {
+        const recent = await store.getRecentUpdates(1);
+        out.database.ok = true;
+        out.database.recent_updates = recent.length;
+      } catch (e) {
+        out.database.error = e.message;
+      }
+
+      if (req.query.email) {
+        const { sendEmail } = require('../notify');
+        out.email.test = await sendEmail(
+          String(req.query.email),
+          'Prueba de configuración — Aquí',
+          'Si recibes este correo, el envío desde Aquí funciona correctamente.'
+        );
+      }
+
+      res.json(out);
+    })
+  );
+
   return router;
 }
 

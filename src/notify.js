@@ -20,26 +20,38 @@ function updateText(person, update) {
   return lines.filter(Boolean).join('\n');
 }
 
+// Returns { ok, status, error } and logs loudly — email silence is a bug we
+// must be able to diagnose from the Vercel logs alone.
 async function sendEmail(to, subject, text) {
   if (!env.SENDGRID_API_KEY) {
-    console.log(`[notify:email skipped — no SENDGRID_API_KEY] to=${to} subject=${subject}`);
-    return false;
+    console.error(`[notify:email] SKIPPED — SENDGRID_API_KEY is not set. to=${to}`);
+    return { ok: false, error: 'SENDGRID_API_KEY no configurada' };
   }
-  const res = await fetch('https://api.sendgrid.com/v3/mail/send', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${env.SENDGRID_API_KEY}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      personalizations: [{ to: [{ email: to }] }],
-      from: { email: env.EMAIL_FROM, name: 'Aquí' },
-      subject,
-      content: [{ type: 'text/plain', value: text }]
-    })
-  });
-  if (!res.ok) console.error(`[notify:email] ${res.status} ${await res.text()}`);
-  return res.ok;
+  try {
+    const res = await fetch('https://api.sendgrid.com/v3/mail/send', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${env.SENDGRID_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        personalizations: [{ to: [{ email: to }] }],
+        from: { email: env.EMAIL_FROM, name: 'Aquí' },
+        subject,
+        content: [{ type: 'text/plain', value: text }]
+      })
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      console.error(`[notify:email] FAILED ${res.status} from=${env.EMAIL_FROM} to=${to} body=${body}`);
+      return { ok: false, status: res.status, error: body };
+    }
+    console.log(`[notify:email] sent to=${to} subject="${subject}"`);
+    return { ok: true, status: res.status };
+  } catch (e) {
+    console.error(`[notify:email] THREW to=${to}`, e);
+    return { ok: false, error: e.message };
+  }
 }
 
 async function sendWhatsApp(to, text) {
