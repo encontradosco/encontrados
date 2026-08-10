@@ -237,9 +237,12 @@ function apiRoutes(store, matcher) {
         verified_senders: Array.isArray(senders.body?.results)
           ? senders.body.results.map((v) => ({ email: v.from_email, verified: v.verified }))
           : senders.body,
-        domain_authentication: matching
-          ? { domain: matching.domain, valid: matching.valid, dns_ok: matching.valid }
-          : `El dominio ${fromDomain} NO está autenticado en SendGrid (solo remitente único). Sin SPF/DKIM propios, Gmail y Outlook suelen mandar el correo a spam o descartarlo — sobre todo si el destinatario es del mismo dominio que el remitente.`
+        domain_authentication:
+          domains.status !== 200
+            ? `No se pudo verificar: la API key solo tiene permiso "Mail Send" (SendGrid respondió ${domains.status}). Revísalo en SendGrid → Settings → Sender Authentication.`
+            : matching
+              ? { domain: matching.domain, valid: matching.valid }
+              : `El dominio ${fromDomain} no aparece autenticado en SendGrid. Sin SPF/DKIM propios, Gmail y Outlook suelen mandar el correo a spam — sobre todo si el destinatario es del mismo dominio que el remitente.`
       });
     })
   );
