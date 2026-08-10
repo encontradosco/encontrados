@@ -1,6 +1,10 @@
 // Minimal server-rendered HTML helpers. No client framework: emergency sites
 // must load fast on bad connections and old phones.
+const env = require('./env');
 const { STATUS_LABEL } = require('./notify');
+
+const DEFAULT_DESCRIPTION =
+  'Reporta el estado de una persona o busca a tus seres queridos tras el terremoto en Colombia del 10 de agosto. Gratuito, rápido y privado.';
 
 function esc(s) {
   return String(s ?? '')
@@ -51,13 +55,26 @@ document.addEventListener('submit', async function (ev) {
 });
 </script>`;
 
-function layout(title, body) {
+function layout(title, body, meta = {}) {
+  const fullTitle = meta.fullTitle || `${title} — Aquí · Personas y terremoto en Colombia`;
+  const description = meta.description || DEFAULT_DESCRIPTION;
+  const url = meta.path ? `${env.BASE_URL}${meta.path}` : env.BASE_URL;
   return `<!doctype html>
 <html lang="es">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${esc(title)} — Aquí</title>
+<title>${esc(fullTitle)}</title>
+<meta name="description" content="${esc(description)}">
+<meta property="og:site_name" content="Aquí">
+<meta property="og:type" content="website">
+<meta property="og:locale" content="es_CO">
+<meta property="og:title" content="${esc(fullTitle)}">
+<meta property="og:description" content="${esc(description)}">
+<meta property="og:url" content="${esc(url)}">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="${esc(fullTitle)}">
+<meta name="twitter:description" content="${esc(description)}">
 <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
