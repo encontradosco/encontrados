@@ -83,17 +83,14 @@ test('web: home renders, report form flow works', async (t) => {
   const buscar = await fetch(`${base}/buscar`);
   assert.match(await buscar.text(), /¿Buscas a alguien\?/);
 
-  const report = await fetch(`${base}/report`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      name: 'Pedro Pablo Ramírez',
-      status: 'missing',
-      message: 'No contesta desde ayer',
-      location: 'Barrio Centro'
-    }),
-    redirect: 'manual'
-  });
+  // A photo is mandatory on the web report form.
+  const fd = new FormData();
+  fd.set('name', 'Pedro Pablo Ramírez');
+  fd.set('status', 'missing');
+  fd.set('message', 'No contesta desde ayer');
+  fd.set('location', 'Barrio Centro');
+  fd.set('photo', new File([Buffer.from('foto')], 'f.jpg', { type: 'image/jpeg' }));
+  const report = await fetch(`${base}/report`, { method: 'POST', body: fd, redirect: 'manual' });
   assert.equal(report.status, 303);
   const personUrl = report.headers.get('location');
 
@@ -169,4 +166,35 @@ test('DELETE /api/people/:id is disabled without API_KEY', async (t) => {
   t.after(() => server.close());
   const res = await fetch(`${base}/api/people/1`, { method: 'DELETE' });
   assert.equal(res.status, 503);
+});
+
+test('reporter and email are remembered between visits via cookies', async (t) => {
+  const { server, base } = await startApp();
+  t.after(() => server.close());
+
+  const fd = new FormData();
+  fd.set('name', 'Marta Isabel Vélez');
+  fd.set('status', 'safe');
+  fd.set('reporter', 'Cruz Roja · 300 555 1234');
+  fd.set('photo', new File([Buffer.from('foto')], 'f.jpg', { type: 'image/jpeg' }));
+  const res = await fetch(`${base}/report`, { method: 'POST', body: fd, redirect: 'manual' });
+  assert.equal(res.status, 303);
+
+  const cookie = res.headers.getSetCookie().find((c) => c.startsWith('aqui_reporter='));
+  assert.ok(cookie, 'no se guardó la cookie del reportante');
+
+  // Next report prefills who is reporting.
+  const form = await fetch(`${base}/report`, { headers: { cookie: cookie.split(';')[0] } });
+  assert.match(await form.text(), /Cruz Roja · 300 555 1234/);
+});
+
+test('the report form no longer offers self-reporting', async (t) => {
+  const { server, base } = await startApp();
+  t.after(() => server.close());
+  const html = await (await fetch(`${base}/report`)).text();
+  assert.doesNotMatch(html, /Me reporto a m/);
+  assert.doesNotMatch(html, /name="subject"/);
+  // photo is required and comes before the name
+  assert.ok(html.indexOf('name="photo"') < html.indexOf('name="name"'), 'la foto debe ir antes del nombre');
+  assert.match(html, /name="photo"[^>]*required/);
 });
