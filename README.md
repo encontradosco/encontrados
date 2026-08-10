@@ -1,9 +1,11 @@
 # 📍 Aquí — aqui.online
 
-Tablero de estado de personas en emergencias. Dos casos de uso:
+Tablero de estado de personas en emergencias — actualmente ayudando tras el **terremoto en Colombia del lunes 10 de agosto**. Dos casos de uso:
 
-1. **Reportar** el estado de una persona (a salvo, herida, desaparecida…).
-2. **Consultar** el estado de una persona y **suscribirse** a sus novedades.
+1. **Reportar** el estado de una persona (a salvo, herida, desaparecida…), con foto opcional.
+2. **Buscar** a una persona y **suscribirse** a sus novedades, con 2–3 fotos opcionales para reconocimiento facial.
+
+Diseño ultraliviano a propósito: HTML renderizado en el servidor, un solo CSS pequeño, sin frameworks — funciona en teléfonos viejos y conexiones débiles.
 
 Canales:
 
@@ -27,13 +29,29 @@ No hace falta escribir el nombre exacto. Tres capas:
 
 Punto de extensión: `candidatePeople()` en los adaptadores de storage es donde se puede sumar un generador de candidatos por *embeddings* (pgvector en Neon) si más adelante se quiere equivalencia de apodos/idiomas (Bill↔Guillermo).
 
+## Fotos y reconocimiento facial
+
+- Al **reportar** se puede subir 1 foto (galería o cámara del teléfono); al **buscar/suscribirse**, hasta 3.
+- Las fotos se guardan en la base de datos y se comparan con **AWS Rekognition** (colección de rostros indexados). Si una foto de reporte coincide con las fotos de una búsqueda, quien busca recibe un aviso de posible coincidencia.
+- **Privacidad:** las fotos jamás se muestran ni se comparten — no existe ninguna ruta que sirva los bytes de una foto. El aviso de coincidencia nunca incluye imágenes. Sin credenciales de AWS, las fotos se almacenan y el matching queda desactivado (la app nunca falla por esto).
+- El cliente reduce las fotos a ~1024px JPEG antes de subirlas (límite serverless de 4.5 MB y conexiones lentas).
+
 ## Ubicación
 
-Cada reporte lleva `location` opcional (texto libre). La página de la persona muestra la **última ubicación reportada**; el bot acepta `@`:
+Cada reporte lleva `location` opcional. En el formulario web:
+
+- **Autocompletado de direcciones** con Nominatim/OpenStreetMap (sesgado a Colombia, sin API key).
+- Botón **"Compartir mi ubicación actual"**: pide permiso de GPS, guarda lat/lng y rellena la dirección por geocodificación inversa. Los reportes con GPS muestran enlace "ver en mapa" (OpenStreetMap).
+
+El bot acepta `@`:
 
 ```
 BIEN Juan Pérez: hablé con él @ albergue San José
 ```
+
+## Páginas legales
+
+`/privacidad` y `/terminos` — en español, ligeras, centradas en la emergencia: la información solo se usa para ayudar a encontrar personas; las fotos nunca se comparten.
 
 ## Correr local
 
@@ -47,9 +65,9 @@ npm test
 
 1. Importa el repo en Vercel (framework: **Other**). `vercel.json` enruta todo a la función `api/index.js` (Express completo); `/public` lo sirve el CDN.
 2. Agrega **Vercel Postgres / Neon** al proyecto → define `POSTGRES_URL` (o `DATABASE_URL`). El esquema y los índices `pg_trgm` se crean solos en el primer arranque.
-3. Variables de entorno (ver `.env.example`): `BASE_URL`, `SENDGRID_API_KEY` (el remitente es fijo: `a@torrenegra.com`), `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_VERIFY_TOKEN`, opcional `API_KEY`.
+3. Variables de entorno (ver `.env.example`): `BASE_URL`, `SENDGRID_API_KEY` (remitente fijo: `a@torrenegra.com`), `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_REGION` (Rekognition), y cuando haya credenciales de WhatsApp: `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_VERIFY_TOKEN`. Opcional: `API_KEY`.
 
-### WhatsApp (Meta Cloud API)
+### WhatsApp (Meta Cloud API) — pendiente de credenciales; el canal está implementado pero sin referencias en la interfaz hasta activarlo
 
 1. En [Meta for Developers](https://developers.facebook.com), crea una app con el producto WhatsApp y toma `WHATSAPP_TOKEN` y `WHATSAPP_PHONE_NUMBER_ID`.
 2. Configura el webhook: URL `https://aqui.online/webhooks/whatsapp`, verify token = `WHATSAPP_VERIFY_TOKEN`, suscrito al campo `messages`.

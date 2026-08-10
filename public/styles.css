@@ -1,9 +1,12 @@
 :root {
-  --bg: #f7f7f5;
+  /* Colombian tricolor */
+  --amarillo: #fcd116;
+  --azul: #003893;
+  --rojo: #ce1126;
+  --bg: #fffdf5;
   --fg: #1a1a1a;
-  --accent: #c0392b;
   --card: #ffffff;
-  --border: #ddd;
+  --border: #e5decf;
   --muted: #666;
 }
 * { box-sizing: border-box; }
@@ -14,26 +17,55 @@ body {
   color: var(--fg);
   line-height: 1.5;
 }
+.tricolor { display: flex; height: 8px; }
+.tricolor .y { flex: 2; background: var(--amarillo); }
+.tricolor .b { flex: 1; background: var(--azul); }
+.tricolor .r { flex: 1; background: var(--rojo); }
 header {
   display: flex;
   justify-content: space-between;
   align-items: center;
   padding: 0.75rem 1rem;
-  background: var(--accent);
+  background: var(--azul);
   color: #fff;
 }
 header a { color: #fff; text-decoration: none; margin-left: 0.75rem; }
 .brand { font-weight: 700; font-size: 1.2rem; margin-left: 0; }
 nav .cta {
-  background: #fff;
-  color: var(--accent);
+  background: var(--amarillo);
+  color: #1a1a1a;
   padding: 0.35rem 0.75rem;
   border-radius: 6px;
-  font-weight: 600;
+  font-weight: 700;
+}
+.banner {
+  background: var(--amarillo);
+  color: #1a1a1a;
+  text-align: center;
+  padding: 0.5rem 1rem;
+  font-size: 0.95rem;
+  border-bottom: 1px solid #e0b900;
 }
 main { max-width: 640px; margin: 0 auto; padding: 1rem; }
 footer { max-width: 640px; margin: 2rem auto; padding: 0 1rem; color: var(--muted); font-size: 0.85rem; }
 h1 { font-size: 1.5rem; }
+.hero { text-align: center; padding: 1.5rem 0 0.5rem; }
+.hero h1 { font-size: 1.7rem; margin-bottom: 0.4rem; }
+.hero p { color: var(--muted); }
+.big-actions { display: grid; gap: 0.9rem; margin: 1.5rem 0 2rem; }
+.big-btn {
+  display: block;
+  text-align: center;
+  padding: 1.1rem 1rem;
+  border-radius: 10px;
+  font-size: 1.25rem;
+  font-weight: 700;
+  text-decoration: none;
+  color: #fff;
+}
+.big-btn.report { background: var(--rojo); }
+.big-btn.search { background: var(--azul); }
+.big-btn:hover { opacity: 0.93; }
 .card {
   background: var(--card);
   border: 1px solid var(--border);
@@ -42,6 +74,7 @@ h1 { font-size: 1.5rem; }
   margin: 0.75rem 0;
 }
 .card h3 { margin: 0 0 0.25rem; }
+.card h3 a { color: var(--azul); }
 .card .meta { color: var(--muted); font-size: 0.8rem; margin-bottom: 0; }
 .card time { color: var(--muted); font-size: 0.85rem; }
 .badge {
@@ -54,7 +87,7 @@ h1 { font-size: 1.5rem; }
 }
 .badge.ok { background: #27ae60; }
 .badge.warn { background: #e67e22; }
-.badge.bad { background: #c0392b; }
+.badge.bad { background: var(--rojo); }
 .badge.grave { background: #2c3e50; }
 .badge.muted { background: #95a5a6; }
 form.stack { display: grid; gap: 0.6rem; margin: 1rem 0; }
@@ -64,20 +97,23 @@ input, select, textarea, button {
   border: 1px solid var(--border);
   border-radius: 6px;
   width: 100%;
+  background: #fff;
 }
 button {
-  background: var(--accent);
+  background: var(--azul);
   color: #fff;
   border: none;
   font-weight: 600;
   cursor: pointer;
 }
 button:hover { opacity: 0.92; }
+button.secondary { background: #fff; color: var(--azul); border: 1px solid var(--azul); }
 .search-row { display: flex; gap: 0.5rem; }
 .search-row input { flex: 1; }
 .search-row button { width: auto; }
 .notice { background: #eaf7ee; border: 1px solid #b7e0c2; padding: 0.6rem 0.9rem; border-radius: 6px; }
 .error { background: #fdecea; border: 1px solid #f5c6c2; padding: 0.6rem 0.9rem; border-radius: 6px; }
+.privacy { background: #eef2fb; border: 1px solid #c5d1ee; padding: 0.6rem 0.9rem; border-radius: 6px; font-size: 0.9rem; }
 label { font-weight: 600; font-size: 0.9rem; }
 label span { display: block; margin-bottom: 0.2rem; }
 .subtle { color: var(--muted); font-size: 0.9rem; }

@@ -27,6 +27,8 @@ async function createSqliteAdapter(dbPath) {
       status TEXT NOT NULL CHECK (status IN ('safe','injured','missing','deceased','unknown')),
       message TEXT,
       location TEXT,
+      lat REAL,
+      lng REAL,
       source TEXT NOT NULL CHECK (source IN ('web','whatsapp','api')),
       reporter TEXT,
       created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
@@ -44,7 +46,28 @@ async function createSqliteAdapter(dbPath) {
       UNIQUE(person_id, channel, address)
     );
     CREATE INDEX IF NOT EXISTS idx_subscriptions_person ON subscriptions(person_id);
+
+    CREATE TABLE IF NOT EXISTS photos (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL CHECK (kind IN ('report','query')),
+      update_id INTEGER REFERENCES updates(id) ON DELETE CASCADE,
+      subscription_id INTEGER REFERENCES subscriptions(id) ON DELETE CASCADE,
+      content BLOB NOT NULL,
+      content_type TEXT NOT NULL,
+      face_id TEXT,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_photos_face ON photos(face_id);
+    CREATE INDEX IF NOT EXISTS idx_photos_subscription ON photos(subscription_id);
   `);
+
+  // Older dev databases: add the GPS columns if missing.
+  for (const col of ['lat', 'lng']) {
+    try {
+      db.exec(`ALTER TABLE updates ADD COLUMN ${col} REAL`);
+    } catch { /* already exists */ }
+  }
 
   const getPersonStmt = db.prepare('SELECT * FROM people WHERE id = ?');
 
@@ -66,12 +89,21 @@ async function createSqliteAdapter(dbPath) {
     async candidatePeople() {
       return db.prepare('SELECT * FROM people').all();
     },
-    async insertUpdate(personId, { status, message, location, source, reporter }) {
+    async insertUpdate(personId, { status, message, location, lat, lng, source, reporter }) {
       const info = db
         .prepare(
-          'INSERT INTO updates (person_id, status, message, location, source, reporter) VALUES (?, ?, ?, ?, ?, ?)'
+          'INSERT INTO updates (person_id, status, message, location, lat, lng, source, reporter) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
         )
-        .run(personId, status, message || null, location || null, source, reporter || null);
+        .run(
+          personId,
+          status,
+          message || null,
+          location || null,
+          Number.isFinite(lat) ? lat : null,
+          Number.isFinite(lng) ? lng : null,
+          source,
+          reporter || null
+        );
       return db.prepare('SELECT * FROM updates WHERE id = ?').get(info.lastInsertRowid);
     },
     async updatesForPerson(personId) {
@@ -127,6 +159,38 @@ async function createSqliteAdapter(dbPath) {
     },
     async subscriptionsForPerson(personId) {
       return db.prepare('SELECT * FROM subscriptions WHERE person_id = ?').all(personId);
+    },
+    async getSubscriptionById(id) {
+      return db.prepare('SELECT * FROM subscriptions WHERE id = ?').get(id);
+    },
+    async insertPhoto({ personId, kind, updateId, subscriptionId, content, contentType }) {
+      const info = db
+        .prepare(
+          'INSERT INTO photos (person_id, kind, update_id, subscription_id, content, content_type) VALUES (?, ?, ?, ?, ?, ?)'
+        )
+        .run(personId, kind, updateId || null, subscriptionId || null, content, contentType);
+      return db
+        .prepare(
+          'SELECT id, person_id, kind, update_id, subscription_id, content_type, face_id, created_at FROM photos WHERE id = ?'
+        )
+        .get(info.lastInsertRowid);
+    },
+    async setPhotoFaceId(photoId, faceId) {
+      db.prepare('UPDATE photos SET face_id = ? WHERE id = ?').run(faceId, photoId);
+    },
+    async photosByFaceIds(faceIds) {
+      if (!faceIds.length) return [];
+      const marks = faceIds.map(() => '?').join(',');
+      return db
+        .prepare(
+          `SELECT id, person_id, kind, update_id, subscription_id, face_id FROM photos WHERE face_id IN (${marks})`
+        )
+        .all(...faceIds);
+    },
+    async countQueryPhotos(subscriptionId) {
+      return db
+        .prepare("SELECT COUNT(*) AS n FROM photos WHERE subscription_id = ? AND kind = 'query'")
+        .get(subscriptionId).n;
     },
     async close() {
       db.close();

@@ -42,10 +42,10 @@ function createStore(adapter) {
     return { person: isoRow(person), created: true };
   }
 
-  async function addUpdate(personId, { status, message, location, source, reporter }) {
+  async function addUpdate(personId, { status, message, location, lat, lng, source, reporter }) {
     if (!STATUSES.includes(status)) throw new Error(`Invalid status: ${status}`);
     return isoRow(
-      await adapter.insertUpdate(personId, { status, message, location, source, reporter })
+      await adapter.insertUpdate(personId, { status, message, location, lat, lng, source, reporter })
     );
   }
 
@@ -100,6 +100,26 @@ function createStore(adapter) {
     return adapter.subscriptionsForPerson(personId);
   }
 
+  async function getSubscriptionById(id) {
+    return adapter.getSubscriptionById(id);
+  }
+
+  async function addPhoto(fields) {
+    return adapter.insertPhoto(fields);
+  }
+
+  async function setPhotoFaceId(photoId, faceId) {
+    return adapter.setPhotoFaceId(photoId, faceId);
+  }
+
+  async function photosByFaceIds(faceIds) {
+    return adapter.photosByFaceIds(faceIds);
+  }
+
+  async function countQueryPhotos(subscriptionId) {
+    return adapter.countQueryPhotos(subscriptionId);
+  }
+
   return {
     STATUSES,
     getPerson,
@@ -115,6 +135,11 @@ function createStore(adapter) {
     unsubscribe,
     unsubscribeAll,
     getSubscriptions,
+    getSubscriptionById,
+    addPhoto,
+    setPhotoFaceId,
+    photosByFaceIds,
+    countQueryPhotos,
     close: () => adapter.close()
   };
 }

@@ -2,9 +2,10 @@ const test = require('node:test');
 const assert = require('node:assert');
 const { createSqliteAdapter } = require('../src/store/sqlite');
 const { createApp } = require('../src/server');
+const { nullMatcher } = require('../src/faces');
 
 async function startApp() {
-  const app = await createApp(await createSqliteAdapter(':memory:'));
+  const app = await createApp(await createSqliteAdapter(':memory:'), nullMatcher);
   const server = await new Promise((resolve) => {
     const s = app.listen(0, () => resolve(s));
   });
@@ -74,7 +75,13 @@ test('web: home renders, report form flow works', async (t) => {
 
   const home = await fetch(base);
   assert.equal(home.status, 200);
-  assert.match(await home.text(), /¿Buscas a alguien\?/);
+  const homeHtml = await home.text();
+  assert.match(homeHtml, /Reportar estado de alguien/);
+  assert.match(homeHtml, /Buscar a alguien/);
+  assert.match(homeHtml, /Terremoto en Colombia/);
+
+  const buscar = await fetch(`${base}/buscar`);
+  assert.match(await buscar.text(), /¿Buscas a alguien\?/);
 
   const report = await fetch(`${base}/report`, {
     method: 'POST',

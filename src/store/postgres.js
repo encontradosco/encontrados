@@ -34,6 +34,8 @@ async function createPostgresAdapter(connectionString) {
       status TEXT NOT NULL CHECK (status IN ('safe','injured','missing','deceased','unknown')),
       message TEXT,
       location TEXT,
+      lat DOUBLE PRECISION,
+      lng DOUBLE PRECISION,
       source TEXT NOT NULL CHECK (source IN ('web','whatsapp','api')),
       reporter TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -51,6 +53,20 @@ async function createPostgresAdapter(connectionString) {
       UNIQUE(person_id, channel, address)
     );
     CREATE INDEX IF NOT EXISTS idx_subscriptions_person ON subscriptions(person_id);
+
+    CREATE TABLE IF NOT EXISTS photos (
+      id SERIAL PRIMARY KEY,
+      person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL CHECK (kind IN ('report','query')),
+      update_id INTEGER REFERENCES updates(id) ON DELETE CASCADE,
+      subscription_id INTEGER REFERENCES subscriptions(id) ON DELETE CASCADE,
+      content BYTEA NOT NULL,
+      content_type TEXT NOT NULL,
+      face_id TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_photos_face ON photos(face_id);
+    CREATE INDEX IF NOT EXISTS idx_photos_subscription ON photos(subscription_id);
   `);
   if (hasTrgm) {
     await pool.query(`
@@ -58,6 +74,9 @@ async function createPostgresAdapter(connectionString) {
       CREATE INDEX IF NOT EXISTS idx_people_phon_trgm ON people USING gin (phonetic_name gin_trgm_ops);
     `);
   }
+
+  await pool.query('ALTER TABLE updates ADD COLUMN IF NOT EXISTS lat DOUBLE PRECISION');
+  await pool.query('ALTER TABLE updates ADD COLUMN IF NOT EXISTS lng DOUBLE PRECISION');
 
   const one = async (sql, params) => (await pool.query(sql, params)).rows[0];
   const all = async (sql, params) => (await pool.query(sql, params)).rows;
@@ -89,11 +108,20 @@ async function createPostgresAdapter(connectionString) {
       }
       return all('SELECT * FROM people LIMIT 5000');
     },
-    async insertUpdate(personId, { status, message, location, source, reporter }) {
+    async insertUpdate(personId, { status, message, location, lat, lng, source, reporter }) {
       return one(
-        `INSERT INTO updates (person_id, status, message, location, source, reporter)
-         VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-        [personId, status, message || null, location || null, source, reporter || null]
+        `INSERT INTO updates (person_id, status, message, location, lat, lng, source, reporter)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+        [
+          personId,
+          status,
+          message || null,
+          location || null,
+          Number.isFinite(lat) ? lat : null,
+          Number.isFinite(lng) ? lng : null,
+          source,
+          reporter || null
+        ]
       );
     },
     async updatesForPerson(personId) {
@@ -153,6 +181,34 @@ async function createPostgresAdapter(connectionString) {
     },
     async subscriptionsForPerson(personId) {
       return all('SELECT * FROM subscriptions WHERE person_id = $1', [personId]);
+    },
+    async getSubscriptionById(id) {
+      return one('SELECT * FROM subscriptions WHERE id = $1', [id]);
+    },
+    async insertPhoto({ personId, kind, updateId, subscriptionId, content, contentType }) {
+      return one(
+        `INSERT INTO photos (person_id, kind, update_id, subscription_id, content, content_type)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         RETURNING id, person_id, kind, update_id, subscription_id, content_type, face_id, created_at`,
+        [personId, kind, updateId || null, subscriptionId || null, content, contentType]
+      );
+    },
+    async setPhotoFaceId(photoId, faceId) {
+      await pool.query('UPDATE photos SET face_id = $1 WHERE id = $2', [faceId, photoId]);
+    },
+    async photosByFaceIds(faceIds) {
+      if (!faceIds.length) return [];
+      return all(
+        'SELECT id, person_id, kind, update_id, subscription_id, face_id FROM photos WHERE face_id = ANY($1)',
+        [faceIds]
+      );
+    },
+    async countQueryPhotos(subscriptionId) {
+      const r = await one(
+        "SELECT COUNT(*)::int AS n FROM photos WHERE subscription_id = $1 AND kind = 'query'",
+        [subscriptionId]
+      );
+      return r.n;
     },
     async close() {
       await pool.end();

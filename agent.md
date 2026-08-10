@@ -19,7 +19,8 @@ ayuda a nadie.
 
 - **Aquí** (aqui.online): tablero de estado de personas en emergencias.
 - Toda la interfaz y los mensajes al usuario son **en español**.
-- Canales: web, WhatsApp (Meta Cloud API) y API REST. (Telegram fue retirado.)
+- Canales activos: web y API REST. WhatsApp está implementado pero dormido (sin credenciales aún) — no mostrar referencias a WhatsApp en la interfaz hasta que se active. (Telegram fue retirado.)
+- Fotos: solo para reconocimiento facial (AWS Rekognition). NUNCA crear rutas que muestren o sirvan fotos.
 - Producción: Vercel (función serverless única + Postgres/Neon). Dev/tests: SQLite.
 - Remitente de correo fijo: `a@torrenegra.com` (SendGrid).
 - Suscripciones por correo requieren verificación; toda alerta lleva enlace de baja.
