@@ -1,6 +1,6 @@
 {
   "name": "aqui-online",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Aquí — tablero de estado de personas en emergencias. Reporta y consulta por web, WhatsApp, Telegram y API.",
   "main": "src/server.js",
   "scripts": {
