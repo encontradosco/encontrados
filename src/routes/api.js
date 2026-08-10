@@ -187,6 +187,63 @@ function apiRoutes(store, matcher) {
     })
   );
 
+  // GET /api/diag/sendgrid — ask SendGrid about deliverability for an address:
+  // suppressions (bounce/block/spam/invalid), verified senders, and whether the
+  // sending domain is authenticated (SPF/DKIM). A 202 from the send API only
+  // means "accepted"; these are the reasons mail still never lands.
+  router.get(
+    '/diag/sendgrid',
+    wrap(async (req, res) => {
+      const key = (process.env.SENDGRID_API_KEY || env.SENDGRID_API_KEY || '').trim();
+      if (!key) return res.status(400).json({ error: 'SENDGRID_API_KEY no configurada' });
+      const address = String(req.query.email || '').trim();
+
+      const get = async (path) => {
+        try {
+          const r = await fetch(`https://api.sendgrid.com${path}`, {
+            headers: { Authorization: `Bearer ${key}` }
+          });
+          const text = await r.text();
+          let body;
+          try {
+            body = JSON.parse(text);
+          } catch {
+            body = text.slice(0, 300);
+          }
+          return { status: r.status, body };
+        } catch (e) {
+          return { error: e.message };
+        }
+      };
+
+      const [bounces, blocks, spam, invalid, senders, domains] = await Promise.all([
+        address ? get(`/v3/suppression/bounces/${encodeURIComponent(address)}`) : { skipped: true },
+        address ? get(`/v3/suppression/blocks/${encodeURIComponent(address)}`) : { skipped: true },
+        address ? get(`/v3/suppression/spam_reports/${encodeURIComponent(address)}`) : { skipped: true },
+        address ? get(`/v3/suppression/invalid_emails/${encodeURIComponent(address)}`) : { skipped: true },
+        get('/v3/verified_senders'),
+        get('/v3/whitelabel/domains')
+      ]);
+
+      const domainList = Array.isArray(domains.body) ? domains.body : [];
+      const fromDomain = env.EMAIL_FROM.split('@')[1];
+      const matching = domainList.find((d) => d.domain === fromDomain);
+
+      res.json({
+        from: env.EMAIL_FROM,
+        checked_address: address || '(pasa ?email= para revisar supresiones)',
+        suppressions: { bounces, blocks, spam, invalid },
+        verified_senders_status: senders.status,
+        verified_senders: Array.isArray(senders.body?.results)
+          ? senders.body.results.map((v) => ({ email: v.from_email, verified: v.verified }))
+          : senders.body,
+        domain_authentication: matching
+          ? { domain: matching.domain, valid: matching.valid, dns_ok: matching.valid }
+          : `El dominio ${fromDomain} NO está autenticado en SendGrid (solo remitente único). Sin SPF/DKIM propios, Gmail y Outlook suelen mandar el correo a spam o descartarlo — sobre todo si el destinatario es del mismo dominio que el remitente.`
+      });
+    })
+  );
+
   // GET /api/diag — configuration and live self-test. Never exposes secrets.
   // ?email=you@example.com sends a real test email and reports the result.
   router.get(
