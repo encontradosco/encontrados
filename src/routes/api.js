@@ -1,6 +1,6 @@
 const express = require('express');
 const env = require('../env');
-const { notifySubscribers } = require('../notify');
+const { notifySubscribers, sendVerificationEmail } = require('../notify');
 const { STATUSES } = require('../people');
 
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
@@ -87,8 +87,11 @@ function apiRoutes(store) {
         return res.status(400).json({ error: 'channel debe ser email, whatsapp o telegram' });
       }
       try {
-        await store.subscribe(person.id, channel, address);
-        res.status(201).json({ ok: true });
+        const { sub, needsVerification } = await store.subscribe(person.id, channel, address);
+        if (needsVerification) {
+          sendVerificationEmail(person, sub).catch((e) => console.error('[api verify email]', e));
+        }
+        res.status(201).json({ ok: true, pending_verification: needsVerification });
       } catch (e) {
         res.status(400).json({ error: e.message });
       }

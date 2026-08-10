@@ -84,14 +84,35 @@ async function sendTelegram(chatId, text) {
   return res.ok;
 }
 
-// Notify all subscribers of a person about a new update.
+function unsubscribeLink(sub) {
+  return `${env.BASE_URL}/unsubscribe?token=${sub.verify_token}`;
+}
+
+async function sendVerificationEmail(person, sub) {
+  const link = `${env.BASE_URL}/verify?token=${sub.verify_token}`;
+  return sendEmail(
+    sub.address,
+    `Confirma tu suscripción a novedades de ${person.full_name} — Aquí`,
+    [
+      `Pediste recibir avisos cuando haya novedades de ${person.full_name} en Aquí.`,
+      '',
+      `Confirma tu correo abriendo este enlace: ${link}`,
+      '',
+      'Si no fuiste tú, ignora este mensaje y no recibirás nada.'
+    ].join('\n')
+  );
+}
+
+// Notify all VERIFIED subscribers of a person about a new update.
 // skipAddress: don't echo the update back to whoever reported it.
+// Every alert carries that subscriber's personal unsubscribe link.
 async function notifySubscribers(store, person, update, { skipAddress } = {}) {
   const subs = await store.getSubscriptions(person.id);
-  const text = `🔔 Actualización en Aquí:\n${updateText(person, update)}`;
+  const baseText = `🔔 Actualización en Aquí:\n${updateText(person, update)}`;
   const jobs = subs
-    .filter((s) => !(skipAddress && s.address === skipAddress))
+    .filter((s) => s.verified && !(skipAddress && s.address === skipAddress))
     .map((s) => {
+      const text = `${baseText}\n\nPara dejar de recibir estos avisos: ${unsubscribeLink(s)}`;
       if (s.channel === 'email') {
         return sendEmail(s.address, `Actualización sobre ${person.full_name} — Aquí`, text);
       }
@@ -106,4 +127,12 @@ async function notifySubscribers(store, person, update, { skipAddress } = {}) {
   return results.length;
 }
 
-module.exports = { sendEmail, sendWhatsApp, sendTelegram, notifySubscribers, updateText, STATUS_LABEL };
+module.exports = {
+  sendEmail,
+  sendWhatsApp,
+  sendTelegram,
+  sendVerificationEmail,
+  notifySubscribers,
+  updateText,
+  STATUS_LABEL
+};

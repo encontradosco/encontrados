@@ -1,5 +1,6 @@
 // Shared person/update/subscription logic over a storage adapter (SQLite or Postgres).
 // All fuzzy-matching decisions live here so both backends behave identically.
+const crypto = require('crypto');
 const { normalize, phoneticKey, matchScore } = require('./names');
 
 const STATUSES = ['safe', 'injured', 'missing', 'deceased', 'unknown'];
@@ -60,10 +61,31 @@ function createStore(adapter) {
     return (await adapter.recentUpdates(limit)).map(isoRow);
   }
 
+  // Every subscription gets a unique token, used for the unsubscribe link and —
+  // for email — the verification link. Email starts unverified; WhatsApp/Telegram
+  // are verified implicitly (the sender messages from their own number/chat).
   async function subscribe(personId, channel, address) {
-    const addr = String(address || '').trim();
-    if (!addr) throw new Error('Address is required');
-    await adapter.insertSubscription(personId, channel, channel === 'email' ? addr.toLowerCase() : addr);
+    const addr0 = String(address || '').trim();
+    if (!addr0) throw new Error('Address is required');
+    const addr = channel === 'email' ? addr0.toLowerCase() : addr0;
+    const existing = await adapter.findSubscription(personId, channel, addr);
+    if (existing) {
+      return { sub: existing, created: false, needsVerification: channel === 'email' && !existing.verified };
+    }
+    const token = crypto.randomBytes(16).toString('hex');
+    const verified = channel !== 'email';
+    const sub = await adapter.insertSubscription(personId, channel, addr, verified, token);
+    return { sub, created: true, needsVerification: !verified };
+  }
+
+  async function verifySubscription(token) {
+    if (!token) return null;
+    return adapter.verifySubscriptionByToken(String(token));
+  }
+
+  async function unsubscribeByToken(token) {
+    if (!token) return null;
+    return adapter.deleteSubscriptionByToken(String(token));
   }
 
   async function unsubscribe(personId, channel, address) {
@@ -88,6 +110,8 @@ function createStore(adapter) {
     getLatestUpdate,
     getRecentUpdates,
     subscribe,
+    verifySubscription,
+    unsubscribeByToken,
     unsubscribe,
     unsubscribeAll,
     getSubscriptions,

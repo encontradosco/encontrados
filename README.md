@@ -99,4 +99,10 @@ src/
 api/index.js      # entry point serverless para Vercel
 ```
 
-Al llegar un reporte nuevo se notifica a todos los suscriptores de esa persona (correo, WhatsApp y/o Telegram), excepto a quien reportó.
+Al llegar un reporte nuevo se notifica a todos los suscriptores **verificados** de esa persona (correo, WhatsApp y/o Telegram), excepto a quien reportó.
+
+## Suscripciones: verificación y baja
+
+- **Correo**: la suscripción nace sin verificar; se envía un correo con enlace `/verify?token=…`. No se manda ninguna alerta hasta confirmar.
+- **WhatsApp/Telegram**: verificadas implícitamente (la persona escribe desde su propio número/chat).
+- **Baja**: toda alerta (correo y WhatsApp) incluye un enlace personal `/unsubscribe?token=…` de un clic. En el bot también funciona `BAJA <nombre>` / `BAJA TODO`.

@@ -38,6 +38,8 @@ async function createSqliteAdapter(dbPath) {
       person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
       channel TEXT NOT NULL CHECK (channel IN ('email','whatsapp','telegram')),
       address TEXT NOT NULL,
+      verified INTEGER NOT NULL DEFAULT 1,
+      verify_token TEXT,
       created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
       UNIQUE(person_id, channel, address)
     );
@@ -90,10 +92,28 @@ async function createSqliteAdapter(dbPath) {
         )
         .all(limit);
     },
-    async insertSubscription(personId, channel, address) {
+    async findSubscription(personId, channel, address) {
+      return db
+        .prepare('SELECT * FROM subscriptions WHERE person_id = ? AND channel = ? AND address = ?')
+        .get(personId, channel, address);
+    },
+    async insertSubscription(personId, channel, address, verified, verifyToken) {
       db.prepare(
-        'INSERT OR IGNORE INTO subscriptions (person_id, channel, address) VALUES (?, ?, ?)'
-      ).run(personId, channel, address);
+        'INSERT OR IGNORE INTO subscriptions (person_id, channel, address, verified, verify_token) VALUES (?, ?, ?, ?, ?)'
+      ).run(personId, channel, address, verified ? 1 : 0, verifyToken || null);
+      return this.findSubscription(personId, channel, address);
+    },
+    async verifySubscriptionByToken(token) {
+      const sub = db.prepare('SELECT * FROM subscriptions WHERE verify_token = ?').get(token);
+      if (!sub) return null;
+      db.prepare('UPDATE subscriptions SET verified = 1 WHERE id = ?').run(sub.id);
+      return { ...sub, verified: 1 };
+    },
+    async deleteSubscriptionByToken(token) {
+      const sub = db.prepare('SELECT * FROM subscriptions WHERE verify_token = ?').get(token);
+      if (!sub) return null;
+      db.prepare('DELETE FROM subscriptions WHERE id = ?').run(sub.id);
+      return sub;
     },
     async deleteSubscription(personId, channel, address) {
       return db

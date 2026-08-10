@@ -45,6 +45,8 @@ async function createPostgresAdapter(connectionString) {
       person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
       channel TEXT NOT NULL CHECK (channel IN ('email','whatsapp','telegram')),
       address TEXT NOT NULL,
+      verified BOOLEAN NOT NULL DEFAULT true,
+      verify_token TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       UNIQUE(person_id, channel, address)
     );
@@ -112,12 +114,28 @@ async function createPostgresAdapter(connectionString) {
         [limit]
       );
     },
-    async insertSubscription(personId, channel, address) {
-      await pool.query(
-        `INSERT INTO subscriptions (person_id, channel, address) VALUES ($1, $2, $3)
-         ON CONFLICT (person_id, channel, address) DO NOTHING`,
+    async findSubscription(personId, channel, address) {
+      return one(
+        'SELECT * FROM subscriptions WHERE person_id = $1 AND channel = $2 AND address = $3',
         [personId, channel, address]
       );
+    },
+    async insertSubscription(personId, channel, address, verified, verifyToken) {
+      await pool.query(
+        `INSERT INTO subscriptions (person_id, channel, address, verified, verify_token)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (person_id, channel, address) DO NOTHING`,
+        [personId, channel, address, !!verified, verifyToken || null]
+      );
+      return this.findSubscription(personId, channel, address);
+    },
+    async verifySubscriptionByToken(token) {
+      return one('UPDATE subscriptions SET verified = true WHERE verify_token = $1 RETURNING *', [
+        token
+      ]);
+    },
+    async deleteSubscriptionByToken(token) {
+      return one('DELETE FROM subscriptions WHERE verify_token = $1 RETURNING *', [token]);
     },
     async deleteSubscription(personId, channel, address) {
       const r = await pool.query(

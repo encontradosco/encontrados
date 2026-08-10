@@ -1,5 +1,5 @@
 const express = require('express');
-const { notifySubscribers, STATUS_LABEL } = require('../notify');
+const { notifySubscribers, sendVerificationEmail, STATUS_LABEL } = require('../notify');
 const { STATUSES } = require('../people');
 const { esc, layout, statusBadge, updateCard } = require('../html');
 
@@ -125,6 +125,7 @@ ${
           `
 ${req.query.reported ? '<p class="notice">✅ Reporte registrado. Gracias por ayudar.</p>' : ''}
 ${req.query.subscribed ? '<p class="notice">🔔 Listo: te avisaremos por correo cuando haya novedades.</p>' : ''}
+${req.query.checkemail ? '<p class="notice">📬 Te enviamos un correo de confirmación. Abre el enlace para activar los avisos.</p>' : ''}
 <h1>${esc(person.full_name)}</h1>
 ${lastLocated ? `<p class="notice">📍 Última ubicación reportada: <strong>${esc(lastLocated.location)}</strong> (${esc(lastLocated.created_at)})</p>` : ''}
 ${
@@ -155,7 +156,11 @@ ${
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
         return res.status(400).send(layout('Error', '<p class="error">Correo inválido.</p>'));
       }
-      await store.subscribe(person.id, 'email', email);
+      const { sub, needsVerification } = await store.subscribe(person.id, 'email', email);
+      if (needsVerification) {
+        sendVerificationEmail(person, sub).catch((e) => console.error('[verify email]', e));
+        return res.redirect(`/person/${person.id}?checkemail=1`);
+      }
       res.redirect(`/person/${person.id}?subscribed=1`);
     })
   );
@@ -169,8 +174,43 @@ ${
         return res.status(400).send(layout('Error', '<p class="error">Faltan datos.</p>'));
       }
       const { person } = await store.findOrCreatePerson(name);
-      await store.subscribe(person.id, 'email', email.trim());
+      const { sub, needsVerification } = await store.subscribe(person.id, 'email', email.trim());
+      if (needsVerification) {
+        sendVerificationEmail(person, sub).catch((e) => console.error('[verify email]', e));
+        return res.redirect(`/person/${person.id}?checkemail=1`);
+      }
       res.redirect(`/person/${person.id}?subscribed=1`);
+    })
+  );
+
+  // Email verification link
+  router.get(
+    '/verify',
+    wrap(async (req, res) => {
+      const sub = await store.verifySubscription(req.query.token);
+      if (!sub) {
+        return res.status(404).send(layout('Enlace inválido', '<p class="error">Este enlace de confirmación no es válido o ya fue usado.</p>'));
+      }
+      res.redirect(`/person/${sub.person_id}?subscribed=1`);
+    })
+  );
+
+  // One-click unsubscribe link (included in every alert)
+  router.get(
+    '/unsubscribe',
+    wrap(async (req, res) => {
+      const sub = await store.unsubscribeByToken(req.query.token);
+      if (!sub) {
+        return res.status(404).send(layout('Enlace inválido', '<p class="error">Este enlace ya no es válido: la suscripción no existe.</p>'));
+      }
+      const person = await store.getPerson(sub.person_id);
+      res.send(
+        layout(
+          'Suscripción cancelada',
+          `<p class="notice">✅ Listo: ya no recibirás avisos sobre <strong>${esc(person ? person.full_name : '')}</strong>.</p>
+<p><a href="/person/${sub.person_id}">Volver a la página de la persona</a></p>`
+        )
+      );
     })
   );
 
