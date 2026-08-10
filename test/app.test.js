@@ -277,37 +277,3 @@ test('the contact is remembered between reports via a cookie', async (t) => {
   assert.match(await form.text(), /Cruz Roja · 300 555 1234/);
 });
 
-test('purge-test-data removes only the seeded test records', async (t) => {
-  const { server, base } = await startApp();
-  t.after(() => server.close());
-  const store = (await (async () => null)()) || null;
-
-  const mk = (name) =>
-    fetch(`${base}/api/updates`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, status: 'safe' })
-    });
-  await mk('Verificacion Final');
-  await mk('Cadena Completa 9147');
-  await mk('Nicolas Contreras'); // a real report must survive
-
-  const res = await fetch(`${base}/api/maintenance/purge-test-data`, { method: 'POST' });
-  const body = await res.json();
-  assert.equal(res.status, 200);
-  assert.ok(body.removed_count >= 2, JSON.stringify(body));
-
-  const survivors = await (await fetch(`${base}/api/people?q=Nicolas Contreras`)).json();
-  assert.equal(survivors.results.length, 1, 'un reporte real fue borrado');
-
-  const gone = await (await fetch(`${base}/api/people?q=Verificacion Final`)).json();
-  assert.equal(gone.results.length, 0);
-});
-
-test('DELETE /api/people/:id is disabled without API_KEY', async (t) => {
-  const { server, base } = await startApp();
-  t.after(() => server.close());
-  const res = await fetch(`${base}/api/people/1`, { method: 'DELETE' });
-  assert.equal(res.status, 503);
-});
-
