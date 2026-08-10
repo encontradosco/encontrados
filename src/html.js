@@ -18,7 +18,7 @@ const STATUS_CLASS = {
   unknown: 'muted'
 };
 
-const PRIVACY_NOTE = `<p class="privacy">🔒 <strong>Privacidad de las fotos:</strong> las fotos <strong>nunca</strong> se comparten ni se muestran a nadie. Se usan únicamente para reconocimiento facial; si hay una coincidencia, recibirás el aviso <strong>sin</strong> ver ninguna foto.</p>`;
+const PRIVACY_NOTE = `<p class="privacy">🔒 Las fotos <strong>nunca</strong> se comparten ni se muestran a nadie: solo se usan para reconocimiento facial y el aviso de coincidencia llega sin fotos.</p>`;
 
 // Client-side downscale before upload: keeps payloads small enough for
 // serverless limits and slow connections.
@@ -69,7 +69,7 @@ function layout(title, body) {
     <a href="/report" class="cta">Reportar estado</a>
   </nav>
 </header>
-<div class="banner">🇨🇴 <strong>Terremoto en Colombia — lunes 10 de agosto.</strong> Estamos ayudando a reportar y encontrar personas.</div>
+<div class="banner">🇨🇴 <strong>Terremoto en Colombia — lunes 10 de agosto.</strong> Reporta y encuentra personas.</div>
 <main>
 ${body}
 </main>
