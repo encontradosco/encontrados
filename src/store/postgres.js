@@ -203,6 +203,9 @@ async function createPostgresAdapter(connectionString) {
         [faceIds]
       );
     },
+    async deletePerson(id) {
+      return one('DELETE FROM people WHERE id = $1 RETURNING *', [id]);
+    },
     async counts() {
       const r = await one(`SELECT
         (SELECT COUNT(*) FROM people)::int AS people,

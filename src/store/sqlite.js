@@ -187,6 +187,12 @@ async function createSqliteAdapter(dbPath) {
         )
         .all(...faceIds);
     },
+    async deletePerson(id) {
+      const person = getPersonStmt.get(id);
+      if (!person) return null;
+      db.prepare('DELETE FROM people WHERE id = ?').run(id);
+      return person;
+    },
     async counts() {
       const n = (sql) => db.prepare(sql).get().n;
       return {

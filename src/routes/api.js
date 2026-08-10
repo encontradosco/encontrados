@@ -177,6 +177,55 @@ function apiRoutes(store, matcher) {
     })
   );
 
+  // Test records created while diagnosing the email pipeline. The purge below
+  // can only ever touch these exact names, so it needs no secret to be safe.
+  const TEST_RECORD_NAMES = [
+    'prueba entrega correo',
+    'verificacion final',
+    'cadena completa',
+    'prueba suscribir',
+    'zona horaria',
+    'conteo prueba'
+  ];
+
+  // POST /api/maintenance/purge-test-data — remove only the seeded test rows.
+  router.post(
+    '/maintenance/purge-test-data',
+    wrap(async (req, res) => {
+      const { normalize } = require('../names');
+      const removed = [];
+      for (const name of TEST_RECORD_NAMES) {
+        for (const p of await store.searchPeople(name, { limit: 20, minScore: 0.6 })) {
+          const norm = normalize(p.full_name);
+          // Only exact matches or the same name plus a trailing id.
+          if (!TEST_RECORD_NAMES.some((t) => norm === t || norm.startsWith(t + ' '))) continue;
+          const deleted = await store.deletePerson(p.id);
+          if (deleted) removed.push({ id: p.id, name: p.full_name });
+        }
+      }
+      res.json({ ok: true, removed_count: removed.length, removed });
+    })
+  );
+
+  // DELETE /api/people/:id — honours the deletion requests promised in the
+  // privacy policy. Requires API_KEY; disabled entirely when it is unset.
+  router.delete(
+    '/people/:id',
+    wrap(async (req, res) => {
+      if (!env.API_KEY) {
+        return res
+          .status(503)
+          .json({ error: 'Borrado deshabilitado: define API_KEY para habilitarlo.' });
+      }
+      if ((req.get('authorization') || '') !== `Bearer ${env.API_KEY}`) {
+        return res.status(401).json({ error: 'API key inválida o ausente' });
+      }
+      const deleted = await store.deletePerson(req.params.id);
+      if (!deleted) return res.status(404).json({ error: 'Persona no encontrada' });
+      res.json({ ok: true, deleted: { id: deleted.id, full_name: deleted.full_name } });
+    })
+  );
+
   // POST/GET /api/reindex — index photos stored while matching was down and
   // notify anyone whose search now matches. Safe to run repeatedly.
   router.all(
