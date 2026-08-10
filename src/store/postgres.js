@@ -203,6 +203,18 @@ async function createPostgresAdapter(connectionString) {
         [faceIds]
       );
     },
+    async counts() {
+      const r = await one(`SELECT
+        (SELECT COUNT(*) FROM people)::int AS people,
+        (SELECT COUNT(*) FROM updates)::int AS updates,
+        (SELECT COUNT(*) FROM subscriptions)::int AS subscriptions,
+        (SELECT COUNT(*) FROM subscriptions WHERE verified)::int AS subscriptions_verified,
+        (SELECT COUNT(*) FROM photos)::int AS photos,
+        (SELECT COUNT(*) FROM photos WHERE face_id IS NOT NULL)::int AS photos_indexed,
+        (SELECT COUNT(*) FROM photos WHERE kind = 'report')::int AS photos_report,
+        (SELECT COUNT(*) FROM photos WHERE kind = 'query')::int AS photos_query`);
+      return r;
+    },
     async photosMissingFaceId(limit) {
       return all('SELECT * FROM photos WHERE face_id IS NULL ORDER BY id LIMIT $1', [limit]);
     },
