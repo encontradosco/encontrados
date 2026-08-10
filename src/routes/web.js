@@ -47,7 +47,10 @@ function webRoutes(store, matcher) {
         layout(
           'Inicio',
           `
-<div class="hero"><h1>¿Tu familia y amigos están bien?</h1></div>
+<div class="hero">
+  <h1>¿Tu familia y amigos están bien?</h1>
+  <p class="subhead">Información provista por voluntarios y extraída de bases de datos públicas.</p>
+</div>
 <div class="big-actions">
   <a class="big-btn report" href="/report">📢 Reportar estado de alguien</a>
   <a class="big-btn search" href="/buscar">🔎 Buscar a alguien</a>
