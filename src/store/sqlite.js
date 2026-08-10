@@ -187,6 +187,19 @@ async function createSqliteAdapter(dbPath) {
         )
         .all(...faceIds);
     },
+    async counts() {
+      const n = (sql) => db.prepare(sql).get().n;
+      return {
+        people: n('SELECT COUNT(*) AS n FROM people'),
+        updates: n('SELECT COUNT(*) AS n FROM updates'),
+        subscriptions: n('SELECT COUNT(*) AS n FROM subscriptions'),
+        subscriptions_verified: n('SELECT COUNT(*) AS n FROM subscriptions WHERE verified = 1'),
+        photos: n('SELECT COUNT(*) AS n FROM photos'),
+        photos_indexed: n('SELECT COUNT(*) AS n FROM photos WHERE face_id IS NOT NULL'),
+        photos_report: n("SELECT COUNT(*) AS n FROM photos WHERE kind = 'report'"),
+        photos_query: n("SELECT COUNT(*) AS n FROM photos WHERE kind = 'query'")
+      };
+    },
     async photosMissingFaceId(limit) {
       return db
         .prepare('SELECT * FROM photos WHERE face_id IS NULL ORDER BY id LIMIT ?')

@@ -191,6 +191,7 @@ function apiRoutes(store, matcher) {
         const recent = await store.getRecentUpdates(1);
         out.database.ok = true;
         out.database.recent_updates = recent.length;
+        out.database.counts = await store.counts();
         const pending = await store.photosMissingFaceId(500);
         out.faces.photos_pending_indexing = pending.length;
         if (pending.length) {
