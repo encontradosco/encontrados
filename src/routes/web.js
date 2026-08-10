@@ -196,10 +196,9 @@ document.addEventListener('submit', function (ev) {
         await attachQueryPhotos(person, sub, files);
         if (needsVerification) {
           sendVerificationEmail(person, sub).catch((e) => console.error('[buscar verify]', e));
-          notice = '<p class="notice">📬 Te enviamos un correo de confirmación: ábrelo para activar los avisos.</p>';
-        } else {
-          notice = '<p class="notice">🔔 Te avisaremos cuando haya novedades.</p>';
+          return res.redirect(checkEmailUrl(q ? `/buscar?q=${encodeURIComponent(q)}` : '/buscar'));
         }
+        notice = '<p class="notice">🔔 Te avisaremos cuando haya novedades.</p>';
       } else if (files.length) {
         await Promise.resolve(); // photos are not stored without an email — nothing to keep
         sections.push('<p class="subtle">Deja tu correo en el formulario para avisarte si aparece una coincidencia futura.</p>');
@@ -352,6 +351,10 @@ ${
     })
   );
 
+  function checkEmailUrl(next) {
+    return `/revisa-tu-correo${next ? `?next=${encodeURIComponent(next)}` : ''}`;
+  }
+
   const subscribeHandler = wrap(async (req, res) => {
     const person = await store.getPerson(req.params.id);
     if (!person) {
@@ -365,7 +368,7 @@ ${
     await attachQueryPhotos(person, sub, req.files);
     if (needsVerification) {
       sendVerificationEmail(person, sub).catch((e) => console.error('[verify email]', e));
-      return res.redirect(`/person/${person.id}?checkemail=1`);
+      return res.redirect(checkEmailUrl(`/person/${person.id}`));
     }
     res.redirect(`/person/${person.id}?subscribed=1`);
   });
@@ -388,13 +391,32 @@ ${
       await attachQueryPhotos(person, sub, req.files);
       if (needsVerification) {
         sendVerificationEmail(person, sub).catch((e) => console.error('[verify email]', e));
-        return res.redirect(`/person/${person.id}?checkemail=1`);
+        return res.redirect(checkEmailUrl(`/person/${person.id}`));
       }
       res.redirect(`/person/${person.id}?subscribed=1`);
     })
   );
 
-  // Email verification link
+  // Full-screen "check your email" page
+  router.get('/revisa-tu-correo', (req, res) => {
+    const next = String(req.query.next || '/');
+    const safeNext = next.startsWith('/') ? next : '/';
+    res.send(
+      layout(
+        'Revisa tu correo',
+        `
+<div class="takeover">
+  <div class="takeover-emoji">📬</div>
+  <h1>Para continuar, sigue el enlace que te enviamos por correo.</h1>
+  <p>Sin ese paso no podremos avisarte. Revisa tu bandeja de entrada — y la carpeta de spam — un correo de <strong>a@torrenegra.com</strong>.</p>
+  <p class="subtle"><a href="${esc(safeNext)}">Volver</a></p>
+</div>`,
+        { fullTitle: 'Revisa tu correo — Aquí' }
+      )
+    );
+  });
+
+  // Email verification link → full-screen confirmation
   router.get(
     '/verify',
     wrap(async (req, res) => {
@@ -402,7 +424,20 @@ ${
       if (!sub) {
         return res.status(404).send(layout('Enlace inválido', '<p class="error">Este enlace de confirmación no es válido o ya fue usado.</p>'));
       }
-      res.redirect(`/person/${sub.person_id}?subscribed=1`);
+      const person = await store.getPerson(sub.person_id);
+      res.send(
+        layout(
+          'Suscripción confirmada',
+          `
+<div class="takeover">
+  <div class="takeover-emoji">✅</div>
+  <h1>Listo: te avisaremos por correo apenas encontremos coincidencias.</h1>
+  ${person ? `<p><a class="big-btn search" href="/person/${person.id}">Ver los reportes de ${esc(person.full_name)}</a></p>` : ''}
+  <p class="subtle"><a href="/">Ir al inicio</a></p>
+</div>`,
+          { fullTitle: 'Suscripción confirmada — Aquí' }
+        )
+      );
     })
   );
 

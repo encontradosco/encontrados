@@ -216,7 +216,7 @@ test('subscribe alias: POST /person/:id works like /subscribe', async (t) => {
     redirect: 'manual'
   });
   assert.equal(res.status, 302);
-  assert.match(res.headers.get('location'), /checkemail=1/);
+  assert.match(res.headers.get('location'), /revisa-tu-correo/);
 });
 
 test('report without name but with photo creates unidentified person', async (t) => {

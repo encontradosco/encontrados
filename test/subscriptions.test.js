@@ -65,14 +65,17 @@ test('web flow: subscribe → check email → verify link → unsubscribe link',
     redirect: 'manual'
   });
   assert.equal(res.status, 302);
-  assert.match(res.headers.get('location'), /checkemail=1/);
+  assert.match(res.headers.get('location'), /revisa-tu-correo/);
+
+  const checkPage = await fetch(`${base}${res.headers.get('location')}`);
+  assert.match(await checkPage.text(), /sigue el enlace que te enviamos por correo/);
 
   const [sub] = await store.getSubscriptions(person.id);
   assert.equal(sub.verified, 0);
 
-  const verify = await fetch(`${base}/verify?token=${sub.verify_token}`, { redirect: 'manual' });
-  assert.equal(verify.status, 302);
-  assert.match(verify.headers.get('location'), /subscribed=1/);
+  const verify = await fetch(`${base}/verify?token=${sub.verify_token}`);
+  assert.equal(verify.status, 200);
+  assert.match(await verify.text(), /te avisaremos por correo apenas encontremos coincidencias/);
   assert.ok((await store.getSubscriptions(person.id))[0].verified);
 
   const unsub = await fetch(`${base}/unsubscribe?token=${sub.verify_token}`);
