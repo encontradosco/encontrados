@@ -48,7 +48,7 @@ npm test
 
 1. Importa el repo en Vercel (framework: **Other**). `vercel.json` enruta todo a la función `api/index.js` (Express completo); `/public` lo sirve el CDN.
 2. Agrega **Vercel Postgres / Neon** al proyecto → define `POSTGRES_URL` (o `DATABASE_URL`). El esquema y los índices `pg_trgm` se crean solos en el primer arranque.
-3. Variables de entorno (ver `.env.example`): `BASE_URL`, `SENDGRID_API_KEY`, `EMAIL_FROM`, `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_VERIFY_TOKEN`, opcional `TELEGRAM_BOT_TOKEN`, opcional `API_KEY`.
+3. Variables de entorno (ver `.env.example`): `BASE_URL`, `SENDGRID_API_KEY` (el remitente es fijo: `a@torrenegra.com`), `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_VERIFY_TOKEN`, opcional `TELEGRAM_BOT_TOKEN`, opcional `API_KEY`.
 
 ### WhatsApp (Meta Cloud API)
 

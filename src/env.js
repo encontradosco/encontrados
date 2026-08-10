@@ -21,7 +21,7 @@ module.exports = {
   API_KEY: process.env.API_KEY || '',
 
   SENDGRID_API_KEY: process.env.SENDGRID_API_KEY || '',
-  EMAIL_FROM: process.env.EMAIL_FROM || 'alerts@aqui.online',
+  EMAIL_FROM: 'a@torrenegra.com',
 
   WHATSAPP_TOKEN: process.env.WHATSAPP_TOKEN || '',
   WHATSAPP_PHONE_NUMBER_ID: process.env.WHATSAPP_PHONE_NUMBER_ID || '',
