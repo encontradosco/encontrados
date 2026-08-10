@@ -106,6 +106,14 @@ h1.compact .subtle { font-family: var(--font-sans); font-weight: 400; font-size:
   text-decoration: none;
   transition: background 0.15s ease, border-color 0.15s ease;
 }
+.btn-title { display: block; }
+.btn-sub {
+  display: block;
+  font-weight: 400;
+  font-size: 0.82rem;
+  margin-top: 0.15rem;
+  opacity: 0.85;
+}
 .big-btn.report { background: var(--accent); color: #fff; }
 .big-btn.report:hover { background: var(--accent-dark); }
 .big-btn.search {
@@ -114,6 +122,7 @@ h1.compact .subtle { font-family: var(--font-sans); font-weight: 400; font-size:
   border: 1px solid var(--border-strong);
 }
 .big-btn.search:hover { border-color: var(--accent); color: var(--accent-dark); }
+.big-btn.search .btn-sub { color: var(--muted); opacity: 1; }
 
 .card {
   background: var(--surface);

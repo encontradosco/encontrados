@@ -156,6 +156,7 @@ ${body}
   <p><a href="/privacidad">Política de privacidad</a> · <a href="/terminos">Términos de servicio</a></p>
 </footer>
 ${RESIZE_SCRIPT}
+${TIME_SCRIPT}
 </body>
 </html>`;
 }
@@ -166,9 +167,42 @@ function statusBadge(status) {
   )}</span>`;
 }
 
+// Reports come from the field: Colombia time is the meaningful default when
+// JavaScript is unavailable. The client script below re-renders in the
+// viewer's own timezone.
 function fmtDate(iso) {
-  return esc((iso || '').replace('T', ' ').replace('Z', ' UTC'));
+  const d = new Date(iso);
+  if (isNaN(d)) return esc(iso || '');
+  return esc(
+    d.toLocaleString('es-CO', {
+      timeZone: 'America/Bogota',
+      day: 'numeric',
+      month: 'short',
+      hour: '2-digit',
+      minute: '2-digit'
+    })
+  );
 }
+
+// <time> element carrying the machine-readable instant so the client can
+// localize it.
+function timeTag(iso) {
+  return `<time class="ts" datetime="${esc(iso || '')}">${fmtDate(iso)}</time>`;
+}
+
+const TIME_SCRIPT = `<script>
+(function () {
+  var opts = { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' };
+  document.querySelectorAll('time.ts').forEach(function (el) {
+    var iso = el.getAttribute('datetime');
+    if (!iso) return;
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return;
+    try { el.textContent = d.toLocaleString(undefined, opts); } catch (e) {}
+    el.title = d.toLocaleString();
+  });
+})();
+</script>`;
 
 function mapLink(u) {
   if (u.lat == null || u.lng == null) return '';
@@ -178,7 +212,7 @@ function mapLink(u) {
 function updateCard(u, personName) {
   return `<article class="card">
   ${personName ? `<h3><a href="/person/${u.person_id}">${esc(personName)}</a></h3>` : ''}
-  <p>${statusBadge(u.status)} <time>${fmtDate(u.created_at)}</time></p>
+  <p>${statusBadge(u.status)} ${timeTag(u.created_at)}</p>
   ${u.message ? `<p class="msg">${esc(u.message)}</p>` : ''}
   ${u.location ? `<p class="loc">📍 ${esc(u.location)}${mapLink(u)}</p>` : u.lat != null && u.lng != null ? `<p class="loc">📍 Ubicación GPS${mapLink(u)}</p>` : ''}
   <p class="meta">Fuente: ${esc(u.source)}${u.reporter ? ` · Reportado por: ${esc(u.reporter)}` : ''}</p>
@@ -227,4 +261,4 @@ const LOCATION_SCRIPT = `<script>
 })();
 </script>`;
 
-module.exports = { esc, layout, statusBadge, updateCard, fmtDate, PRIVACY_NOTE, LOCATION_SCRIPT };
+module.exports = { esc, layout, statusBadge, updateCard, fmtDate, timeTag, PRIVACY_NOTE, LOCATION_SCRIPT };
