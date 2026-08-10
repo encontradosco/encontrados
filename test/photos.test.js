@@ -246,11 +246,11 @@ test('report without name but with photo creates unidentified person', async (t)
   assert.match(await page.text(), /Persona sin identificar/);
   assert.equal(matcher.calls.index, 1);
 
-  // no name and no photo → rejected
+  // no photo → rejected, even with a name
   const bad = await fetch(`${base}/report`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ name: '', status: 'safe' })
+    body: new URLSearchParams({ name: 'Alguien Con Nombre', status: 'safe' })
   });
   assert.equal(bad.status, 400);
 });
@@ -303,11 +303,11 @@ test('buscar results replace the form with a Nueva búsqueda button', async (t) 
     source: 'web'
   });
 
-  const post = await fetch(`${base}/buscar`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ q: 'lucia fernandez' })
-  });
+  // Photos are mandatory when searching.
+  const fd = new FormData();
+  fd.set('q', 'lucia fernandez');
+  fd.append('photos', new File([photoBytes('lucia')], 'f.jpg', { type: 'image/jpeg' }));
+  const post = await fetch(`${base}/buscar`, { method: 'POST', body: fd });
   const html = await post.text();
   assert.match(html, /Lucía Fernández/);
   assert.match(html, /Nueva búsqueda/);
