@@ -59,7 +59,7 @@ ${
 }
 `,
           {
-            fullTitle: 'Aquí — Encuentra y reporta personas · Terremoto en Colombia',
+            fullTitle: 'aqui.online — Encuentra y reporta personas · Terremoto en Colombia',
             path: '/'
           }
         )
@@ -122,8 +122,8 @@ document.addEventListener('submit', function (ev) {
       res.send(
         layout('Buscar', `<h1 class="compact">¿Buscas a alguien?</h1>${buscarForm(q)}${resultsHtml}`, {
           fullTitle: q
-            ? `¿Has visto a ${q}? — Aquí · Terremoto en Colombia`
-            : 'Buscar a alguien — Aquí · Terremoto en Colombia',
+            ? `¿Has visto a ${q}? — aqui.online · Terremoto en Colombia`
+            : 'Buscar a alguien — aqui.online · Terremoto en Colombia',
           description: q
             ? `Buscamos noticias sobre ${q} tras el terremoto en Colombia. Si sabes algo, repórtalo aquí; las familias reciben el aviso al instante.`
             : 'Busca por nombre (aunque no lo recuerdes exacto) o por foto con reconocimiento facial privado.',
@@ -256,7 +256,7 @@ document.addEventListener('submit', function (ev) {
 </script>
 ${LOCATION_SCRIPT}`,
         {
-          fullTitle: 'Reportar el estado de una persona — Aquí · Terremoto en Colombia',
+          fullTitle: 'Reportar el estado de una persona — aqui.online · Terremoto en Colombia',
           description:
             '¿Sabes cómo está alguien tras el terremoto en Colombia? Repórtalo en un minuto: las familias suscritas reciben el aviso de inmediato.',
           path: '/report'
@@ -316,7 +316,7 @@ ${LOCATION_SCRIPT}`,
       const updates = await store.getUpdates(person.id);
       const lastLocated = updates.find((u) => u.location);
       const personMeta = {
-        fullTitle: `${person.full_name}: estado y noticias — Aquí`,
+        fullTitle: `${person.full_name}: estado y noticias — aqui.online`,
         description: updates.length
           ? `Últimos reportes sobre ${person.full_name} tras el terremoto en Colombia. Suscríbete para recibir avisos de novedades o agrega lo que sepas.`
           : `Aún no hay reportes sobre ${person.full_name}. Si sabes algo, repórtalo; las familias reciben el aviso al instante.`,
@@ -411,7 +411,7 @@ ${
   <p>Sin ese paso no podremos avisarte. Revisa tu bandeja de entrada — y la carpeta de spam — un correo de <strong>a@torrenegra.com</strong>.</p>
   <p class="subtle"><a href="${esc(safeNext)}">Volver</a></p>
 </div>`,
-        { fullTitle: 'Revisa tu correo — Aquí' }
+        { fullTitle: 'Revisa tu correo — aqui.online' }
       )
     );
   });
@@ -435,7 +435,7 @@ ${
   ${person ? `<p><a class="big-btn search" href="/person/${person.id}">Ver los reportes de ${esc(person.full_name)}</a></p>` : ''}
   <p class="subtle"><a href="/">Ir al inicio</a></p>
 </div>`,
-          { fullTitle: 'Suscripción confirmada — Aquí' }
+          { fullTitle: 'Suscripción confirmada — aqui.online' }
         )
       );
     })
@@ -468,7 +468,7 @@ ${
         `
 <h1>Política de privacidad</h1>
 <p class="subtle">Última actualización: 10 de agosto de 2026</p>
-<p><strong>Aquí</strong> existe con un único propósito: ayudar a reportar y encontrar personas durante emergencias, como el terremoto en Colombia del lunes 10 de agosto. Tratamos tu información con ese único fin.</p>
+<p><strong>aqui.online</strong> existe con un único propósito: ayudar a reportar y encontrar personas durante emergencias, como el terremoto en Colombia del lunes 10 de agosto. Tratamos tu información con ese único fin.</p>
 <h2>Qué guardamos</h2>
 <ul>
   <li><strong>Reportes:</strong> nombre de la persona, estado, nota, ubicación y (opcional) quién reporta.</li>
@@ -498,7 +498,7 @@ ${
         `
 <h1>Términos de servicio</h1>
 <p class="subtle">Última actualización: 10 de agosto de 2026</p>
-<p><strong>Aquí</strong> es un servicio gratuito y de emergencia para reportar y encontrar personas. Al usarlo aceptas estos términos, que mantenemos deliberadamente simples dada la naturaleza de la emergencia:</p>
+<p><strong>aqui.online</strong> es un servicio gratuito y de emergencia para reportar y encontrar personas. Al usarlo aceptas estos términos, que mantenemos deliberadamente simples dada la naturaleza de la emergencia:</p>
 <ul>
   <li><strong>Usa el servicio de buena fe.</strong> Publica solo información que creas cierta y que ayude a encontrar o informar sobre personas. Está prohibido publicar información falsa, ofensiva o con intención de dañar.</li>
   <li><strong>Es un esfuerzo voluntario y de mejor esfuerzo.</strong> La información proviene de la comunidad y puede ser incorrecta o estar desactualizada. Verifica siempre por otros medios antes de tomar decisiones críticas.</li>
@@ -516,7 +516,7 @@ ${
       layout(
         'API',
         `
-<h1>API de Aquí</h1>
+<h1>API de aqui.online</h1>
 <p>Base: <code>https://aqui.online/api</code> · JSON (<code>Content-Type: application/json</code>). Lecturas públicas.</p>
 
 <h2>1. Reportar el estado de una persona</h2>

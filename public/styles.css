@@ -135,3 +135,19 @@ label span { display: block; margin-bottom: 0.2rem; }
 .takeover h1 { font-size: 1.5rem; margin: 0; }
 .takeover-emoji { font-size: 3.5rem; line-height: 1; }
 .takeover .big-btn { display: inline-block; padding: 0.8rem 1.2rem; }
+
+.upload-progress { display: none; margin-top: 0.5rem; }
+.upload-label { font-size: 0.85rem; color: var(--muted); margin-bottom: 0.25rem; }
+.upload-track {
+  height: 10px;
+  background: #e9e4d6;
+  border-radius: 999px;
+  overflow: hidden;
+}
+.upload-fill {
+  height: 100%;
+  width: 2%;
+  background: linear-gradient(90deg, var(--amarillo), var(--azul));
+  transition: width 0.2s ease;
+}
+button:disabled { opacity: 0.6; cursor: progress; }

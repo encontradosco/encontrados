@@ -204,8 +204,8 @@ function apiRoutes(store, matcher) {
         const { sendEmail } = require('../notify');
         out.email.test = await sendEmail(
           String(req.query.email),
-          'Prueba de configuración — Aquí',
-          'Si recibes este correo, el envío desde Aquí funciona correctamente.'
+          'Prueba de configuración — aqui.online',
+          'Si recibes este correo, el envío desde aqui.online funciona correctamente.'
         );
       }
 

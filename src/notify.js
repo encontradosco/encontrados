@@ -36,7 +36,7 @@ async function sendEmail(to, subject, text) {
       },
       body: JSON.stringify({
         personalizations: [{ to: [{ email: to }] }],
-        from: { email: env.EMAIL_FROM, name: 'Aquí' },
+        from: { email: env.EMAIL_FROM, name: 'aqui.online' },
         subject,
         content: [{ type: 'text/plain', value: text }]
       })
@@ -87,9 +87,9 @@ async function sendVerificationEmail(person, sub) {
   const link = `${env.BASE_URL}/verify?token=${sub.verify_token}`;
   return sendEmail(
     sub.address,
-    `Confirma tu suscripción a novedades de ${person.full_name} — Aquí`,
+    `Confirma tu suscripción a novedades de ${person.full_name} — aqui.online`,
     [
-      `Pediste recibir avisos cuando haya novedades de ${person.full_name} en Aquí.`,
+      `Pediste recibir avisos cuando haya novedades de ${person.full_name} en aqui.online.`,
       '',
       `Confirma tu correo abriendo este enlace: ${link}`,
       '',
@@ -103,13 +103,13 @@ async function sendVerificationEmail(person, sub) {
 // Every alert carries that subscriber's personal unsubscribe link.
 async function notifySubscribers(store, person, update, { skipAddress } = {}) {
   const subs = await store.getSubscriptions(person.id);
-  const baseText = `🔔 Actualización en Aquí:\n${updateText(person, update)}`;
+  const baseText = `🔔 Actualización en aqui.online:\n${updateText(person, update)}`;
   const jobs = subs
     .filter((s) => s.verified && !(skipAddress && s.address === skipAddress))
     .map((s) => {
       const text = `${baseText}\n\nPara dejar de recibir estos avisos: ${unsubscribeLink(s)}`;
       if (s.channel === 'email') {
-        return sendEmail(s.address, `Actualización sobre ${person.full_name} — Aquí`, text);
+        return sendEmail(s.address, `Actualización sobre ${person.full_name} — aqui.online`, text);
       }
       if (s.channel === 'whatsapp') return sendWhatsApp(s.address, text);
       return Promise.resolve(false);

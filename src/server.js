@@ -25,11 +25,15 @@ async function createApp(adapter, matcher) {
   app.use('/', webRoutes(store, faceMatcher));
 
   app.use((req, res) => {
-    console.warn('[404]', req.method, req.originalUrl);
+    // Log everything needed to diagnose a 404 from the Vercel logs alone.
+    console.warn(
+      `[404] ${req.method} ${req.originalUrl} host=${req.get('host')} referer=${req.get('referer') || '-'} ct=${req.get('content-type') || '-'}`
+    );
+    const where = `${req.method} ${req.originalUrl}`.replace(/[<>&"]/g, '');
     res
       .status(404)
       .send(
-        '<!doctype html><html lang="es"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>No encontrado — Aquí</title><body style="font-family:system-ui;max-width:640px;margin:2rem auto;padding:0 1rem"><h1>Página no encontrada</h1><p>Vuelve al <a href="/">inicio</a> para reportar o buscar a alguien.</p></body></html>'
+        `<!doctype html><html lang="es"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>No encontrado — aqui.online</title><body style="font-family:system-ui;max-width:640px;margin:2rem auto;padding:0 1rem"><h1>Página no encontrada</h1><p>Vuelve al <a href="/">inicio</a> para reportar o buscar a alguien.</p><p style="color:#666;font-size:.85rem">Ruta solicitada: <code>${where}</code></p></body></html>`
       );
   });
 
@@ -56,7 +60,7 @@ async function createApp(adapter, matcher) {
 if (require.main === module) {
   createApp().then((app) => {
     app.listen(env.PORT, () => {
-      console.log(`Aquí escuchando en ${env.BASE_URL} (puerto ${env.PORT})`);
+      console.log(`aqui.online escuchando en ${env.BASE_URL} (puerto ${env.PORT})`);
     });
   });
 }

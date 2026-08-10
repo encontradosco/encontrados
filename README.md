@@ -1,4 +1,4 @@
-# 📍 Aquí — aqui.online
+# 📍 aqui.online
 
 Tablero de estado de personas en emergencias — actualmente ayudando tras el **terremoto en Colombia del lunes 10 de agosto**. Dos casos de uso:
 
