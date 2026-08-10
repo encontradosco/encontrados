@@ -12,7 +12,6 @@ Canales:
 | Web | ✅ | ✅ | ✅ (correo) |
 | WhatsApp | ✅ | ✅ | ✅ (al número que escribe) |
 | API REST | ✅ | ✅ | ✅ |
-| Telegram | ✅ (listo, opcional) | ✅ | ✅ (al chat) |
 
 Toda la interfaz es en español. El bot entiende comandos en español e inglés y siempre responde en español.
 
@@ -48,19 +47,13 @@ npm test
 
 1. Importa el repo en Vercel (framework: **Other**). `vercel.json` enruta todo a la función `api/index.js` (Express completo); `/public` lo sirve el CDN.
 2. Agrega **Vercel Postgres / Neon** al proyecto → define `POSTGRES_URL` (o `DATABASE_URL`). El esquema y los índices `pg_trgm` se crean solos en el primer arranque.
-3. Variables de entorno (ver `.env.example`): `BASE_URL`, `SENDGRID_API_KEY` (el remitente es fijo: `a@torrenegra.com`), `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_VERIFY_TOKEN`, opcional `TELEGRAM_BOT_TOKEN`, opcional `API_KEY`.
+3. Variables de entorno (ver `.env.example`): `BASE_URL`, `SENDGRID_API_KEY` (el remitente es fijo: `a@torrenegra.com`), `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_VERIFY_TOKEN`, opcional `API_KEY`.
 
 ### WhatsApp (Meta Cloud API)
 
 1. En [Meta for Developers](https://developers.facebook.com), crea una app con el producto WhatsApp y toma `WHATSAPP_TOKEN` y `WHATSAPP_PHONE_NUMBER_ID`.
 2. Configura el webhook: URL `https://aqui.online/webhooks/whatsapp`, verify token = `WHATSAPP_VERIFY_TOKEN`, suscrito al campo `messages`.
 3. Comandos: `AYUDA`, `BUSCAR <nombre>`, `BIEN|HERIDO|DESAPARECIDO <nombre>: <nota> @ <lugar>`, `SUSCRIBIR <nombre>`, `BAJA <nombre>` / `BAJA TODO`. Un mensaje sin comando se trata como búsqueda.
-
-### Telegram (opcional)
-
-```bash
-curl "https://api.telegram.org/bot<TOKEN>/setWebhook?url=https://aqui.online/webhooks/telegram"
-```
 
 ## API
 
@@ -93,16 +86,16 @@ src/
   names.js        # normalización, clave fonética, puntaje difuso
   people.js       # lógica compartida (búsqueda, merge de personas, suscripciones)
   store/          # adaptadores: postgres.js (prod/Vercel), sqlite.js (dev/tests)
-  bot.js          # motor conversacional compartido (WhatsApp + Telegram)
-  notify.js       # salidas: SendGrid, WhatsApp Cloud API, Telegram
+  bot.js          # motor conversacional (WhatsApp)
+  notify.js       # salidas: SendGrid, WhatsApp Cloud API
   routes/         # web (HTML servido del servidor), api (JSON), webhooks
 api/index.js      # entry point serverless para Vercel
 ```
 
-Al llegar un reporte nuevo se notifica a todos los suscriptores **verificados** de esa persona (correo, WhatsApp y/o Telegram), excepto a quien reportó.
+Al llegar un reporte nuevo se notifica a todos los suscriptores **verificados** de esa persona (correo y/o WhatsApp), excepto a quien reportó.
 
 ## Suscripciones: verificación y baja
 
 - **Correo**: la suscripción nace sin verificar; se envía un correo con enlace `/verify?token=…`. No se manda ninguna alerta hasta confirmar.
-- **WhatsApp/Telegram**: verificadas implícitamente (la persona escribe desde su propio número/chat).
+- **WhatsApp**: verificadas implícitamente (la persona escribe desde su propio número).
 - **Baja**: toda alerta (correo y WhatsApp) incluye un enlace personal `/unsubscribe?token=…` de un clic. En el bot también funciona `BAJA <nombre>` / `BAJA TODO`.

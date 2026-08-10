@@ -1,7 +1,7 @@
 const express = require('express');
 const env = require('../env');
 const { handleInbound } = require('../bot');
-const { sendWhatsApp, sendTelegram } = require('../notify');
+const { sendWhatsApp } = require('../notify');
 
 function webhookRoutes(store) {
   const router = express.Router();
@@ -35,23 +35,6 @@ function webhookRoutes(store) {
       }
     } catch (e) {
       console.error('[webhook:whatsapp]', e);
-    }
-  });
-
-  // ---- Telegram ----
-  router.post('/telegram', async (req, res) => {
-    res.sendStatus(200);
-    try {
-      const msg = req.body.message;
-      if (!msg || !msg.text || !msg.chat) return;
-      const reply = await handleInbound(store, {
-        channel: 'telegram',
-        from: String(msg.chat.id),
-        text: msg.text
-      });
-      await sendTelegram(msg.chat.id, reply);
-    } catch (e) {
-      console.error('[webhook:telegram]', e);
     }
   });
 

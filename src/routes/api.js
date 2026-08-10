@@ -75,7 +75,7 @@ function apiRoutes(store) {
     })
   );
 
-  // POST /api/people/:id/subscriptions — { channel: email|whatsapp|telegram, address }
+  // POST /api/people/:id/subscriptions — { channel: email|whatsapp, address }
   router.post(
     '/people/:id/subscriptions',
     requireKey,
@@ -83,8 +83,8 @@ function apiRoutes(store) {
       const person = await store.getPerson(req.params.id);
       if (!person) return res.status(404).json({ error: 'Persona no encontrada' });
       const { channel, address } = req.body || {};
-      if (!['email', 'whatsapp', 'telegram'].includes(channel)) {
-        return res.status(400).json({ error: 'channel debe ser email, whatsapp o telegram' });
+      if (!['email', 'whatsapp'].includes(channel)) {
+        return res.status(400).json({ error: 'channel debe ser email o whatsapp' });
       }
       try {
         const { sub, needsVerification } = await store.subscribe(person.id, channel, address);

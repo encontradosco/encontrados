@@ -25,7 +25,5 @@ module.exports = {
 
   WHATSAPP_TOKEN: process.env.WHATSAPP_TOKEN || '',
   WHATSAPP_PHONE_NUMBER_ID: process.env.WHATSAPP_PHONE_NUMBER_ID || '',
-  WHATSAPP_VERIFY_TOKEN: process.env.WHATSAPP_VERIFY_TOKEN || 'aqui-verify',
-
-  TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN || ''
+  WHATSAPP_VERIFY_TOKEN: process.env.WHATSAPP_VERIFY_TOKEN || 'aqui-verify'
 };

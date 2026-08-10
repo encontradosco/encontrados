@@ -34,7 +34,7 @@ async function createPostgresAdapter(connectionString) {
       status TEXT NOT NULL CHECK (status IN ('safe','injured','missing','deceased','unknown')),
       message TEXT,
       location TEXT,
-      source TEXT NOT NULL CHECK (source IN ('web','whatsapp','telegram','api')),
+      source TEXT NOT NULL CHECK (source IN ('web','whatsapp','api')),
       reporter TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
@@ -43,7 +43,7 @@ async function createPostgresAdapter(connectionString) {
     CREATE TABLE IF NOT EXISTS subscriptions (
       id SERIAL PRIMARY KEY,
       person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
-      channel TEXT NOT NULL CHECK (channel IN ('email','whatsapp','telegram')),
+      channel TEXT NOT NULL CHECK (channel IN ('email','whatsapp')),
       address TEXT NOT NULL,
       verified BOOLEAN NOT NULL DEFAULT true,
       verify_token TEXT,

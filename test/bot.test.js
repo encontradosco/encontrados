@@ -71,6 +71,6 @@ test('subscribe registers the sender phone; unsubscribe removes it', async () =>
 
 test('help for unknown/empty messages', async () => {
   const store = await freshStore();
-  const r = await handleInbound(store, { channel: 'telegram', from: '99', text: 'ayuda' });
+  const r = await handleInbound(store, { channel: 'whatsapp', from: '99', text: 'ayuda' });
   assert.match(r, /Comandos/);
 });

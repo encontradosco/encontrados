@@ -1,4 +1,4 @@
-// Shared conversation engine for WhatsApp and Telegram.
+// Conversation engine for WhatsApp.
 // Understands Spanish (primary) and English commands; always replies in Spanish.
 const { normalize } = require('./names');
 const { notifySubscribers, STATUS_LABEL } = require('./notify');
@@ -69,8 +69,8 @@ async function personSummary(store, person) {
   return parts.join('\n');
 }
 
-// channel: 'whatsapp' | 'telegram'; from: phone number or chat id (also the
-// subscription address for that channel). Returns the reply text.
+// channel: 'whatsapp'; from: the sender's phone number (also the subscription
+// address for that channel). Returns the reply text.
 async function handleInbound(store, { channel, from, text }) {
   const parsed = parseMessage(text);
 

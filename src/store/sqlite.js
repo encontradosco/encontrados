@@ -27,7 +27,7 @@ async function createSqliteAdapter(dbPath) {
       status TEXT NOT NULL CHECK (status IN ('safe','injured','missing','deceased','unknown')),
       message TEXT,
       location TEXT,
-      source TEXT NOT NULL CHECK (source IN ('web','whatsapp','telegram','api')),
+      source TEXT NOT NULL CHECK (source IN ('web','whatsapp','api')),
       reporter TEXT,
       created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
     );
@@ -36,7 +36,7 @@ async function createSqliteAdapter(dbPath) {
     CREATE TABLE IF NOT EXISTS subscriptions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
-      channel TEXT NOT NULL CHECK (channel IN ('email','whatsapp','telegram')),
+      channel TEXT NOT NULL CHECK (channel IN ('email','whatsapp')),
       address TEXT NOT NULL,
       verified INTEGER NOT NULL DEFAULT 1,
       verify_token TEXT,

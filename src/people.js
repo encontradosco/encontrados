@@ -62,8 +62,8 @@ function createStore(adapter) {
   }
 
   // Every subscription gets a unique token, used for the unsubscribe link and —
-  // for email — the verification link. Email starts unverified; WhatsApp/Telegram
-  // are verified implicitly (the sender messages from their own number/chat).
+  // for email — the verification link. Email starts unverified; WhatsApp is
+  // verified implicitly (the sender messages from their own number).
   async function subscribe(personId, channel, address) {
     const addr0 = String(address || '').trim();
     if (!addr0) throw new Error('Address is required');

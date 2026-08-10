@@ -1,4 +1,4 @@
-// Outbound notifications: email (SendGrid), WhatsApp (Meta Cloud API), Telegram.
+// Outbound notifications: email (SendGrid) and WhatsApp (Meta Cloud API).
 // All fire-and-forget with logging — a failed notification must never block a report.
 const env = require('./env');
 
@@ -67,23 +67,6 @@ async function sendWhatsApp(to, text) {
   return res.ok;
 }
 
-async function sendTelegram(chatId, text) {
-  if (!env.TELEGRAM_BOT_TOKEN) {
-    console.log(`[notify:telegram skipped — not configured] chat=${chatId}`);
-    return false;
-  }
-  const res = await fetch(
-    `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: chatId, text })
-    }
-  );
-  if (!res.ok) console.error(`[notify:telegram] ${res.status} ${await res.text()}`);
-  return res.ok;
-}
-
 function unsubscribeLink(sub) {
   return `${env.BASE_URL}/unsubscribe?token=${sub.verify_token}`;
 }
@@ -117,7 +100,6 @@ async function notifySubscribers(store, person, update, { skipAddress } = {}) {
         return sendEmail(s.address, `Actualización sobre ${person.full_name} — Aquí`, text);
       }
       if (s.channel === 'whatsapp') return sendWhatsApp(s.address, text);
-      if (s.channel === 'telegram') return sendTelegram(s.address, text);
       return Promise.resolve(false);
     });
   const results = await Promise.allSettled(jobs);
@@ -130,7 +112,6 @@ async function notifySubscribers(store, person, update, { skipAddress } = {}) {
 module.exports = {
   sendEmail,
   sendWhatsApp,
-  sendTelegram,
   sendVerificationEmail,
   notifySubscribers,
   updateText,
