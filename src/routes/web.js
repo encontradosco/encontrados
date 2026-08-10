@@ -4,7 +4,7 @@ const multer = require('multer');
 const { notifySubscribers, sendVerificationEmail, STATUS_LABEL } = require('../notify');
 const { STATUSES } = require('../people');
 const { processPhoto, MAX_QUERY_PHOTOS } = require('../facematch');
-const { esc, layout, statusBadge, updateCard, PRIVACY_NOTE, LOCATION_SCRIPT } = require('../html');
+const { esc, layout, statusBadge, updateCard, timeTag, PRIVACY_NOTE, LOCATION_SCRIPT } = require('../html');
 
 // Express 4 doesn't catch async errors on its own.
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
@@ -115,7 +115,7 @@ document.addEventListener('submit', function (ev) {
         const latest = await store.getLatestUpdate(p.id);
         return `<article class="card">
   <h3><a href="/person/${p.id}">${esc(p.full_name)}</a></h3>
-  ${latest ? `<p>${statusBadge(latest.status)} <time>${esc(latest.created_at)}</time></p>` : '<p class="subtle">Sin reportes todavía.</p>'}
+  ${latest ? `<p>${statusBadge(latest.status)} ${timeTag(latest.created_at)}</p>` : '<p class="subtle">Sin reportes todavía.</p>'}
 </article>`;
       })
     );
@@ -189,7 +189,7 @@ document.addEventListener('submit', function (ev) {
             cards.push(`<article class="card">
   <h3><a href="/person/${person.id}">${esc(person.full_name)}</a></h3>
   <p>👤 Coincidencia facial: ${Math.round(sim)}%</p>
-  ${latest ? `<p>${statusBadge(latest.status)} <time>${esc(latest.created_at)}</time></p>` : ''}
+  ${latest ? `<p>${statusBadge(latest.status)} ${timeTag(latest.created_at)}</p>` : ''}
 </article>`);
           }
           sections.push('<h2>Posibles coincidencias por rostro</h2>' + cards.join(''));
@@ -359,7 +359,7 @@ ${req.query.reported ? '<p class="notice">✅ Reporte registrado. Gracias por ay
 ${req.query.subscribed ? '<p class="notice">🔔 Listo: te avisaremos por correo cuando haya novedades.</p>' : ''}
 ${req.query.checkemail ? '<p class="notice">📬 Te enviamos un correo de confirmación. Abre el enlace para activar los avisos.</p>' : ''}
 <h1>${esc(person.full_name)}</h1>
-${lastLocated ? `<p class="notice">📍 Última ubicación reportada: <strong>${esc(lastLocated.location)}</strong> (${esc(lastLocated.created_at)})</p>` : ''}
+${lastLocated ? `<p class="notice">📍 Última ubicación reportada: <strong>${esc(lastLocated.location)}</strong> (${timeTag(lastLocated.created_at)})</p>` : ''}
 ${
   updates.length
     ? updates.map((u) => updateCard(u)).join('')
