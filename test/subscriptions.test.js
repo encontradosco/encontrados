@@ -4,6 +4,7 @@ const { createSqliteAdapter } = require('../src/store/sqlite');
 const { createStore } = require('../src/people');
 const { notifySubscribers } = require('../src/notify');
 const { createApp } = require('../src/server');
+const { nullMatcher } = require('../src/faces');
 
 async function freshStore() {
   return createStore(await createSqliteAdapter(':memory:'));
@@ -48,7 +49,7 @@ test('unsubscribe by token deletes the subscription', async () => {
 });
 
 test('web flow: subscribe → check email → verify link → unsubscribe link', async (t) => {
-  const app = await createApp(await createSqliteAdapter(':memory:'));
+  const app = await createApp(await createSqliteAdapter(':memory:'), nullMatcher);
   const server = await new Promise((resolve) => {
     const s = app.listen(0, () => resolve(s));
   });

@@ -2,12 +2,27 @@ const express = require('express');
 const env = require('../env');
 const { notifySubscribers, sendVerificationEmail } = require('../notify');
 const { STATUSES } = require('../people');
+const { processPhoto, MAX_QUERY_PHOTOS } = require('../facematch');
 
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
-function apiRoutes(store) {
+const MAX_PHOTO_BYTES = 4 * 1024 * 1024;
+
+// { base64, content_type } → { bytes, contentType } (null if invalid/too big)
+function decodePhoto(p) {
+  if (!p || typeof p.base64 !== 'string') return null;
+  try {
+    const bytes = Buffer.from(p.base64, 'base64');
+    if (!bytes.length || bytes.length > MAX_PHOTO_BYTES) return null;
+    return { bytes, contentType: p.content_type || 'image/jpeg' };
+  } catch {
+    return null;
+  }
+}
+
+function apiRoutes(store, matcher) {
   const router = express.Router();
-  router.use(express.json());
+  router.use(express.json({ limit: '16mb' }));
 
   // If API_KEY is set, writes require `Authorization: Bearer <key>`.
   // Reads stay open — emergency information wants to be found.
@@ -52,7 +67,8 @@ function apiRoutes(store) {
   );
 
   // POST /api/updates — report status by name (creates the person if new)
-  // { name, status, message?, location?, reporter? }
+  // { name, status, message?, location?, reporter?, photo?: { base64, content_type } }
+  // The photo is used ONLY for face matching; it is never displayed or shared.
   router.post(
     '/updates',
     requireKey,
@@ -67,15 +83,34 @@ function apiRoutes(store) {
         status,
         message,
         location,
+        lat: typeof req.body.lat === 'number' ? req.body.lat : parseFloat(req.body.lat),
+        lng: typeof req.body.lng === 'number' ? req.body.lng : parseFloat(req.body.lng),
         source: 'api',
         reporter
       });
       notifySubscribers(store, person, update).catch((e) => console.error('[api notify]', e));
-      res.status(201).json({ person_id: person.id, person_created: created, update });
+      const photo = decodePhoto(req.body.photo);
+      if (photo) {
+        await processPhoto(store, matcher, {
+          personId: person.id,
+          kind: 'report',
+          updateId: update.id,
+          bytes: photo.bytes,
+          contentType: photo.contentType
+        });
+      }
+      res.status(201).json({
+        person_id: person.id,
+        person_created: created,
+        update,
+        photo_stored: !!photo
+      });
     })
   );
 
-  // POST /api/people/:id/subscriptions — { channel: email|whatsapp, address }
+  // POST /api/people/:id/subscriptions —
+  // { channel: email|whatsapp, address, photos?: [{ base64, content_type }] (max 3) }
+  // Photos are used ONLY for face matching; they are never displayed or shared.
   router.post(
     '/people/:id/subscriptions',
     requireKey,
@@ -88,10 +123,28 @@ function apiRoutes(store) {
       }
       try {
         const { sub, needsVerification } = await store.subscribe(person.id, channel, address);
+        let photosStored = 0;
+        const photos = Array.isArray(req.body.photos) ? req.body.photos.slice(0, MAX_QUERY_PHOTOS) : [];
+        if (sub && photos.length) {
+          let count = await store.countQueryPhotos(sub.id);
+          for (const raw of photos) {
+            const photo = decodePhoto(raw);
+            if (!photo || count >= MAX_QUERY_PHOTOS) continue;
+            await processPhoto(store, matcher, {
+              personId: person.id,
+              kind: 'query',
+              subscriptionId: sub.id,
+              bytes: photo.bytes,
+              contentType: photo.contentType
+            });
+            count++;
+            photosStored++;
+          }
+        }
         if (needsVerification) {
           sendVerificationEmail(person, sub).catch((e) => console.error('[api verify email]', e));
         }
-        res.status(201).json({ ok: true, pending_verification: needsVerification });
+        res.status(201).json({ ok: true, pending_verification: needsVerification, photos_stored: photosStored });
       } catch (e) {
         res.status(400).json({ error: e.message });
       }

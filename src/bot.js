@@ -2,6 +2,8 @@
 // Understands Spanish (primary) and English commands; always replies in Spanish.
 const { normalize } = require('./names');
 const { notifySubscribers, STATUS_LABEL } = require('./notify');
+const { processPhoto, MAX_QUERY_PHOTOS } = require('./facematch');
+const { nullMatcher } = require('./faces');
 
 const HELP = [
   '🆘 *Aquí* — información de personas en emergencias.',
@@ -14,7 +16,10 @@ const HELP = [
   '• SUSCRIBIR <nombre> — recibir avisos a este número',
   '• BAJA <nombre> — dejar de recibir avisos (BAJA TODO para cancelar todos)',
   '',
-  'Ejemplo: BIEN Juan Pérez: hablé con él @ albergue San José'
+  'Ejemplo: BIEN Juan Pérez: hablé con él @ albergue San José',
+  '',
+  '📷 Puedes adjuntar una foto poniendo el comando como leyenda de la imagen.',
+  '🔒 Las fotos NUNCA se comparten ni se muestran a nadie: solo se usan para reconocimiento facial y avisarte si hay coincidencia.'
 ].join('\n');
 
 const COMMANDS = [
@@ -70,8 +75,9 @@ async function personSummary(store, person) {
 }
 
 // channel: 'whatsapp'; from: the sender's phone number (also the subscription
-// address for that channel). Returns the reply text.
-async function handleInbound(store, { channel, from, text }) {
+// address for that channel). photo: optional { bytes, contentType } attached to
+// the message. Returns the reply text.
+async function handleInbound(store, { channel, from, text, photo, matcher = nullMatcher }) {
   const parsed = parseMessage(text);
 
   if (parsed.intent === 'help' || (parsed.intent !== 'help' && !parsed.name)) {
@@ -103,9 +109,19 @@ async function handleInbound(store, { channel, from, text }) {
     notifySubscribers(store, person, update, { skipAddress: from }).catch((e) =>
       console.error('[bot notify]', e)
     );
+    if (photo) {
+      await processPhoto(store, matcher, {
+        personId: person.id,
+        kind: 'report',
+        updateId: update.id,
+        bytes: photo.bytes,
+        contentType: photo.contentType
+      });
+    }
     return [
       `✅ Registrado: *${person.full_name}* — ${STATUS_LABEL[parsed.status]}.`,
       created ? null : 'Se agregó a los reportes existentes de esta persona.',
+      photo ? '📷 Foto recibida. Nunca se compartirá: solo se usa para reconocimiento facial.' : null,
       `Gracias por ayudar. Para seguir sus novedades: SUSCRIBIR ${person.full_name}`
     ]
       .filter(Boolean)
@@ -114,13 +130,33 @@ async function handleInbound(store, { channel, from, text }) {
 
   if (parsed.intent === 'subscribe') {
     const { person } = await store.findOrCreatePerson(parsed.name);
-    await store.subscribe(person.id, channel, from);
+    const { sub } = await store.subscribe(person.id, channel, from);
+    let photoLine = null;
+    if (photo && sub) {
+      const count = await store.countQueryPhotos(sub.id);
+      if (count >= MAX_QUERY_PHOTOS) {
+        photoLine = `Ya tienes ${MAX_QUERY_PHOTOS} fotos para esta búsqueda; no agregué más.`;
+      } else {
+        await processPhoto(store, matcher, {
+          personId: person.id,
+          kind: 'query',
+          subscriptionId: sub.id,
+          bytes: photo.bytes,
+          contentType: photo.contentType
+        });
+        photoLine =
+          '📷 Foto guardada para reconocimiento facial (máx. 3). Nunca se compartirá ni se mostrará a nadie; si hay coincidencia, te aviso sin mostrar fotos.';
+      }
+    }
     const latest = await store.getLatestUpdate(person.id);
     return [
       `🔔 Listo. Te avisaré a este número cuando haya novedades de *${person.full_name}*.`,
+      photoLine,
       latest ? await personSummary(store, person) : 'Aún no hay reportes de esta persona.',
       'Para cancelar: BAJA ' + person.full_name
-    ].join('\n');
+    ]
+      .filter(Boolean)
+      .join('\n');
   }
 
   if (parsed.intent === 'unsubscribe') {
