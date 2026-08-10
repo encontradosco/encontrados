@@ -47,7 +47,7 @@ document.addEventListener('submit', async function (ev) {
     input.files = dt.files;
   }
   form.dataset.resized = '1';
-  form.submit();
+  if (form.requestSubmit) form.requestSubmit(); else form.submit();
 });
 </script>`;
 

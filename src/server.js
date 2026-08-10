@@ -20,6 +20,15 @@ async function createApp(adapter, matcher) {
   app.use('/webhooks', express.json(), webhookRoutes(store, faceMatcher));
   app.use('/', webRoutes(store, faceMatcher));
 
+  app.use((req, res) => {
+    console.warn('[404]', req.method, req.originalUrl);
+    res
+      .status(404)
+      .send(
+        '<!doctype html><html lang="es"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>No encontrado — Aquí</title><body style="font-family:system-ui;max-width:640px;margin:2rem auto;padding:0 1rem"><h1>Página no encontrada</h1><p>Vuelve al <a href="/">inicio</a> para reportar o buscar a alguien.</p></body></html>'
+      );
+  });
+
   // eslint-disable-next-line no-unused-vars
   app.use((err, req, res, next) => {
     if (err && err.name === 'MulterError') {

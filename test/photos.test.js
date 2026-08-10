@@ -179,3 +179,42 @@ test('privacy: no route ever serves photo bytes', async (t) => {
     assert.equal(res.status, 404);
   }
 });
+
+test('buscar: photo search returns immediate face matches', async (t) => {
+  const matcher = fakeMatcher();
+  const { server, base, store } = await startApp(matcher);
+  t.after(() => server.close());
+
+  // existing report with photo
+  const { person } = await store.findOrCreatePerson('Sofía Herrera');
+  const update = await store.addUpdate(person.id, { status: 'safe', source: 'web' });
+  const { processPhoto } = require('../src/facematch');
+  await processPhoto(store, matcher, {
+    personId: person.id, kind: 'report', updateId: update.id,
+    bytes: photoBytes('sofia'), contentType: 'image/jpeg'
+  });
+
+  // search by the same face, no name
+  const fd = new FormData();
+  fd.set('q', '');
+  fd.append('photos', new File([photoBytes('sofia')], 'f.jpg', { type: 'image/jpeg' }));
+  const res = await fetch(`${base}/buscar`, { method: 'POST', body: fd });
+  const html = await res.text();
+  assert.match(html, /Posibles coincidencias por rostro/);
+  assert.match(html, /Sofía Herrera/);
+  assert.match(html, /Coincidencia facial: 99%/);
+});
+
+test('subscribe alias: POST /person/:id works like /subscribe', async (t) => {
+  const { server, base, store } = await startApp(fakeMatcher());
+  t.after(() => server.close());
+  const { person } = await store.findOrCreatePerson('Iván Prieto');
+  const res = await fetch(`${base}/person/${person.id}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ email: 'alias@ejemplo.com' }),
+    redirect: 'manual'
+  });
+  assert.equal(res.status, 302);
+  assert.match(res.headers.get('location'), /checkemail=1/);
+});
