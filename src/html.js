@@ -24,35 +24,88 @@ const STATUS_CLASS = {
 
 const PRIVACY_NOTE = `<p class="privacy">🔒 Las fotos <strong>nunca</strong> se comparten ni se muestran a nadie: solo se usan para reconocimiento facial y el aviso de coincidencia llega sin fotos.</p>`;
 
-// Client-side downscale before upload: keeps payloads small enough for
-// serverless limits and slow connections.
+// Client-side downscale + XHR upload with a visible progress bar. Emergency
+// users on weak connections must see that something is happening.
 const RESIZE_SCRIPT = `<script>
-document.addEventListener('submit', async function (ev) {
-  var form = ev.target;
-  if (!form.matches('form[data-resize-photos]') || form.dataset.resized) return;
-  var inputs = form.querySelectorAll('input[type=file]');
-  var hasFiles = Array.prototype.some.call(inputs, function (i) { return i.files.length; });
-  if (!hasFiles || typeof createImageBitmap !== 'function') return;
-  ev.preventDefault();
-  for (var input of inputs) {
-    var dt = new DataTransfer();
-    for (var file of input.files) {
-      try {
-        var bmp = await createImageBitmap(file);
-        var scale = Math.min(1, 1024 / Math.max(bmp.width, bmp.height));
-        var canvas = document.createElement('canvas');
-        canvas.width = Math.round(bmp.width * scale);
-        canvas.height = Math.round(bmp.height * scale);
-        canvas.getContext('2d').drawImage(bmp, 0, 0, canvas.width, canvas.height);
-        var blob = await new Promise(function (r) { canvas.toBlob(r, 'image/jpeg', 0.82); });
-        dt.items.add(new File([blob], (file.name || 'foto') + '.jpg', { type: 'image/jpeg' }));
-      } catch (e) { dt.items.add(file); }
+(function () {
+  function bar(form) {
+    var box = form.querySelector('.upload-progress');
+    if (!box) {
+      box = document.createElement('div');
+      box.className = 'upload-progress';
+      box.innerHTML = '<div class="upload-label">Preparando…</div><div class="upload-track"><div class="upload-fill"></div></div>';
+      form.appendChild(box);
     }
-    input.files = dt.files;
+    box.style.display = 'block';
+    return {
+      set: function (pct, label) {
+        box.querySelector('.upload-fill').style.width = Math.max(2, Math.round(pct)) + '%';
+        if (label) box.querySelector('.upload-label').textContent = label;
+      },
+      hide: function () { box.style.display = 'none'; }
+    };
   }
-  form.dataset.resized = '1';
-  if (form.requestSubmit) form.requestSubmit(); else form.submit();
-});
+
+  async function shrink(file) {
+    if (typeof createImageBitmap !== 'function') return file;
+    try {
+      var bmp = await createImageBitmap(file);
+      var scale = Math.min(1, 1024 / Math.max(bmp.width, bmp.height));
+      var canvas = document.createElement('canvas');
+      canvas.width = Math.round(bmp.width * scale);
+      canvas.height = Math.round(bmp.height * scale);
+      canvas.getContext('2d').drawImage(bmp, 0, 0, canvas.width, canvas.height);
+      var blob = await new Promise(function (r) { canvas.toBlob(r, 'image/jpeg', 0.82); });
+      return new File([blob], (file.name || 'foto') + '.jpg', { type: 'image/jpeg' });
+    } catch (e) { return file; }
+  }
+
+  document.addEventListener('submit', async function (ev) {
+    var form = ev.target;
+    if (!form.matches('form[data-resize-photos]')) return;
+    var inputs = form.querySelectorAll('input[type=file]');
+    var files = [];
+    inputs.forEach(function (i) { for (var f of i.files) files.push(f); });
+    if (!files.length) return; // plain submit, no upload UI needed
+
+    ev.preventDefault();
+    var submitBtn = form.querySelector('button:not([type=button])');
+    if (submitBtn) { submitBtn.disabled = true; }
+    var p = bar(form);
+
+    // 1) shrink (0-30%)
+    var data = new FormData(form);
+    inputs.forEach(function (i) { data.delete(i.name); });
+    var done = 0;
+    for (var input of inputs) {
+      for (var file of input.files) {
+        p.set(5 + (done / files.length) * 25, 'Optimizando foto ' + (done + 1) + ' de ' + files.length + '…');
+        data.append(input.name, await shrink(file));
+        done++;
+      }
+    }
+
+    // 2) upload (30-100%)
+    p.set(30, 'Enviando… 0%');
+    var xhr = new XMLHttpRequest();
+    xhr.open(form.method || 'POST', form.action);
+    xhr.upload.onprogress = function (e) {
+      if (!e.lengthComputable) return;
+      var pct = e.loaded / e.total;
+      p.set(30 + pct * 65, 'Enviando… ' + Math.round(pct * 100) + '%');
+    };
+    xhr.onload = function () {
+      p.set(100, '¡Listo!');
+      if (xhr.responseURL) { window.location.href = xhr.responseURL; return; }
+      document.open(); document.write(xhr.responseText); document.close();
+    };
+    xhr.onerror = function () {
+      p.set(100, 'Error de conexión. Revisa tu señal e inténtalo de nuevo.');
+      if (submitBtn) submitBtn.disabled = false;
+    };
+    xhr.send(data);
+  });
+})();
 </script>`;
 
 function layout(title, body, meta = {}) {
