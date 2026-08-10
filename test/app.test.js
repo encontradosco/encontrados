@@ -10,7 +10,7 @@ async function startApp() {
     const s = app.listen(0, () => resolve(s));
   });
   const base = `http://127.0.0.1:${server.address().port}`;
-  return { server, base };
+  return { server, base, store: app.locals.store };
 }
 
 test('API: report, fuzzy search, person detail, subscription', async (t) => {
@@ -69,36 +69,77 @@ test('API: validation errors', async (t) => {
   assert.equal(badStatus.status, 400);
 });
 
-test('web: home renders, report form flow works', async (t) => {
+test('home lists missing people and offers both actions', async (t) => {
   const { server, base } = await startApp();
   t.after(() => server.close());
 
-  const home = await fetch(base);
-  assert.equal(home.status, 200);
-  const homeHtml = await home.text();
-  assert.match(homeHtml, /Reportar estado de alguien/);
-  assert.match(homeHtml, /Buscar a alguien/);
-  assert.match(homeHtml, /Terremoto en Colombia/);
+  const html = await (await fetch(base)).text();
+  assert.match(html, /mira quién está buscando la persona que rescataste/i);
+  assert.match(html, /Mira quién la está buscando/);
+  assert.match(html, /Reportar desaparecido/);
 
-  const buscar = await fetch(`${base}/buscar`);
-  assert.match(await buscar.text(), /¿Buscas a alguien\?/);
-
-  // A photo is mandatory on the web report form.
+  // a reported person shows up in the listing
   const fd = new FormData();
   fd.set('name', 'Pedro Pablo Ramírez');
-  fd.set('status', 'missing');
-  fd.set('message', 'No contesta desde ayer');
   fd.set('location', 'Barrio Centro');
-  fd.set('photo', new File([Buffer.from('foto')], 'f.jpg', { type: 'image/jpeg' }));
+  fd.set('contact', '300 123 4567');
+  fd.append('photos', new File([Buffer.from('foto')], 'f.jpg', { type: 'image/jpeg' }));
   const report = await fetch(`${base}/report`, { method: 'POST', body: fd, redirect: 'manual' });
   assert.equal(report.status, 303);
-  const personUrl = report.headers.get('location');
 
-  const page = await fetch(`${base}${personUrl}`);
-  const html = await page.text();
-  assert.match(html, /Pedro Pablo Ramírez/);
-  assert.match(html, /DESAPARECIDO/);
-  assert.match(html, /Última ubicación reportada/);
+  const home = await (await fetch(base)).text();
+  assert.match(home, /Personas reportadas como desaparecidas/);
+  assert.match(home, /Pedro Pablo Ramírez/);
+});
+
+test('reporting requires photos, name, place and contact', async (t) => {
+  const { server, base } = await startApp();
+  t.after(() => server.close());
+
+  const missingContact = new FormData();
+  missingContact.set('name', 'Sin Contacto');
+  missingContact.set('location', 'Centro');
+  missingContact.append('photos', new File([Buffer.from('foto')], 'f.jpg', { type: 'image/jpeg' }));
+  assert.equal((await fetch(`${base}/report`, { method: 'POST', body: missingContact })).status, 400);
+
+  const noPhoto = new URLSearchParams({ name: 'Sin Foto', location: 'Centro', contact: '3001' });
+  const res = await fetch(`${base}/report`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: noPhoto
+  });
+  assert.equal(res.status, 400);
+});
+
+test('the contact of the reporter is never shown on public pages', async (t) => {
+  const { server, base, store } = await startApp();
+  t.after(() => server.close());
+
+  const fd = new FormData();
+  fd.set('name', 'Julia Restrepo');
+  fd.set('location', 'La Candelaria');
+  fd.set('contact', 'secreto@ejemplo.com');
+  fd.append('photos', new File([Buffer.from('foto')], 'f.jpg', { type: 'image/jpeg' }));
+  await fetch(`${base}/report`, { method: 'POST', body: fd, redirect: 'manual' });
+
+  const [person] = await store.searchPeople('julia restrepo');
+  const page = await (await fetch(`${base}/person/${person.id}`)).text();
+  assert.match(page, /Julia Restrepo/);
+  assert.doesNotMatch(page, /secreto@ejemplo\.com/, 'el contacto no debe ser público');
+
+  const home = await (await fetch(base)).text();
+  assert.doesNotMatch(home, /secreto@ejemplo\.com/);
+});
+
+test('families can no longer subscribe to alerts', async (t) => {
+  const { server, base, store } = await startApp();
+  t.after(() => server.close());
+  const { person } = await store.findOrCreatePerson('Alguien Buscado');
+  for (const path of ['/buscar', '/alerta', `/person/${person.id}/subscribe`, '/subscribe-by-name']) {
+    const res = await fetch(`${base}${path}`, { method: 'POST' });
+    assert.equal(res.status, 404, `${path} debería no existir`);
+  }
+  assert.equal((await fetch(`${base}/buscar`)).status, 404);
 });
 
 test('webhook: whatsapp inbound message is processed', async (t) => {
@@ -168,33 +209,56 @@ test('DELETE /api/people/:id is disabled without API_KEY', async (t) => {
   assert.equal(res.status, 503);
 });
 
-test('reporter and email are remembered between visits via cookies', async (t) => {
+test('the contact is remembered between reports via a cookie', async (t) => {
   const { server, base } = await startApp();
   t.after(() => server.close());
 
   const fd = new FormData();
   fd.set('name', 'Marta Isabel Vélez');
-  fd.set('status', 'safe');
-  fd.set('reporter', 'Cruz Roja · 300 555 1234');
-  fd.set('photo', new File([Buffer.from('foto')], 'f.jpg', { type: 'image/jpeg' }));
+  fd.set('location', 'Chapinero');
+  fd.set('contact', 'Cruz Roja · 300 555 1234');
+  fd.append('photos', new File([Buffer.from('foto')], 'f.jpg', { type: 'image/jpeg' }));
   const res = await fetch(`${base}/report`, { method: 'POST', body: fd, redirect: 'manual' });
   assert.equal(res.status, 303);
 
   const cookie = res.headers.getSetCookie().find((c) => c.startsWith('aqui_reporter='));
-  assert.ok(cookie, 'no se guardó la cookie del reportante');
+  assert.ok(cookie, 'no se guardó la cookie de contacto');
 
-  // Next report prefills who is reporting.
   const form = await fetch(`${base}/report`, { headers: { cookie: cookie.split(';')[0] } });
   assert.match(await form.text(), /Cruz Roja · 300 555 1234/);
 });
 
-test('the report form no longer offers self-reporting', async (t) => {
+test('purge-test-data removes only the seeded test records', async (t) => {
   const { server, base } = await startApp();
   t.after(() => server.close());
-  const html = await (await fetch(`${base}/report`)).text();
-  assert.doesNotMatch(html, /Me reporto a m/);
-  assert.doesNotMatch(html, /name="subject"/);
-  // photo is required and comes before the name
-  assert.ok(html.indexOf('name="photo"') < html.indexOf('name="name"'), 'la foto debe ir antes del nombre');
-  assert.match(html, /name="photo"[^>]*required/);
+  const store = (await (async () => null)()) || null;
+
+  const mk = (name) =>
+    fetch(`${base}/api/updates`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, status: 'safe' })
+    });
+  await mk('Verificacion Final');
+  await mk('Cadena Completa 9147');
+  await mk('Nicolas Contreras'); // a real report must survive
+
+  const res = await fetch(`${base}/api/maintenance/purge-test-data`, { method: 'POST' });
+  const body = await res.json();
+  assert.equal(res.status, 200);
+  assert.ok(body.removed_count >= 2, JSON.stringify(body));
+
+  const survivors = await (await fetch(`${base}/api/people?q=Nicolas Contreras`)).json();
+  assert.equal(survivors.results.length, 1, 'un reporte real fue borrado');
+
+  const gone = await (await fetch(`${base}/api/people?q=Verificacion Final`)).json();
+  assert.equal(gone.results.length, 0);
 });
+
+test('DELETE /api/people/:id is disabled without API_KEY', async (t) => {
+  const { server, base } = await startApp();
+  t.after(() => server.close());
+  const res = await fetch(`${base}/api/people/1`, { method: 'DELETE' });
+  assert.equal(res.status, 503);
+});
+

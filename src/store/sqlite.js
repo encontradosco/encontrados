@@ -29,6 +29,7 @@ async function createSqliteAdapter(dbPath) {
       location TEXT,
       lat REAL,
       lng REAL,
+      contact TEXT,
       source TEXT NOT NULL CHECK (source IN ('web','whatsapp','api')),
       reporter TEXT,
       created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
@@ -68,6 +69,9 @@ async function createSqliteAdapter(dbPath) {
       db.exec(`ALTER TABLE updates ADD COLUMN ${col} REAL`);
     } catch { /* already exists */ }
   }
+  try {
+    db.exec('ALTER TABLE updates ADD COLUMN contact TEXT');
+  } catch { /* already exists */ }
 
   const getPersonStmt = db.prepare('SELECT * FROM people WHERE id = ?');
 
@@ -89,10 +93,10 @@ async function createSqliteAdapter(dbPath) {
     async candidatePeople() {
       return db.prepare('SELECT * FROM people').all();
     },
-    async insertUpdate(personId, { status, message, location, lat, lng, source, reporter }) {
+    async insertUpdate(personId, { status, message, location, lat, lng, source, reporter, contact }) {
       const info = db
         .prepare(
-          'INSERT INTO updates (person_id, status, message, location, lat, lng, source, reporter) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+          'INSERT INTO updates (person_id, status, message, location, lat, lng, source, reporter, contact) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
         )
         .run(
           personId,
@@ -102,7 +106,8 @@ async function createSqliteAdapter(dbPath) {
           Number.isFinite(lat) ? lat : null,
           Number.isFinite(lng) ? lng : null,
           source,
-          reporter || null
+          reporter || null,
+          contact || null
         );
       return db.prepare('SELECT * FROM updates WHERE id = ?').get(info.lastInsertRowid);
     },
@@ -115,6 +120,19 @@ async function createSqliteAdapter(dbPath) {
       return db
         .prepare('SELECT * FROM updates WHERE person_id = ? ORDER BY created_at DESC, id DESC LIMIT 1')
         .get(personId);
+    },
+    // Everyone currently reported missing, most recent report first.
+    async missingPeople(limit) {
+      return db
+        .prepare(
+          `SELECT p.id, p.full_name, MAX(u.created_at) AS last_report, COUNT(u.id) AS reports
+           FROM people p JOIN updates u ON u.person_id = p.id
+           WHERE u.status = 'missing'
+           GROUP BY p.id, p.full_name
+           ORDER BY last_report DESC
+           LIMIT ?`
+        )
+        .all(limit);
     },
     async recentUpdates(limit) {
       return db
@@ -177,6 +195,10 @@ async function createSqliteAdapter(dbPath) {
     },
     async setPhotoFaceId(photoId, faceId) {
       db.prepare('UPDATE photos SET face_id = ? WHERE id = ?').run(faceId, photoId);
+    },
+    // Rescue photos are never kept: only the face signature survives.
+    async clearPhotoContent(photoId) {
+      db.prepare('UPDATE photos SET content = ? WHERE id = ?').run(Buffer.alloc(0), photoId);
     },
     async photosByFaceIds(faceIds) {
       if (!faceIds.length) return [];

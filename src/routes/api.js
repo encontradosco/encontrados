@@ -99,7 +99,7 @@ function apiRoutes(store, matcher) {
     '/updates',
     requireKey,
     wrap(async (req, res) => {
-      const { name, status, message, location, reporter } = req.body || {};
+      const { name, status, message, location, reporter, contact } = req.body || {};
       if (!name || !String(name).trim()) return res.status(400).json({ error: 'Falta name' });
       if (!STATUSES.includes(status)) {
         return res.status(400).json({ error: `status debe ser uno de: ${STATUSES.join(', ')}` });
@@ -112,7 +112,8 @@ function apiRoutes(store, matcher) {
         lat: typeof req.body.lat === 'number' ? req.body.lat : parseFloat(req.body.lat),
         lng: typeof req.body.lng === 'number' ? req.body.lng : parseFloat(req.body.lng),
         source: 'api',
-        reporter
+        reporter,
+        contact
       });
       await notifySubscribers(store, person, update);
       const photo = decodePhoto(req.body.photo);

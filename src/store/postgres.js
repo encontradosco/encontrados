@@ -36,6 +36,7 @@ async function createPostgresAdapter(connectionString) {
       location TEXT,
       lat DOUBLE PRECISION,
       lng DOUBLE PRECISION,
+      contact TEXT,
       source TEXT NOT NULL CHECK (source IN ('web','whatsapp','api')),
       reporter TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -77,6 +78,7 @@ async function createPostgresAdapter(connectionString) {
 
   await pool.query('ALTER TABLE updates ADD COLUMN IF NOT EXISTS lat DOUBLE PRECISION');
   await pool.query('ALTER TABLE updates ADD COLUMN IF NOT EXISTS lng DOUBLE PRECISION');
+  await pool.query('ALTER TABLE updates ADD COLUMN IF NOT EXISTS contact TEXT');
 
   const one = async (sql, params) => (await pool.query(sql, params)).rows[0];
   const all = async (sql, params) => (await pool.query(sql, params)).rows;
@@ -108,10 +110,10 @@ async function createPostgresAdapter(connectionString) {
       }
       return all('SELECT * FROM people LIMIT 5000');
     },
-    async insertUpdate(personId, { status, message, location, lat, lng, source, reporter }) {
+    async insertUpdate(personId, { status, message, location, lat, lng, source, reporter, contact }) {
       return one(
-        `INSERT INTO updates (person_id, status, message, location, lat, lng, source, reporter)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+        `INSERT INTO updates (person_id, status, message, location, lat, lng, source, reporter, contact)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
         [
           personId,
           status,
@@ -120,7 +122,8 @@ async function createPostgresAdapter(connectionString) {
           Number.isFinite(lat) ? lat : null,
           Number.isFinite(lng) ? lng : null,
           source,
-          reporter || null
+          reporter || null,
+          contact || null
         ]
       );
     },
@@ -133,6 +136,18 @@ async function createPostgresAdapter(connectionString) {
       return one(
         'SELECT * FROM updates WHERE person_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1',
         [personId]
+      );
+    },
+    // Everyone currently reported missing, most recent report first.
+    async missingPeople(limit) {
+      return all(
+        `SELECT p.id, p.full_name, MAX(u.created_at) AS last_report, COUNT(u.id)::int AS reports
+         FROM people p JOIN updates u ON u.person_id = p.id
+         WHERE u.status = 'missing'
+         GROUP BY p.id, p.full_name
+         ORDER BY last_report DESC
+         LIMIT $1`,
+        [limit]
       );
     },
     async recentUpdates(limit) {
@@ -195,6 +210,10 @@ async function createPostgresAdapter(connectionString) {
     },
     async setPhotoFaceId(photoId, faceId) {
       await pool.query('UPDATE photos SET face_id = $1 WHERE id = $2', [faceId, photoId]);
+    },
+    // Rescue photos are never kept: only the face signature survives.
+    async clearPhotoContent(photoId) {
+      await pool.query('UPDATE photos SET content = $1 WHERE id = $2', [Buffer.alloc(0), photoId]);
     },
     async photosByFaceIds(faceIds) {
       if (!faceIds.length) return [];
