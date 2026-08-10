@@ -167,21 +167,18 @@ function statusBadge(status) {
   )}</span>`;
 }
 
-// Reports come from the field: Colombia time is the meaningful default when
-// JavaScript is unavailable. The client script below re-renders in the
-// viewer's own timezone.
+// Timestamps are always shown in the VIEWER's timezone (done client-side —
+// the server cannot know it). Without JavaScript we fall back to a relative
+// time, which is correct in every timezone instead of guessing one.
 function fmtDate(iso) {
   const d = new Date(iso);
   if (isNaN(d)) return esc(iso || '');
-  return esc(
-    d.toLocaleString('es-CO', {
-      timeZone: 'America/Bogota',
-      day: 'numeric',
-      month: 'short',
-      hour: '2-digit',
-      minute: '2-digit'
-    })
-  );
+  const mins = Math.max(0, Math.round((Date.now() - d.getTime()) / 60000));
+  if (mins < 1) return 'hace instantes';
+  if (mins < 60) return `hace ${mins} min`;
+  const hours = Math.round(mins / 60);
+  if (hours < 48) return `hace ${hours} h`;
+  return `hace ${Math.round(hours / 24)} días`;
 }
 
 // <time> element carrying the machine-readable instant so the client can
@@ -190,17 +187,23 @@ function timeTag(iso) {
   return `<time class="ts" datetime="${esc(iso || '')}">${fmtDate(iso)}</time>`;
 }
 
+// Render every timestamp in the viewer's own timezone and locale.
 const TIME_SCRIPT = `<script>
 (function () {
-  var opts = { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' };
-  document.querySelectorAll('time.ts').forEach(function (el) {
+  var opts = { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' };
+  var els = document.querySelectorAll('time.ts');
+  for (var i = 0; i < els.length; i++) {
+    var el = els[i];
     var iso = el.getAttribute('datetime');
-    if (!iso) return;
+    if (!iso) continue;
     var d = new Date(iso);
-    if (isNaN(d.getTime())) return;
-    try { el.textContent = d.toLocaleString(undefined, opts); } catch (e) {}
-    el.title = d.toLocaleString();
-  });
+    if (isNaN(d.getTime())) continue;
+    try {
+      // undefined locale + no timeZone option = the viewer's own settings
+      el.textContent = d.toLocaleString(undefined, opts);
+      el.title = d.toLocaleString();
+    } catch (e) {}
+  }
 })();
 </script>`;
 
