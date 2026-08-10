@@ -196,10 +196,9 @@ document.addEventListener('submit', function (ev) {
         await attachQueryPhotos(person, sub, files);
         if (needsVerification) {
           sendVerificationEmail(person, sub).catch((e) => console.error('[buscar verify]', e));
-          notice = '<p class="notice">📬 Te enviamos un correo de confirmación: ábrelo para activar los avisos.</p>';
-        } else {
-          notice = '<p class="notice">🔔 Te avisaremos cuando haya novedades.</p>';
+          return res.redirect(checkEmailUrl(q ? `/buscar?q=${encodeURIComponent(q)}` : '/buscar'));
         }
+        notice = '<p class="notice">🔔 Te avisaremos cuando haya novedades.</p>';
       } else if (files.length) {
         await Promise.resolve(); // photos are not stored without an email — nothing to keep
         sections.push('<p class="subtle">Deja tu correo en el formulario para avisarte si aparece una coincidencia futura.</p>');
@@ -225,8 +224,10 @@ document.addEventListener('submit', function (ev) {
         'Reportar estado',
         `
 <h1 class="compact">Reportar estado <span class="subtle">(de otra persona o tuyo)</span></h1>
-<form class="stack compact" method="post" action="/report" enctype="multipart/form-data" data-resize-photos>
-  <input name="name" required value="${esc(req.query.name || '')}" placeholder="Nombre completo de la persona *" aria-label="Nombre completo de la persona">
+<form class="stack compact" method="post" action="/report" enctype="multipart/form-data" data-resize-photos data-require-name-or-photo>
+  <input name="name" value="${esc(req.query.name || '')}" placeholder="Nombre de la persona (si lo sabes)" aria-label="Nombre de la persona">
+  <label class="file-label"><span>📷 Foto de la persona (galería o cámara — clave si no sabes su nombre)</span>
+    <input type="file" name="photo" accept="image/*"></label>
   <select name="status" required aria-label="Estado">
     <option value="" disabled selected>Estado *</option>
     ${options}
@@ -236,12 +237,23 @@ document.addEventListener('submit', function (ev) {
   <datalist id="location-options"></datalist>
   <button type="button" id="geo-btn" class="secondary">📍 Compartir mi ubicación actual</button>
   <input type="hidden" name="lat" id="lat"><input type="hidden" name="lng" id="lng">
-  <label class="file-label"><span>📷 Foto (opcional, galería o cámara)</span>
-    <input type="file" name="photo" accept="image/*"></label>
   <input name="reporter" placeholder="Tu nombre o teléfono (opcional)" aria-label="Tu nombre o teléfono">
   ${PRIVACY_NOTE}
   <button>Enviar reporte</button>
 </form>
+<script>
+document.addEventListener('submit', function (ev) {
+  var f = ev.target;
+  if (!f.matches('form[data-require-name-or-photo]')) return;
+  var name = f.querySelector('input[name=name]').value.trim();
+  var ph = f.querySelector('input[type=file]').files.length;
+  if (!name && !ph) {
+    ev.preventDefault();
+    ev.stopImmediatePropagation();
+    alert('Escribe el nombre de la persona o sube una foto (al menos uno de los dos).');
+  }
+}, true);
+</script>
 ${LOCATION_SCRIPT}`,
         {
           fullTitle: 'Reportar el estado de una persona — Aquí · Terremoto en Colombia',
@@ -258,10 +270,18 @@ ${LOCATION_SCRIPT}`,
     upload.single('photo'),
     wrap(async (req, res) => {
       const { name, status, message, location, reporter } = req.body;
-      if (!name || !name.trim() || !STATUSES.includes(status)) {
-        return res.status(400).send(layout('Error', '<p class="error">Faltan datos del reporte.</p>'));
+      const hasName = name && name.trim();
+      if (!STATUSES.includes(status) || (!hasName && !req.file)) {
+        return res
+          .status(400)
+          .send(layout('Error', '<p class="error">Faltan datos: indica el estado y el nombre o una foto de la persona.</p>'));
       }
-      const { person } = await store.findOrCreatePerson(name);
+      // Unknown/unconscious person: anchor on a uniquely-named placeholder;
+      // the photo becomes the identifier via face matching.
+      const personName = hasName
+        ? name
+        : `Persona sin identificar ${crypto.randomBytes(2).toString('hex')}`;
+      const { person } = await store.findOrCreatePerson(personName);
       const update = await store.addUpdate(person.id, {
         status,
         message,
@@ -331,6 +351,10 @@ ${
     })
   );
 
+  function checkEmailUrl(next) {
+    return `/revisa-tu-correo${next ? `?next=${encodeURIComponent(next)}` : ''}`;
+  }
+
   const subscribeHandler = wrap(async (req, res) => {
     const person = await store.getPerson(req.params.id);
     if (!person) {
@@ -344,7 +368,7 @@ ${
     await attachQueryPhotos(person, sub, req.files);
     if (needsVerification) {
       sendVerificationEmail(person, sub).catch((e) => console.error('[verify email]', e));
-      return res.redirect(`/person/${person.id}?checkemail=1`);
+      return res.redirect(checkEmailUrl(`/person/${person.id}`));
     }
     res.redirect(`/person/${person.id}?subscribed=1`);
   });
@@ -367,13 +391,32 @@ ${
       await attachQueryPhotos(person, sub, req.files);
       if (needsVerification) {
         sendVerificationEmail(person, sub).catch((e) => console.error('[verify email]', e));
-        return res.redirect(`/person/${person.id}?checkemail=1`);
+        return res.redirect(checkEmailUrl(`/person/${person.id}`));
       }
       res.redirect(`/person/${person.id}?subscribed=1`);
     })
   );
 
-  // Email verification link
+  // Full-screen "check your email" page
+  router.get('/revisa-tu-correo', (req, res) => {
+    const next = String(req.query.next || '/');
+    const safeNext = next.startsWith('/') ? next : '/';
+    res.send(
+      layout(
+        'Revisa tu correo',
+        `
+<div class="takeover">
+  <div class="takeover-emoji">📬</div>
+  <h1>Para continuar, sigue el enlace que te enviamos por correo.</h1>
+  <p>Sin ese paso no podremos avisarte. Revisa tu bandeja de entrada — y la carpeta de spam — un correo de <strong>a@torrenegra.com</strong>.</p>
+  <p class="subtle"><a href="${esc(safeNext)}">Volver</a></p>
+</div>`,
+        { fullTitle: 'Revisa tu correo — Aquí' }
+      )
+    );
+  });
+
+  // Email verification link → full-screen confirmation
   router.get(
     '/verify',
     wrap(async (req, res) => {
@@ -381,7 +424,20 @@ ${
       if (!sub) {
         return res.status(404).send(layout('Enlace inválido', '<p class="error">Este enlace de confirmación no es válido o ya fue usado.</p>'));
       }
-      res.redirect(`/person/${sub.person_id}?subscribed=1`);
+      const person = await store.getPerson(sub.person_id);
+      res.send(
+        layout(
+          'Suscripción confirmada',
+          `
+<div class="takeover">
+  <div class="takeover-emoji">✅</div>
+  <h1>Listo: te avisaremos por correo apenas encontremos coincidencias.</h1>
+  ${person ? `<p><a class="big-btn search" href="/person/${person.id}">Ver los reportes de ${esc(person.full_name)}</a></p>` : ''}
+  <p class="subtle"><a href="/">Ir al inicio</a></p>
+</div>`,
+          { fullTitle: 'Suscripción confirmada — Aquí' }
+        )
+      );
     })
   );
 

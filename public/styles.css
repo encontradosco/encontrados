@@ -121,3 +121,17 @@ button.secondary { background: #fff; color: var(--azul); border: 1px solid var(-
 label { font-weight: 600; font-size: 0.9rem; }
 label span { display: block; margin-bottom: 0.2rem; }
 .subtle { color: var(--muted); font-size: 0.9rem; }
+
+.takeover {
+  min-height: 65vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  gap: 0.8rem;
+  padding: 1rem 0;
+}
+.takeover h1 { font-size: 1.5rem; margin: 0; }
+.takeover-emoji { font-size: 3.5rem; line-height: 1; }
+.takeover .big-btn { display: inline-block; padding: 0.8rem 1.2rem; }
