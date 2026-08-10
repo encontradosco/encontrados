@@ -1,57 +1,13 @@
 # 📍 aqui.online
 
-Tablero de estado de personas en emergencias — actualmente ayudando tras el **terremoto en Colombia del lunes 10 de agosto**. Dos casos de uso:
+Conecta a quien **rescata** a una persona con quien la **busca** — tras el terremoto en Colombia del lunes 10 de agosto.
 
-1. **Reportar** el estado de una persona (a salvo, herida, desaparecida…), con foto opcional.
-2. **Buscar** a una persona y **suscribirse** a sus novedades, con 2–3 fotos opcionales para reconocimiento facial.
+1. **Rescatista** (voluntario, bombero, policía, hospital): sube la foto de la persona que tiene consigo. Se compara por reconocimiento facial contra los reportes de desaparecidos y se le muestra **quién la busca y cómo contactarlo**. La foto **se borra de inmediato**: solo queda su firma facial, para poder avisarle si alguien la busca más tarde. Puede registrar un aviso por correo.
+2. **Familia**: reporta a una persona desaparecida con 1–3 fotos, nombre, el lugar donde cree que estaba y su teléfono o correo de contacto. No registra alertas ni ve resultados de búsqueda.
 
-Diseño ultraliviano a propósito: HTML renderizado en el servidor, un solo CSS pequeño, sin frameworks — funciona en teléfonos viejos y conexiones débiles.
+El contacto de quien reporta **solo** se revela a un rescatista cuando el rostro coincide; nunca aparece en páginas públicas. Ninguna ruta del sitio sirve bytes de fotos.
 
-Canales:
-
-| Canal | Reportar | Consultar | Suscribirse |
-|---|---|---|---|
-| Web | ✅ | ✅ | ✅ (correo) |
-| WhatsApp | ✅ | ✅ | ✅ (al número que escribe) |
-| API REST | ✅ | ✅ | ✅ |
-
-Toda la interfaz es en español. El bot entiende comandos en español e inglés y siempre responde en español.
-
-## Búsqueda de nombres (matching difuso)
-
-No hace falta escribir el nombre exacto. Tres capas:
-
-1. **Normalización** (al escribir): se guarda `full_name`, `normalized_name` (minúsculas, sin acentos ni puntuación, sin partículas "de/del/la") y `phonetic_name` (clave fonética por palabra afinada al español: b=v, s=z=c suave, ll=y, h muda, qu=k, j=g suave).
-2. **Candidatos** (al consultar): en Postgres, índice trigram `pg_trgm` sobre las columnas normalizada y fonética. En SQLite (dev), escaneo directo.
-3. **Puntaje por tokens** (JS, compartido): cada palabra de la consulta debe encontrar pareja en el candidato — en cualquier orden — por igualdad ≻ fonética ≻ prefijo ≻ distancia de edición ≤2. Así "Juan Pérez" encuentra a "Juan Carlos Pérez Gómez", tolera apellidos invertidos y typos.
-   - **≥ 0.85** al reportar → se considera la misma persona (los reportes se unen en una sola línea de tiempo).
-   - **0.55–0.85** al buscar → se muestran como resultados ordenados; ante ambigüedad se listan opciones, nunca se adivina.
-
-Punto de extensión: `candidatePeople()` en los adaptadores de storage es donde se puede sumar un generador de candidatos por *embeddings* (pgvector en Neon) si más adelante se quiere equivalencia de apodos/idiomas (Bill↔Guillermo).
-
-## Fotos y reconocimiento facial
-
-- Al **reportar** se puede subir 1 foto (galería o cámara del teléfono); al **buscar/suscribirse**, hasta 3.
-- Las fotos se guardan en la base de datos y se comparan con **AWS Rekognition** (colección de rostros indexados). Si una foto de reporte coincide con las fotos de una búsqueda, quien busca recibe un aviso de posible coincidencia.
-- **Privacidad:** las fotos jamás se muestran ni se comparten — no existe ninguna ruta que sirva los bytes de una foto. El aviso de coincidencia nunca incluye imágenes. Sin credenciales de AWS, las fotos se almacenan y el matching queda desactivado (la app nunca falla por esto).
-- El cliente reduce las fotos a ~1024px JPEG antes de subirlas (límite serverless de 4.5 MB y conexiones lentas).
-
-## Ubicación
-
-Cada reporte lleva `location` opcional. En el formulario web:
-
-- **Autocompletado de direcciones** con Nominatim/OpenStreetMap (sesgado a Colombia, sin API key).
-- Botón **"Compartir mi ubicación actual"**: pide permiso de GPS, guarda lat/lng y rellena la dirección por geocodificación inversa. Los reportes con GPS muestran enlace "ver en mapa" (OpenStreetMap).
-
-El bot acepta `@`:
-
-```
-BIEN Juan Pérez: hablé con él @ albergue San José
-```
-
-## Páginas legales
-
-`/privacidad` y `/terminos` — en español, ligeras, centradas en la emergencia: la información solo se usa para ayudar a encontrar personas; las fotos nunca se comparten.
+Diseño ultraliviano a propósito: HTML renderizado en el servidor, un CSS pequeño, sin frameworks — funciona en teléfonos viejos y conexiones débiles.
 
 ## Correr local
 

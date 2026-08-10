@@ -36,6 +36,7 @@ async function createPostgresAdapter(connectionString) {
       location TEXT,
       lat DOUBLE PRECISION,
       lng DOUBLE PRECISION,
+      contact TEXT,
       source TEXT NOT NULL CHECK (source IN ('web','whatsapp','api','aggregator')),
       reporter TEXT,
       external_id TEXT,
@@ -78,6 +79,7 @@ async function createPostgresAdapter(connectionString) {
 
   await pool.query('ALTER TABLE updates ADD COLUMN IF NOT EXISTS lat DOUBLE PRECISION');
   await pool.query('ALTER TABLE updates ADD COLUMN IF NOT EXISTS lng DOUBLE PRECISION');
+  await pool.query('ALTER TABLE updates ADD COLUMN IF NOT EXISTS contact TEXT');
 
   // Integration seam for an external aggregator: external_id lets a caller
   // re-POST the same update idempotently (see insertUpdate below), and
@@ -127,21 +129,22 @@ async function createPostgresAdapter(connectionString) {
     },
     // When externalId is set, this is an idempotent upsert keyed on it: a
     // second POST with the same externalId updates status/message/location/
-    // lat/lng/reporter on the SAME timeline row instead of creating a new one
-    // (the aggregator re-sending its latest snapshot doesn't duplicate the
-    // person's history). Without externalId, behavior is unchanged: a plain
-    // insert every time.
-    async insertUpdate(personId, { status, message, location, lat, lng, source, reporter, externalId }) {
+    // lat/lng/reporter/contact on the SAME timeline row instead of creating a
+    // new one (the aggregator re-sending its latest snapshot doesn't duplicate
+    // the person's history). Without externalId, behavior is unchanged: a
+    // plain insert every time.
+    async insertUpdate(personId, { status, message, location, lat, lng, source, reporter, contact, externalId }) {
       return one(
-        `INSERT INTO updates (person_id, status, message, location, lat, lng, source, reporter, external_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        `INSERT INTO updates (person_id, status, message, location, lat, lng, source, reporter, contact, external_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
          ON CONFLICT (external_id) WHERE external_id IS NOT NULL DO UPDATE SET
            status = EXCLUDED.status,
            message = EXCLUDED.message,
            location = EXCLUDED.location,
            lat = EXCLUDED.lat,
            lng = EXCLUDED.lng,
-           reporter = EXCLUDED.reporter
+           reporter = EXCLUDED.reporter,
+           contact = EXCLUDED.contact
          RETURNING *`,
         [
           personId,
@@ -152,6 +155,7 @@ async function createPostgresAdapter(connectionString) {
           Number.isFinite(lng) ? lng : null,
           source,
           reporter || null,
+          contact || null,
           externalId || null
         ]
       );
@@ -165,6 +169,18 @@ async function createPostgresAdapter(connectionString) {
       return one(
         'SELECT * FROM updates WHERE person_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1',
         [personId]
+      );
+    },
+    // Everyone currently reported missing, most recent report first.
+    async missingPeople(limit) {
+      return all(
+        `SELECT p.id, p.full_name, MAX(u.created_at) AS last_report, COUNT(u.id)::int AS reports
+         FROM people p JOIN updates u ON u.person_id = p.id
+         WHERE u.status = 'missing'
+         GROUP BY p.id, p.full_name
+         ORDER BY last_report DESC
+         LIMIT $1`,
+        [limit]
       );
     },
     async recentUpdates(limit) {
@@ -228,12 +244,19 @@ async function createPostgresAdapter(connectionString) {
     async setPhotoFaceId(photoId, faceId) {
       await pool.query('UPDATE photos SET face_id = $1 WHERE id = $2', [faceId, photoId]);
     },
+    // Rescue photos are never kept: only the face signature survives.
+    async clearPhotoContent(photoId) {
+      await pool.query('UPDATE photos SET content = $1 WHERE id = $2', [Buffer.alloc(0), photoId]);
+    },
     async photosByFaceIds(faceIds) {
       if (!faceIds.length) return [];
       return all(
         'SELECT id, person_id, kind, update_id, subscription_id, face_id FROM photos WHERE face_id = ANY($1)',
         [faceIds]
       );
+    },
+    async deletePerson(id) {
+      return one('DELETE FROM people WHERE id = $1 RETURNING *', [id]);
     },
     async counts() {
       const r = await one(`SELECT

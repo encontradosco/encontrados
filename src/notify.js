@@ -23,22 +23,34 @@ function updateText(person, update) {
 // Returns { ok, status, error } and logs loudly — email silence is a bug we
 // must be able to diagnose from the Vercel logs alone.
 async function sendEmail(to, subject, text) {
-  if (!env.SENDGRID_API_KEY) {
+  // Read from process.env too so configuration applied after module load
+  // (and test doubles) are honoured.
+  const apiKey = process.env.SENDGRID_API_KEY || env.SENDGRID_API_KEY;
+  const apiBase = process.env.SENDGRID_API_BASE || 'https://api.sendgrid.com';
+  if (!apiKey) {
     console.error(`[notify:email] SKIPPED — SENDGRID_API_KEY is not set. to=${to}`);
     return { ok: false, error: 'SENDGRID_API_KEY no configurada' };
   }
   try {
-    const res = await fetch('https://api.sendgrid.com/v3/mail/send', {
+    const res = await fetch(`${apiBase}/v3/mail/send`, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${env.SENDGRID_API_KEY}`,
+        Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
         personalizations: [{ to: [{ email: to }] }],
         from: { email: env.EMAIL_FROM, name: 'aqui.online' },
         subject,
-        content: [{ type: 'text/plain', value: text }]
+        content: [{ type: 'text/plain', value: text }],
+        // Click tracking rewrites our links through SendGrid's tracking domain.
+        // That domain returns 403 here, which silently broke every
+        // verification and unsubscribe link. These are transactional emails:
+        // the links must point straight at aqui.online.
+        tracking_settings: {
+          click_tracking: { enable: false, enable_text: false },
+          open_tracking: { enable: false }
+        }
       })
     });
     if (!res.ok) {
@@ -57,7 +69,7 @@ async function sendEmail(to, subject, text) {
 async function sendWhatsApp(to, text) {
   if (!env.WHATSAPP_TOKEN || !env.WHATSAPP_PHONE_NUMBER_ID) {
     console.log(`[notify:whatsapp skipped — not configured] to=${to}`);
-    return false;
+    return { ok: false, error: 'WhatsApp no configurado' };
   }
   const res = await fetch(
     `https://graph.facebook.com/v20.0/${env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
@@ -75,8 +87,12 @@ async function sendWhatsApp(to, text) {
       })
     }
   );
-  if (!res.ok) console.error(`[notify:whatsapp] ${res.status} ${await res.text()}`);
-  return res.ok;
+  if (!res.ok) {
+    const body = await res.text();
+    console.error(`[notify:whatsapp] FALLÓ ${res.status} to=${to} :: ${body}`);
+    return { ok: false, status: res.status, error: body.slice(0, 500) };
+  }
+  return { ok: true, status: res.status };
 }
 
 function unsubscribeLink(sub) {
@@ -115,9 +131,14 @@ async function notifySubscribers(store, person, update, { skipAddress } = {}) {
       return Promise.resolve(false);
     });
   const results = await Promise.allSettled(jobs);
+  let sent = 0;
   for (const r of results) {
     if (r.status === 'rejected') console.error('[notify] failed:', r.reason);
+    else if (r.value && r.value.ok) sent++;
   }
+  console.log(
+    `[notify] persona ${person.id}: ${subs.length} suscripción(es), ${results.length} intento(s), ${sent} enviado(s)`
+  );
   return results.length;
 }
 

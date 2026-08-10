@@ -29,6 +29,7 @@ async function createSqliteAdapter(dbPath) {
       location TEXT,
       lat REAL,
       lng REAL,
+      contact TEXT,
       source TEXT NOT NULL CHECK (source IN ('web','whatsapp','api','aggregator')),
       reporter TEXT,
       external_id TEXT,
@@ -70,6 +71,9 @@ async function createSqliteAdapter(dbPath) {
       db.exec(`ALTER TABLE updates ADD COLUMN ${col} REAL`);
     } catch { /* already exists */ }
   }
+  try {
+    db.exec('ALTER TABLE updates ADD COLUMN contact TEXT');
+  } catch { /* already exists */ }
   // Older dev databases: add external_id if missing. Note: SQLite can't widen
   // an existing CHECK constraint via ALTER TABLE, so a pre-existing local
   // ./data/aqui.db still rejects source='aggregator' until it's recreated
@@ -103,21 +107,22 @@ async function createSqliteAdapter(dbPath) {
     },
     // Same idempotent-upsert contract as the Postgres adapter: a repeated
     // externalId updates the existing row's status/message/location/lat/lng/
-    // reporter instead of inserting a duplicate. Without externalId, behavior
-    // is unchanged.
-    async insertUpdate(personId, { status, message, location, lat, lng, source, reporter, externalId }) {
+    // reporter/contact instead of inserting a duplicate. Without externalId,
+    // behavior is unchanged.
+    async insertUpdate(personId, { status, message, location, lat, lng, source, reporter, contact, externalId }) {
       const extId = externalId || null;
       const info = db
         .prepare(
-          `INSERT INTO updates (person_id, status, message, location, lat, lng, source, reporter, external_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO updates (person_id, status, message, location, lat, lng, source, reporter, contact, external_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT (external_id) WHERE external_id IS NOT NULL DO UPDATE SET
              status = excluded.status,
              message = excluded.message,
              location = excluded.location,
              lat = excluded.lat,
              lng = excluded.lng,
-             reporter = excluded.reporter`
+             reporter = excluded.reporter,
+             contact = excluded.contact`
         )
         .run(
           personId,
@@ -128,6 +133,7 @@ async function createSqliteAdapter(dbPath) {
           Number.isFinite(lng) ? lng : null,
           source,
           reporter || null,
+          contact || null,
           extId
         );
       // lastInsertRowid isn't reliable on the DO UPDATE path (no new row is
@@ -146,6 +152,19 @@ async function createSqliteAdapter(dbPath) {
       return db
         .prepare('SELECT * FROM updates WHERE person_id = ? ORDER BY created_at DESC, id DESC LIMIT 1')
         .get(personId);
+    },
+    // Everyone currently reported missing, most recent report first.
+    async missingPeople(limit) {
+      return db
+        .prepare(
+          `SELECT p.id, p.full_name, MAX(u.created_at) AS last_report, COUNT(u.id) AS reports
+           FROM people p JOIN updates u ON u.person_id = p.id
+           WHERE u.status = 'missing'
+           GROUP BY p.id, p.full_name
+           ORDER BY last_report DESC
+           LIMIT ?`
+        )
+        .all(limit);
     },
     async recentUpdates(limit) {
       return db
@@ -209,6 +228,10 @@ async function createSqliteAdapter(dbPath) {
     async setPhotoFaceId(photoId, faceId) {
       db.prepare('UPDATE photos SET face_id = ? WHERE id = ?').run(faceId, photoId);
     },
+    // Rescue photos are never kept: only the face signature survives.
+    async clearPhotoContent(photoId) {
+      db.prepare('UPDATE photos SET content = ? WHERE id = ?').run(Buffer.alloc(0), photoId);
+    },
     async photosByFaceIds(faceIds) {
       if (!faceIds.length) return [];
       const marks = faceIds.map(() => '?').join(',');
@@ -217,6 +240,12 @@ async function createSqliteAdapter(dbPath) {
           `SELECT id, person_id, kind, update_id, subscription_id, face_id FROM photos WHERE face_id IN (${marks})`
         )
         .all(...faceIds);
+    },
+    async deletePerson(id) {
+      const person = getPersonStmt.get(id);
+      if (!person) return null;
+      db.prepare('DELETE FROM people WHERE id = ?').run(id);
+      return person;
     },
     async counts() {
       const n = (sql) => db.prepare(sql).get().n;

@@ -17,7 +17,14 @@ ayuda a nadie.
 
 ## Contexto del proyecto
 
-- **aqui.online**: tablero de estado de personas en emergencias.
+- **aqui.online**: conecta a quien RESCATA a una persona con quien la BUSCA.
+  - Rescatista: sube una foto de la persona que tiene al lado → reconocimiento
+    facial → ve quién la busca y su contacto. La foto NUNCA se guarda: se borra
+    tras indexar su firma facial. Solo los rescatistas pueden registrar avisos.
+  - Familia: reporta un desaparecido (1–3 fotos, nombre, lugar, contacto).
+    NO puede registrar alertas ni ver resultados de búsqueda.
+  - El contacto de quien reporta solo se muestra a un rescatista tras una
+    coincidencia facial; nunca en páginas públicas.
 - Toda la interfaz y los mensajes al usuario son **en español**.
 - Canales activos: web y API REST. WhatsApp está implementado pero dormido (sin credenciales aún) — no mostrar referencias a WhatsApp en la interfaz hasta que se active. (Telegram fue retirado.)
 - Fotos: solo para reconocimiento facial (AWS Rekognition). NUNCA crear rutas que muestren o sirvan fotos.
