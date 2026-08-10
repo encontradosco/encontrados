@@ -57,7 +57,11 @@ ${
     ? '<h2>Últimos reportes</h2>' + recent.map((u) => updateCard(u, u.full_name)).join('')
     : ''
 }
-`
+`,
+          {
+            fullTitle: 'Aquí — Encuentra y reporta personas · Terremoto en Colombia',
+            path: '/'
+          }
         )
       );
     })
@@ -115,7 +119,17 @@ document.addEventListener('submit', function (ev) {
           (await nameResultsHtml(q)) ||
           `<div class="error"><p>No encontramos reportes sobre <strong>${esc(q)}</strong>. Deja tu correo arriba y te avisamos, o <a href="/report?name=${encodeURIComponent(q)}">crea un reporte</a>.</p></div>`;
       }
-      res.send(layout('Buscar', `<h1 class="compact">¿Buscas a alguien?</h1>${buscarForm(q)}${resultsHtml}`));
+      res.send(
+        layout('Buscar', `<h1 class="compact">¿Buscas a alguien?</h1>${buscarForm(q)}${resultsHtml}`, {
+          fullTitle: q
+            ? `¿Has visto a ${q}? — Aquí · Terremoto en Colombia`
+            : 'Buscar a alguien — Aquí · Terremoto en Colombia',
+          description: q
+            ? `Buscamos noticias sobre ${q} tras el terremoto en Colombia. Si sabes algo, repórtalo aquí; las familias reciben el aviso al instante.`
+            : 'Busca por nombre (aunque no lo recuerdes exacto) o por foto con reconocimiento facial privado.',
+          path: q ? `/buscar?q=${encodeURIComponent(q)}` : '/buscar'
+        })
+      );
     })
   );
 
@@ -228,7 +242,13 @@ document.addEventListener('submit', function (ev) {
   ${PRIVACY_NOTE}
   <button>Enviar reporte</button>
 </form>
-${LOCATION_SCRIPT}`
+${LOCATION_SCRIPT}`,
+        {
+          fullTitle: 'Reportar el estado de una persona — Aquí · Terremoto en Colombia',
+          description:
+            '¿Sabes cómo está alguien tras el terremoto en Colombia? Repórtalo en un minuto: las familias suscritas reciben el aviso de inmediato.',
+          path: '/report'
+        }
       )
     );
   });
@@ -275,6 +295,13 @@ ${LOCATION_SCRIPT}`
       }
       const updates = await store.getUpdates(person.id);
       const lastLocated = updates.find((u) => u.location);
+      const personMeta = {
+        fullTitle: `${person.full_name}: estado y noticias — Aquí`,
+        description: updates.length
+          ? `Últimos reportes sobre ${person.full_name} tras el terremoto en Colombia. Suscríbete para recibir avisos de novedades o agrega lo que sepas.`
+          : `Aún no hay reportes sobre ${person.full_name}. Si sabes algo, repórtalo; las familias reciben el aviso al instante.`,
+        path: `/person/${person.id}`
+      };
       res.send(
         layout(
           person.full_name,
@@ -297,7 +324,8 @@ ${
   ${PRIVACY_NOTE}
   <button>🔔 Suscribirme a novedades de ${esc(person.full_name)}</button>
 </form>
-<p><a href="/report?name=${encodeURIComponent(person.full_name)}">➕ Agregar un nuevo reporte sobre esta persona</a></p>`
+<p><a href="/report?name=${encodeURIComponent(person.full_name)}">➕ Agregar un nuevo reporte sobre esta persona</a></p>`,
+          personMeta
         )
       );
     })
