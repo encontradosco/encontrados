@@ -153,16 +153,18 @@ function apiRoutes(store, matcher) {
 
   // POST/GET /api/reindex — index photos stored while matching was down and
   // notify anyone whose search now matches. Safe to run repeatedly.
+  // Triggers AWS Rekognition + subscriber notifications, so it requires the API key.
   router.all(
     '/reindex',
+    requireKey,
     wrap(async (req, res) => {
       const limit = Math.min(parseInt(req.query.limit || '100', 10) || 100, 500);
       res.json(await backfillUnindexedPhotos(store, matcher, limit));
     })
   );
 
-  // GET /api/diag — configuration and live self-test. Never exposes secrets.
-  // ?email=you@example.com sends a real test email and reports the result.
+  // GET /api/diag — configuration and live self-test. Never exposes secrets,
+  // never sends email (a GET must not have side effects — see POST /api/diag/test-email).
   router.get(
     '/diag',
     wrap(async (req, res) => {
@@ -201,16 +203,28 @@ function apiRoutes(store, matcher) {
         out.database.error = e.message;
       }
 
-      if (req.query.email) {
-        const { sendEmail } = require('../notify');
-        out.email.test = await sendEmail(
-          String(req.query.email),
-          'Prueba de configuración — aqui.online',
-          'Si recibes este correo, el envío desde aqui.online funciona correctamente.'
-        );
-      }
-
       res.json(out);
+    })
+  );
+
+  // POST /api/diag/test-email — sends a real test email and reports the result.
+  // A side effect that spends SendGrid quota belongs behind the API key, not on a GET.
+  // { email }
+  router.post(
+    '/diag/test-email',
+    requireKey,
+    wrap(async (req, res) => {
+      const email = req.body && req.body.email;
+      if (!email || !String(email).trim()) {
+        return res.status(400).json({ error: 'Falta email' });
+      }
+      const { sendEmail } = require('../notify');
+      const result = await sendEmail(
+        String(email).trim(),
+        'Prueba de configuración — aqui.online',
+        'Si recibes este correo, el envío desde aqui.online funciona correctamente.'
+      );
+      res.json({ email: { test: result } });
     })
   );
 
