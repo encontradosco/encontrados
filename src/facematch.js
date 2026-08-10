@@ -14,18 +14,22 @@ const { sendEmail, sendWhatsApp } = require('./notify');
 
 const MAX_QUERY_PHOTOS = 3;
 
-function matchText(matchedPerson, similarity, sub) {
+// Sent to a rescuer when someone reports the person they rescued as missing.
+function matchText(matchedPerson, similarity, sub, contact) {
   return [
-    `🔔 aqui.online — posible coincidencia por reconocimiento facial (${Math.round(similarity)}% de similitud).`,
-    `Un reporte sobre *${matchedPerson.full_name}* podría corresponder a la persona que buscas.`,
-    `Ver reportes: ${env.BASE_URL}/person/${matchedPerson.id}`,
+    `🔔 aqui.online — alguien está buscando a la persona que rescataste (${Math.round(similarity)}% de coincidencia facial).`,
+    `Reportada como desaparecida: *${matchedPerson.full_name}*`,
+    contact ? `Contacto de quien la busca: ${contact}` : null,
+    `Detalles del reporte: ${env.BASE_URL}/person/${matchedPerson.id}`,
     '',
-    '🔒 Privacidad: las fotos nunca se comparten ni se muestran a nadie; solo se usan para comparar rostros.',
+    '🔒 Privacidad: la foto que subiste nunca se guardó; solo conservamos su firma facial para poder avisarte.',
     `Para dejar de recibir estos avisos: ${env.BASE_URL}/unsubscribe?token=${sub.verify_token}`
-  ].join('\n');
+  ]
+    .filter(Boolean)
+    .join('\n');
 }
 
-async function notifyFaceMatch(store, sub, matchedPerson, similarity) {
+async function notifyFaceMatch(store, sub, matchedPerson, similarity, contact) {
   if (!sub) return;
   if (!sub.verified) {
     console.warn(`[facematch] match found but subscription ${sub.id} is unverified — no alert sent`);
@@ -34,9 +38,9 @@ async function notifyFaceMatch(store, sub, matchedPerson, similarity) {
   console.log(
     `[facematch] notifying sub ${sub.id} (${sub.channel}) about ${matchedPerson.full_name} @ ${Math.round(similarity)}%`
   );
-  const text = matchText(matchedPerson, similarity, sub);
+  const text = matchText(matchedPerson, similarity, sub, contact);
   if (sub.channel === 'email') {
-    await sendEmail(sub.address, `Posible coincidencia sobre la persona que buscas — aqui.online`, text);
+    await sendEmail(sub.address, 'Alguien busca a la persona que rescataste — aqui.online', text);
   } else if (sub.channel === 'whatsapp') {
     await sendWhatsApp(sub.address, text);
   }
@@ -63,15 +67,17 @@ async function matchStoredPhoto(store, matcher, photo, bytes) {
   for (const mp of matchedPhotos) {
     const similarity = bySimilarity.get(mp.face_id) || 0;
     if (kind === 'report') {
-      // Report photo matched someone's query photos → tell that searcher.
+      // A missing-person report matched a rescued face → alert that rescuer.
       const sub = await store.getSubscriptionById(mp.subscription_id);
       const person = await store.getPerson(personId);
-      await notifyFaceMatch(store, sub, person, similarity);
+      const latest = await store.getLatestUpdate(personId);
+      await notifyFaceMatch(store, sub, person, similarity, latest && latest.contact);
     } else {
-      // Query photo matched an existing report → tell THIS searcher.
+      // A rescued face matched an existing report → alert this rescuer.
       const sub = await store.getSubscriptionById(subscriptionId);
       const person = await store.getPerson(mp.person_id);
-      await notifyFaceMatch(store, sub, person, similarity);
+      const latest = await store.getLatestUpdate(mp.person_id);
+      await notifyFaceMatch(store, sub, person, similarity, latest && latest.contact);
     }
     notified++;
   }
@@ -131,4 +137,56 @@ async function backfillUnindexedPhotos(store, matcher, limit = 100) {
   return { ok: true, pending: pending.length, processed: indexed, notifications: notified, failed: noFace };
 }
 
-module.exports = { processPhoto, backfillUnindexedPhotos, MAX_QUERY_PHOTOS };
+// The rescuer flow: identify who is looking for the person in front of you.
+// The photo is NEVER stored — it is compared, its face signature is indexed so
+// future reports can reach this rescuer, and the bytes are dropped immediately.
+async function identifyRescuedPerson(store, matcher, { bytes, contentType, personId, subscriptionId }) {
+  if (!matcher.enabled) {
+    return { available: false, matches: [] };
+  }
+  const matches = await matcher.searchByImage(bytes);
+  const bySimilarity = new Map(matches.map((m) => [m.faceId, m.similarity]));
+
+  // Index the face so a later missing-person report can alert this rescuer,
+  // then immediately drop the image bytes.
+  const photo = await store.addPhoto({
+    personId,
+    kind: 'query',
+    subscriptionId,
+    content: Buffer.alloc(0),
+    contentType
+  });
+  try {
+    const faceId = await matcher.indexFace(bytes, photo.id);
+    if (faceId) await store.setPhotoFaceId(photo.id, faceId);
+  } catch (e) {
+    console.error('[facematch:rescue] index failed:', e.message);
+  }
+  await store.clearPhotoContent(photo.id);
+
+  // Which missing-person reports does this face correspond to?
+  const found = [];
+  const seen = new Set();
+  const photos = await store.photosByFaceIds([...bySimilarity.keys()]);
+  for (const mp of photos.filter((x) => x.kind === 'report')) {
+    if (seen.has(mp.person_id)) continue;
+    seen.add(mp.person_id);
+    const person = await store.getPerson(mp.person_id);
+    if (!person) continue;
+    const latest = await store.getLatestUpdate(mp.person_id);
+    found.push({
+      person,
+      similarity: bySimilarity.get(mp.face_id) || 0,
+      update: latest
+    });
+  }
+  found.sort((a, b) => b.similarity - a.similarity);
+  return { available: true, matches: found, photoId: photo.id };
+}
+
+module.exports = {
+  processPhoto,
+  identifyRescuedPerson,
+  backfillUnindexedPhotos,
+  MAX_QUERY_PHOTOS
+};

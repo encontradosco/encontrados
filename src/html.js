@@ -5,7 +5,7 @@ const { STATUS_LABEL } = require('./notify');
 const { maskReporter } = require('./privacy');
 
 const DEFAULT_DESCRIPTION =
-  'Encuentro y reporto a personas por nombre o por reconocimiento facial. Tras el terremoto en Colombia del 10 de agosto. Información provista por voluntarios y extraída de bases de datos públicas.';
+  'Si rescataste a alguien, sube su foto y te decimos quién la está buscando; la foto se borra de inmediato. También puedes reportar a una persona desaparecida. Terremoto en Colombia, 10 de agosto.';
 
 function esc(s) {
   return String(s ?? '')
@@ -23,7 +23,7 @@ const STATUS_CLASS = {
   unknown: 'muted'
 };
 
-const PRIVACY_NOTE = `<p class="privacy">🔒 Las fotos <strong>nunca</strong> se comparten ni se muestran a nadie: solo se usan para reconocimiento facial y el aviso de coincidencia llega sin fotos.</p>`;
+const PRIVACY_NOTE = `<p class="privacy">🔒 Las fotos <strong>nunca</strong> se muestran públicamente ni se comparten: solo se usan para reconocimiento facial.</p>`;
 
 // Client-side downscale + XHR upload with a visible progress bar. Emergency
 // users on weak connections must see that something is happening.
@@ -145,11 +145,11 @@ function layout(title, body, meta = {}) {
 <header>
   <a class="brand" href="/">📍 aqui.online</a>
   <nav>
-    <a href="/buscar">Buscar</a>
-    <a href="/report" class="cta">Reportar estado</a>
+    <a href="/rescate">Soy rescatista</a>
+    <a href="/report" class="cta">Reportar desaparecido</a>
   </nav>
 </header>
-<div class="banner">🇨🇴 <strong>Terremoto en Colombia — lunes 10 de agosto.</strong> Reporta y encuentra personas.</div>
+<div class="banner">🇨🇴 <strong>Terremoto en Colombia — lunes 10 de agosto.</strong></div>
 <main>
 ${body}
 </main>

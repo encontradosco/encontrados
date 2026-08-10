@@ -42,7 +42,15 @@ async function sendEmail(to, subject, text) {
         personalizations: [{ to: [{ email: to }] }],
         from: { email: env.EMAIL_FROM, name: 'aqui.online' },
         subject,
-        content: [{ type: 'text/plain', value: text }]
+        content: [{ type: 'text/plain', value: text }],
+        // Click tracking rewrites our links through SendGrid's tracking domain.
+        // That domain returns 403 here, which silently broke every
+        // verification and unsubscribe link. These are transactional emails:
+        // the links must point straight at aqui.online.
+        tracking_settings: {
+          click_tracking: { enable: false, enable_text: false },
+          open_tracking: { enable: false }
+        }
       })
     });
     if (!res.ok) {

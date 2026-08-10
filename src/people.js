@@ -42,11 +42,25 @@ function createStore(adapter) {
     return { person: isoRow(person), created: true };
   }
 
-  async function addUpdate(personId, { status, message, location, lat, lng, source, reporter }) {
+  async function addUpdate(personId, { status, message, location, lat, lng, source, reporter, contact }) {
     if (!STATUSES.includes(status)) throw new Error(`Invalid status: ${status}`);
     return isoRow(
-      await adapter.insertUpdate(personId, { status, message, location, lat, lng, source, reporter })
+      await adapter.insertUpdate(personId, {
+        status,
+        message,
+        location,
+        lat,
+        lng,
+        source,
+        reporter,
+        contact
+      })
     );
+  }
+
+  // Everyone reported missing — the home page listing.
+  async function getMissingPeople(limit = 50) {
+    return (await adapter.missingPeople(limit)).map(isoRow);
   }
 
   async function getUpdates(personId) {
@@ -112,6 +126,10 @@ function createStore(adapter) {
     return adapter.setPhotoFaceId(photoId, faceId);
   }
 
+  async function clearPhotoContent(photoId) {
+    return adapter.clearPhotoContent(photoId);
+  }
+
   async function photosByFaceIds(faceIds) {
     return adapter.photosByFaceIds(faceIds);
   }
@@ -128,6 +146,11 @@ function createStore(adapter) {
     return adapter.counts();
   }
 
+  // Deletes the person and, by cascade, their reports, subscriptions and photos.
+  async function deletePerson(id) {
+    return isoRow(await adapter.deletePerson(id));
+  }
+
   return {
     STATUSES,
     getPerson,
@@ -137,6 +160,7 @@ function createStore(adapter) {
     getUpdates,
     getLatestUpdate,
     getRecentUpdates,
+    getMissingPeople,
     subscribe,
     verifySubscription,
     unsubscribeByToken,
@@ -146,10 +170,12 @@ function createStore(adapter) {
     getSubscriptionById,
     addPhoto,
     setPhotoFaceId,
+    clearPhotoContent,
     photosByFaceIds,
     countQueryPhotos,
     photosMissingFaceId,
     counts,
+    deletePerson,
     close: () => adapter.close()
   };
 }

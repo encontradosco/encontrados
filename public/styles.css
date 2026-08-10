@@ -41,8 +41,15 @@ header {
   background: var(--paper);
   border-bottom: 1px solid var(--border);
 }
-header a { color: var(--ink); text-decoration: none; margin-left: 0.85rem; font-size: 0.95rem; }
-header nav a:hover { color: var(--accent-dark); }
+header a { color: var(--ink); text-decoration: none; margin-left: 0.6rem; font-size: 0.95rem; }
+header nav a {
+  background: var(--accent);
+  color: #fff;
+  padding: 0.4rem 0.8rem;
+  border-radius: 8px;
+  font-weight: 600;
+}
+header nav a:hover { background: var(--accent-dark); color: #fff; }
 .brand {
   font-family: var(--font-serif);
   font-weight: 600;
@@ -106,6 +113,16 @@ h1.compact .subtle { font-family: var(--font-sans); font-weight: 400; font-size:
   text-decoration: none;
   transition: background 0.15s ease, border-color 0.15s ease;
 }
+.btn-eyebrow {
+  display: block;
+  font-weight: 500;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  margin-bottom: 0.4rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.35);
+  opacity: 0.95;
+}
 .btn-title { display: block; }
 .btn-sub {
   display: block;
@@ -116,13 +133,8 @@ h1.compact .subtle { font-family: var(--font-sans); font-weight: 400; font-size:
 }
 .big-btn.report { background: var(--accent); color: #fff; }
 .big-btn.report:hover { background: var(--accent-dark); }
-.big-btn.search {
-  background: var(--surface);
-  color: var(--ink);
-  border: 1px solid var(--border-strong);
-}
-.big-btn.search:hover { border-color: var(--accent); color: var(--accent-dark); }
-.big-btn.search .btn-sub { color: var(--muted); opacity: 1; }
+.big-btn.search { background: var(--accent); color: #fff; }
+.big-btn.search:hover { background: var(--accent-dark); }
 
 .card {
   background: var(--surface);

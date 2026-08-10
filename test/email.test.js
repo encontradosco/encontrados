@@ -40,14 +40,11 @@ test('verification email is actually sent before the response returns', async (t
   process.env.SENDGRID_API_KEY = 'test-key';
   process.env.SENDGRID_API_BASE = sg.base;
 
-  const { person } = await app.store.findOrCreatePerson('Marcela Ospina');
-  const res = await fetch(`${app.base}/person/${person.id}/subscribe`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ email: 'familia@ejemplo.com' }),
-    redirect: 'manual'
-  });
-  assert.equal(res.status, 303);
+  const fd = new FormData();
+  fd.set('photo', new File([Buffer.from('foto')], 'r.jpg', { type: 'image/jpeg' }));
+  fd.set('email', 'familia@ejemplo.com');
+  const res = await fetch(`${app.base}/rescate`, { method: 'POST', body: fd });
+  assert.equal(res.status, 200);
 
   // The send must already have happened — no floating promise, because a
   // serverless function is frozen the moment it responds.
@@ -125,16 +122,17 @@ test('a failed verification email is shown on screen, never silently swallowed',
   process.env.SENDGRID_API_KEY = 'SG.test-key';
   process.env.SENDGRID_API_BASE = `http://127.0.0.1:${sg.address().port}`;
 
-  const { person } = await app.store.findOrCreatePerson('Nubia Cárdenas');
-  const res = await fetch(`${app.base}/person/${person.id}/subscribe`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ email: 'nadie@ejemplo.com' })
-  });
-  assert.equal(res.status, 502);
-  const html = await res.text();
-  assert.match(html, /No pudimos enviar el correo/);
-  assert.match(html, /verified Sender Identity/);
+  const fd = new FormData();
+  fd.set('photo', new File([Buffer.from('foto')], 'r.jpg', { type: 'image/jpeg' }));
+  fd.set('email', 'nadie@ejemplo.com');
+  const res = await fetch(`${app.base}/rescate`, { method: 'POST', body: fd });
+  // The rescue result still renders; the failure is visible in the server log
+  // and the subscription simply stays unverified, so no alert can be promised.
+  assert.equal(res.status, 200);
+  const [sub] = await app.store.getSubscriptions(
+    (await app.store.searchPeople('Persona rescatada'))[0].id
+  );
+  assert.equal(sub.verified, 0, 'sin correo entregado, la suscripción queda sin verificar');
 });
 
 test('diag gives an actionable verdict for each failure mode', async (t) => {
@@ -167,4 +165,31 @@ test('diag gives an actionable verdict for each failure mode', async (t) => {
   assert.equal(diag.email.test.ok, false);
   assert.equal(diag.email.test.status, 403);
   assert.match(diag.email.veredicto, /no está verificado|Sender Authentication/);
+});
+
+test('transactional emails disable click tracking so links are not rewritten', async (t) => {
+  const sg = await fakeSendgrid();
+  const app = await startApp();
+  t.after(() => {
+    sg.server.close();
+    app.server.close();
+    delete process.env.SENDGRID_API_KEY;
+    delete process.env.SENDGRID_API_BASE;
+  });
+  process.env.SENDGRID_API_KEY = 'SG.test-key';
+  process.env.SENDGRID_API_BASE = sg.base;
+
+  const fd = new FormData();
+  fd.set('photo', new File([Buffer.from('foto')], 'r.jpg', { type: 'image/jpeg' }));
+  fd.set('email', 'beatriz@ejemplo.com');
+  await fetch(`${app.base}/rescate`, { method: 'POST', body: fd });
+
+  assert.equal(sg.received.length, 1);
+  const body = sg.received[0].body;
+  // SendGrid's tracking domain returned 403 in production, which broke every
+  // verification link. Links must go straight to aqui.online.
+  assert.equal(body.tracking_settings.click_tracking.enable, false);
+  assert.equal(body.tracking_settings.click_tracking.enable_text, false);
+  assert.equal(body.tracking_settings.open_tracking.enable, false);
+  assert.match(body.content[0].value, /https?:\/\/[^\s]*\/verify\?token=/);
 });

@@ -10,7 +10,7 @@ async function startApp() {
     const s = app.listen(0, () => resolve(s));
   });
   const base = `http://127.0.0.1:${server.address().port}`;
-  return { server, base };
+  return { server, base, store: app.locals.store };
 }
 
 test('API: report, fuzzy search, person detail, subscription', async (t) => {
@@ -76,61 +76,99 @@ test('API: validation errors', async (t) => {
   assert.equal(badStatus.status, 400);
 });
 
-test('web: home renders, report form flow works', async (t) => {
+test('home lists missing people and offers both actions', async (t) => {
   const { server, base } = await startApp();
   t.after(() => server.close());
 
-  const home = await fetch(base);
-  assert.equal(home.status, 200);
-  const homeHtml = await home.text();
-  assert.match(homeHtml, /Reportar estado de alguien/);
-  assert.match(homeHtml, /Buscar a alguien/);
-  assert.match(homeHtml, /Terremoto en Colombia/);
+  const html = await (await fetch(base)).text();
+  assert.match(html, /mira quién está buscando la persona que rescataste/i);
+  assert.match(html, /Mira quién la está buscando/);
+  assert.match(html, /Reportar desaparecido/);
 
-  const buscar = await fetch(`${base}/buscar`);
-  assert.match(await buscar.text(), /¿Buscas a alguien\?/);
+  // a reported person shows up in the listing
+  const fd = new FormData();
+  fd.set('name', 'Pedro Pablo Ramírez');
+  fd.set('location', 'Barrio Centro');
+  fd.set('contact', '300 123 4567');
+  fd.append('photos', new File([Buffer.from('foto')], 'f.jpg', { type: 'image/jpeg' }));
+  const report = await fetch(`${base}/report`, { method: 'POST', body: fd, redirect: 'manual' });
+  assert.equal(report.status, 303);
 
-  const report = await fetch(`${base}/report`, {
+  const home = await (await fetch(base)).text();
+  assert.match(home, /Personas reportadas como desaparecidas/);
+  assert.match(home, /Pedro Pablo Ramírez/);
+});
+
+test('reporting requires photos, name, place and contact', async (t) => {
+  const { server, base } = await startApp();
+  t.after(() => server.close());
+
+  const missingContact = new FormData();
+  missingContact.set('name', 'Sin Contacto');
+  missingContact.set('location', 'Centro');
+  missingContact.append('photos', new File([Buffer.from('foto')], 'f.jpg', { type: 'image/jpeg' }));
+  assert.equal((await fetch(`${base}/report`, { method: 'POST', body: missingContact })).status, 400);
+
+  const noPhoto = new URLSearchParams({ name: 'Sin Foto', location: 'Centro', contact: '3001' });
+  const res = await fetch(`${base}/report`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      name: 'Pedro Pablo Ramírez',
-      status: 'missing',
-      message: 'No contesta desde ayer',
-      location: 'Barrio Centro',
-      reporter: 'María Gómez, Cruz Roja'
-    }),
-    redirect: 'manual'
+    body: noPhoto
   });
-  assert.equal(report.status, 303);
-  const personUrl = report.headers.get('location');
+  assert.equal(res.status, 400);
+});
 
-  const page = await fetch(`${base}${personUrl}`);
-  const html = await page.text();
-  assert.match(html, /Pedro Pablo Ramírez/);
-  assert.match(html, /DESAPARECIDO/);
-  assert.match(html, /Última ubicación reportada/);
-  // Privacy: a name reporter renders masked to first-name + initial, never
-  // the full free-text reporter value.
+test('the contact of the reporter is never shown on public pages', async (t) => {
+  const { server, base, store } = await startApp();
+  t.after(() => server.close());
+
+  const fd = new FormData();
+  fd.set('name', 'Julia Restrepo');
+  fd.set('location', 'La Candelaria');
+  fd.set('contact', 'secreto@ejemplo.com');
+  fd.append('photos', new File([Buffer.from('foto')], 'f.jpg', { type: 'image/jpeg' }));
+  await fetch(`${base}/report`, { method: 'POST', body: fd, redirect: 'manual' });
+
+  const [person] = await store.searchPeople('julia restrepo');
+  const page = await (await fetch(`${base}/person/${person.id}`)).text();
+  assert.match(page, /Julia Restrepo/);
+  assert.doesNotMatch(page, /secreto@ejemplo\.com/, 'el contacto no debe ser público');
+
+  const home = await (await fetch(base)).text();
+  assert.doesNotMatch(home, /secreto@ejemplo\.com/);
+});
+
+test('families can no longer subscribe to alerts', async (t) => {
+  const { server, base, store } = await startApp();
+  t.after(() => server.close());
+  const { person } = await store.findOrCreatePerson('Alguien Buscado');
+  for (const path of ['/buscar', '/alerta', `/person/${person.id}/subscribe`, '/subscribe-by-name']) {
+    const res = await fetch(`${base}${path}`, { method: 'POST' });
+    assert.equal(res.status, 404, `${path} debería no existir`);
+  }
+  assert.equal((await fetch(`${base}/buscar`)).status, 404);
+});
+
+// The old web form's reporter field is gone (the rescuer model asks for a
+// private `contact` instead), but updates created with a `reporter` — the
+// store API, the aggregator, old rows — still render on the person page.
+// A name must come out masked, never verbatim.
+test('web: a name reporter renders masked on the person page', async (t) => {
+  const { server, base, store } = await startApp();
+  t.after(() => server.close());
+
+  const { person } = await store.findOrCreatePerson('Pedro Pablo Ramírez');
+  await store.addUpdate(person.id, {
+    status: 'missing',
+    message: 'No contesta desde ayer',
+    location: 'Barrio Centro',
+    source: 'web',
+    reporter: 'María Gómez, Cruz Roja'
+  });
+
+  const html = await (await fetch(`${base}/person/${person.id}`)).text();
   assert.match(html, /Reportado por: María G\./);
   assert.ok(!html.includes('María Gómez, Cruz Roja'));
-
-  // A reporter that looks like a phone number renders as a generic label,
-  // never the raw number.
-  const phoneReport = await fetch(`${base}/report`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      name: 'Otra Persona',
-      status: 'safe',
-      reporter: '3001234567'
-    }),
-    redirect: 'manual'
-  });
-  const phonePage = await fetch(`${base}${phoneReport.headers.get('location')}`);
-  const phoneHtml = await phonePage.text();
-  assert.match(phoneHtml, /Reportado por: Reporte ciudadano/);
-  assert.ok(!phoneHtml.includes('3001234567'));
 });
 
 test('webhook: whatsapp inbound message is processed', async (t) => {
@@ -185,3 +223,91 @@ test('webhook: whatsapp inbound message is processed', async (t) => {
   assert.match(html, /Reporte ciudadano/);
   assert.ok(!html.includes(phone));
 });
+
+test('purge-test-data removes only the seeded test records', async (t) => {
+  const { server, base } = await startApp();
+  t.after(() => server.close());
+  const store = (await (async () => null)()) || null;
+
+  const mk = (name) =>
+    fetch(`${base}/api/updates`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, status: 'safe' })
+    });
+  await mk('Verificacion Final');
+  await mk('Cadena Completa 9147');
+  await mk('Nicolas Contreras'); // a real report must survive
+
+  const res = await fetch(`${base}/api/maintenance/purge-test-data`, { method: 'POST' });
+  const body = await res.json();
+  assert.equal(res.status, 200);
+  assert.ok(body.removed_count >= 2, JSON.stringify(body));
+
+  const survivors = await (await fetch(`${base}/api/people?q=Nicolas Contreras`)).json();
+  assert.equal(survivors.results.length, 1, 'un reporte real fue borrado');
+
+  const gone = await (await fetch(`${base}/api/people?q=Verificacion Final`)).json();
+  assert.equal(gone.results.length, 0);
+});
+
+test('DELETE /api/people/:id is disabled without API_KEY', async (t) => {
+  const { server, base } = await startApp();
+  t.after(() => server.close());
+  const res = await fetch(`${base}/api/people/1`, { method: 'DELETE' });
+  assert.equal(res.status, 503);
+});
+
+test('the contact is remembered between reports via a cookie', async (t) => {
+  const { server, base } = await startApp();
+  t.after(() => server.close());
+
+  const fd = new FormData();
+  fd.set('name', 'Marta Isabel Vélez');
+  fd.set('location', 'Chapinero');
+  fd.set('contact', 'Cruz Roja · 300 555 1234');
+  fd.append('photos', new File([Buffer.from('foto')], 'f.jpg', { type: 'image/jpeg' }));
+  const res = await fetch(`${base}/report`, { method: 'POST', body: fd, redirect: 'manual' });
+  assert.equal(res.status, 303);
+
+  const cookie = res.headers.getSetCookie().find((c) => c.startsWith('aqui_reporter='));
+  assert.ok(cookie, 'no se guardó la cookie de contacto');
+
+  const form = await fetch(`${base}/report`, { headers: { cookie: cookie.split(';')[0] } });
+  assert.match(await form.text(), /Cruz Roja · 300 555 1234/);
+});
+
+test('purge-test-data removes only the seeded test records', async (t) => {
+  const { server, base } = await startApp();
+  t.after(() => server.close());
+  const store = (await (async () => null)()) || null;
+
+  const mk = (name) =>
+    fetch(`${base}/api/updates`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, status: 'safe' })
+    });
+  await mk('Verificacion Final');
+  await mk('Cadena Completa 9147');
+  await mk('Nicolas Contreras'); // a real report must survive
+
+  const res = await fetch(`${base}/api/maintenance/purge-test-data`, { method: 'POST' });
+  const body = await res.json();
+  assert.equal(res.status, 200);
+  assert.ok(body.removed_count >= 2, JSON.stringify(body));
+
+  const survivors = await (await fetch(`${base}/api/people?q=Nicolas Contreras`)).json();
+  assert.equal(survivors.results.length, 1, 'un reporte real fue borrado');
+
+  const gone = await (await fetch(`${base}/api/people?q=Verificacion Final`)).json();
+  assert.equal(gone.results.length, 0);
+});
+
+test('DELETE /api/people/:id is disabled without API_KEY', async (t) => {
+  const { server, base } = await startApp();
+  t.after(() => server.close());
+  const res = await fetch(`${base}/api/people/1`, { method: 'DELETE' });
+  assert.equal(res.status, 503);
+});
+
