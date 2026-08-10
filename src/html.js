@@ -2,6 +2,7 @@
 // must load fast on bad connections and old phones.
 const env = require('./env');
 const { STATUS_LABEL } = require('./notify');
+const { maskReporter } = require('./privacy');
 
 const DEFAULT_DESCRIPTION =
   'Si rescataste a alguien, sube su foto y te decimos quién la está buscando; la foto se borra de inmediato. También puedes reportar a una persona desaparecida. Terremoto en Colombia, 10 de agosto.';
@@ -213,12 +214,15 @@ function mapLink(u) {
 }
 
 function updateCard(u, personName) {
+  // Never render the raw `reporter` — it may be a phone number or email
+  // (see src/privacy.js). Only the masked public label is safe to show.
+  const reporterLabel = maskReporter(u.reporter);
   return `<article class="card">
   ${personName ? `<h3><a href="/person/${u.person_id}">${esc(personName)}</a></h3>` : ''}
   <p>${statusBadge(u.status)} ${timeTag(u.created_at)}</p>
   ${u.message ? `<p class="msg">${esc(u.message)}</p>` : ''}
   ${u.location ? `<p class="loc">📍 ${esc(u.location)}${mapLink(u)}</p>` : u.lat != null && u.lng != null ? `<p class="loc">📍 Ubicación GPS${mapLink(u)}</p>` : ''}
-  <p class="meta">Fuente: ${esc(u.source)}${u.reporter ? ` · Reportado por: ${esc(u.reporter)}` : ''}</p>
+  <p class="meta">Fuente: ${esc(u.source)}${reporterLabel ? ` · Reportado por: ${esc(reporterLabel)}` : ''}</p>
 </article>`;
 }
 
