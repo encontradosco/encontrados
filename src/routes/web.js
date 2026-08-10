@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const express = require('express');
 const multer = require('multer');
 const { notifySubscribers, sendVerificationEmail, STATUS_LABEL } = require('../notify');
@@ -62,54 +63,139 @@ ${
     })
   );
 
-  // Search page
+  // Search page: name and/or photos, in one step
+  function buscarForm(q) {
+    return `
+<form class="stack compact" method="post" action="/buscar" enctype="multipart/form-data" data-resize-photos data-require-name-or-photos>
+  <input type="search" name="q" value="${esc(q)}" placeholder="Nombre de la persona (ej. Juan Pérez)" aria-label="Nombre">
+  <label class="file-label"><span>📷 O sube 1–3 fotos de la persona para buscar por rostro</span>
+    <input type="file" name="photos" accept="image/*" multiple></label>
+  <input type="email" name="email" placeholder="Tu correo (opcional — te avisamos si hay noticias)" aria-label="Tu correo">
+  ${PRIVACY_NOTE}
+  <button>🔎 Buscar</button>
+</form>
+<p class="subtle">No importa si no recuerdas el nombre exacto: buscamos por similitud y pronunciación.</p>
+<script>
+document.addEventListener('submit', function (ev) {
+  var f = ev.target;
+  if (!f.matches('form[data-require-name-or-photos]')) return;
+  var q = f.querySelector('input[name=q]').value.trim();
+  var ph = f.querySelector('input[type=file]').files.length;
+  if (!q && !ph) {
+    ev.preventDefault();
+    ev.stopImmediatePropagation();
+    alert('Escribe un nombre o sube al menos una foto.');
+  }
+}, true);
+</script>`;
+  }
+
+  async function nameResultsHtml(q) {
+    const matches = await store.searchPeople(q, { limit: 10 });
+    if (!matches.length) return null;
+    const cards = await Promise.all(
+      matches.map(async (p) => {
+        const latest = await store.getLatestUpdate(p.id);
+        return `<article class="card">
+  <h3><a href="/person/${p.id}">${esc(p.full_name)}</a></h3>
+  ${latest ? `<p>${statusBadge(latest.status)} <time>${esc(latest.created_at)}</time></p>` : '<p class="subtle">Sin reportes todavía.</p>'}
+</article>`;
+      })
+    );
+    return `<h2>Resultados para "${esc(q)}"</h2>` + cards.join('');
+  }
+
   router.get(
     '/buscar',
     wrap(async (req, res) => {
       const q = (req.query.q || '').trim();
       let resultsHtml = '';
       if (q) {
-        const matches = await store.searchPeople(q, { limit: 10 });
-        if (!matches.length) {
-          resultsHtml = `
-<div class="error">
-  <p>No encontramos reportes sobre <strong>${esc(q)}</strong>.</p>
-  <p><a href="/report?name=${encodeURIComponent(q)}">Crear un reporte</a> o suscríbete abajo para recibir un aviso cuando haya noticias.</p>
-</div>
-<h2>Recibir aviso cuando haya noticias</h2>
-<form class="stack" method="post" action="/subscribe-by-name" enctype="multipart/form-data" data-resize-photos>
-  <input type="hidden" name="name" value="${esc(q)}">
-  <input type="email" name="email" required placeholder="Tu correo electrónico *" aria-label="Tu correo electrónico">
-  <label class="file-label"><span>📷 Fotos de la persona (opcional, 2–3 ayudan al reconocimiento)</span>
-    <input type="file" name="photos" accept="image/*" multiple></label>
-  ${PRIVACY_NOTE}
-  <button>🔔 Avisarme cuando haya noticias de ${esc(q)}</button>
-</form>`;
-        } else {
-          const cards = await Promise.all(
-            matches.map(async (p) => {
-              const latest = await store.getLatestUpdate(p.id);
-              return `<article class="card">
-  <h3><a href="/person/${p.id}">${esc(p.full_name)}</a></h3>
-  ${latest ? `<p>${statusBadge(latest.status)} <time>${esc(latest.created_at)}</time></p>` : '<p class="subtle">Sin reportes todavía.</p>'}
-</article>`;
-            })
-          );
-          resultsHtml = `<h2>Resultados para "${esc(q)}"</h2>` + cards.join('');
+        resultsHtml =
+          (await nameResultsHtml(q)) ||
+          `<div class="error"><p>No encontramos reportes sobre <strong>${esc(q)}</strong>. Deja tu correo arriba y te avisamos, o <a href="/report?name=${encodeURIComponent(q)}">crea un reporte</a>.</p></div>`;
+      }
+      res.send(layout('Buscar', `<h1 class="compact">¿Buscas a alguien?</h1>${buscarForm(q)}${resultsHtml}`));
+    })
+  );
+
+  router.post(
+    '/buscar',
+    upload.array('photos', 8),
+    wrap(async (req, res) => {
+      const q = (req.body.q || '').trim();
+      const email = (req.body.email || '').trim();
+      const files = (req.files || []).slice(0, MAX_QUERY_PHOTOS);
+      if (!q && !files.length) {
+        return res.redirect('/buscar');
+      }
+
+      const sections = [];
+
+      // Immediate face search: compare uploaded photos against report photos.
+      if (files.length) {
+        const bestByPerson = new Map();
+        for (const f of files) {
+          try {
+            const found = await matcher.searchByImage(f.buffer);
+            const photos = await store.photosByFaceIds(found.map((m) => m.faceId));
+            for (const p of photos.filter((ph) => ph.kind === 'report')) {
+              const sim = found.find((m) => m.faceId === p.face_id)?.similarity || 0;
+              if (!bestByPerson.has(p.person_id) || bestByPerson.get(p.person_id) < sim) {
+                bestByPerson.set(p.person_id, sim);
+              }
+            }
+          } catch (e) {
+            console.error('[buscar face]', e);
+          }
+        }
+        if (bestByPerson.size) {
+          const cards = [];
+          for (const [personId, sim] of [...bestByPerson.entries()].sort((a, b) => b[1] - a[1])) {
+            const person = await store.getPerson(personId);
+            if (!person) continue;
+            const latest = await store.getLatestUpdate(personId);
+            cards.push(`<article class="card">
+  <h3><a href="/person/${person.id}">${esc(person.full_name)}</a></h3>
+  <p>👤 Coincidencia facial: ${Math.round(sim)}%</p>
+  ${latest ? `<p>${statusBadge(latest.status)} <time>${esc(latest.created_at)}</time></p>` : ''}
+</article>`);
+          }
+          sections.push('<h2>Posibles coincidencias por rostro</h2>' + cards.join(''));
+        } else if (matcher.enabled) {
+          sections.push('<p class="subtle">Sin coincidencias por rostro todavía.</p>');
         }
       }
+
+      if (q) {
+        const nameHtml = await nameResultsHtml(q);
+        if (nameHtml) sections.push(nameHtml);
+        else sections.push(`<div class="error"><p>No encontramos reportes con el nombre <strong>${esc(q)}</strong>.</p></div>`);
+      }
+
+      // Subscribe for future alerts if they left an email.
+      let notice = '';
+      if (email && EMAIL_RE.test(email)) {
+        const anchorName = q || `Búsqueda por foto ${crypto.randomBytes(3).toString('hex')}`;
+        const { person } = await store.findOrCreatePerson(anchorName);
+        const { sub, needsVerification } = await store.subscribe(person.id, 'email', email);
+        await attachQueryPhotos(person, sub, files);
+        if (needsVerification) {
+          sendVerificationEmail(person, sub).catch((e) => console.error('[buscar verify]', e));
+          notice = '<p class="notice">📬 Te enviamos un correo de confirmación: ábrelo para activar los avisos.</p>';
+        } else {
+          notice = '<p class="notice">🔔 Te avisaremos cuando haya novedades.</p>';
+        }
+      } else if (files.length) {
+        await Promise.resolve(); // photos are not stored without an email — nothing to keep
+        sections.push('<p class="subtle">Deja tu correo en el formulario para avisarte si aparece una coincidencia futura.</p>');
+      }
+
       res.send(
         layout(
           'Buscar',
-          `
-<h1>¿Buscas a alguien?</h1>
-<form method="get" action="/buscar" class="search-row">
-  <input type="search" name="q" value="${esc(q)}" placeholder="Nombre de la persona (ej. Juan Pérez)" required autofocus>
-  <button>Buscar</button>
-</form>
-<p class="subtle">No importa si no recuerdas el nombre exacto: buscamos por similitud y pronunciación.</p>
-${resultsHtml}
-`
+          `<h1 class="compact">¿Buscas a alguien?</h1>${notice}${buscarForm(q)}${sections.join('')}
+<p><a href="/report${q ? `?name=${encodeURIComponent(q)}` : ''}">➕ ¿Tienes información? Crea un reporte</a></p>`
         )
       );
     })
@@ -217,27 +303,27 @@ ${
     })
   );
 
-  router.post(
-    '/person/:id/subscribe',
-    upload.array('photos', 8),
-    wrap(async (req, res) => {
-      const person = await store.getPerson(req.params.id);
-      if (!person) {
-        return res.status(404).send(layout('No encontrado', '<p class="error">Persona no encontrada.</p>'));
-      }
-      const email = (req.body.email || '').trim();
-      if (!EMAIL_RE.test(email)) {
-        return res.status(400).send(layout('Error', '<p class="error">Correo inválido.</p>'));
-      }
-      const { sub, needsVerification } = await store.subscribe(person.id, 'email', email);
-      await attachQueryPhotos(person, sub, req.files);
-      if (needsVerification) {
-        sendVerificationEmail(person, sub).catch((e) => console.error('[verify email]', e));
-        return res.redirect(`/person/${person.id}?checkemail=1`);
-      }
-      res.redirect(`/person/${person.id}?subscribed=1`);
-    })
-  );
+  const subscribeHandler = wrap(async (req, res) => {
+    const person = await store.getPerson(req.params.id);
+    if (!person) {
+      return res.status(404).send(layout('No encontrado', '<p class="error">Persona no encontrada.</p>'));
+    }
+    const email = (req.body.email || '').trim();
+    if (!EMAIL_RE.test(email)) {
+      return res.status(400).send(layout('Error', '<p class="error">Correo inválido.</p>'));
+    }
+    const { sub, needsVerification } = await store.subscribe(person.id, 'email', email);
+    await attachQueryPhotos(person, sub, req.files);
+    if (needsVerification) {
+      sendVerificationEmail(person, sub).catch((e) => console.error('[verify email]', e));
+      return res.redirect(`/person/${person.id}?checkemail=1`);
+    }
+    res.redirect(`/person/${person.id}?subscribed=1`);
+  });
+
+  router.post('/person/:id/subscribe', upload.array('photos', 8), subscribeHandler);
+  // Alias: some browsers/proxies have been seen posting to the person URL itself.
+  router.post('/person/:id', upload.array('photos', 8), subscribeHandler);
 
   // Subscribe to a name with no reports yet (creates the person placeholder)
   router.post(
@@ -336,6 +422,61 @@ ${
   <li><strong>Privacidad primero.</strong> Tu información se usa únicamente para ayudar a las personas a encontrar a sus seres queridos, como describe la <a href="/privacidad">política de privacidad</a>. Las fotos nunca se comparten ni se muestran.</li>
   <li><strong>Podemos retirar contenido</strong> que incumpla estos términos, y responder a solicitudes legítimas de eliminación en <a href="mailto:a@torrenegra.com">a@torrenegra.com</a>.</li>
 </ul>`
+      )
+    );
+  });
+
+  // API documentation
+  router.get(['/api-doc', '/api-docs'], (req, res) => {
+    res.send(
+      layout(
+        'API',
+        `
+<h1>API de Aquí</h1>
+<p>Base: <code>https://aqui.online/api</code> · JSON (<code>Content-Type: application/json</code>). Lecturas públicas.</p>
+
+<h2>1. Reportar el estado de una persona</h2>
+<p><code>POST /api/updates</code> — crea la persona si no existe; si el nombre coincide con alguien ya reportado (typos, acentos o apellidos faltantes incluidos), el reporte se une a esa persona.</p>
+<pre>curl -X POST https://aqui.online/api/updates \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "Juan Carlos Pérez",
+    "status": "safe",
+    "message": "Confirmado por teléfono a las 3pm",
+    "location": "Albergue San José, Mocoa",
+    "lat": 1.1522, "lng": -76.6527,
+    "reporter": "María Gómez, Cruz Roja",
+    "photo": { "base64": "&lt;JPEG en base64&gt;", "content_type": "image/jpeg" }
+  }'</pre>
+<ul>
+  <li><code>name</code> y <code>status</code> son obligatorios; el resto opcional.</li>
+  <li><code>status</code>: <code>safe</code> (a salvo) · <code>injured</code> (herido) · <code>missing</code> (desaparecido) · <code>deceased</code> (fallecido) · <code>unknown</code> (sin confirmar).</li>
+  <li><code>photo</code>: opcional, máx. 4 MB. La foto <strong>nunca se muestra a nadie</strong>: solo reconocimiento facial.</li>
+  <li>Respuesta 201: <code>{ "person_id": 12, "person_created": true, "update": {…}, "photo_stored": true }</code>. Los suscriptores verificados reciben el aviso automáticamente.</li>
+</ul>
+
+<h2>2. Buscar personas</h2>
+<pre>curl 'https://aqui.online/api/people?q=jaun%20peres'</pre>
+<p>Tolera typos, acentos y nombres incompletos. Devuelve <code>results</code> ordenados por similitud con su <code>latest_update</code>.</p>
+
+<h2>3. Historial de una persona</h2>
+<pre>curl https://aqui.online/api/people/12</pre>
+
+<h2>4. Suscribirse a novedades</h2>
+<pre>curl -X POST https://aqui.online/api/people/12/subscriptions \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "channel": "email",
+    "address": "familia@ejemplo.com",
+    "photos": [{ "base64": "&lt;JPEG base64&gt;", "content_type": "image/jpeg" }]
+  }'</pre>
+<ul>
+  <li><code>channel</code>: <code>email</code> (activo). Las suscripciones por correo requieren verificación por enlace; ninguna alerta se envía antes (<code>pending_verification: true</code>).</li>
+  <li><code>photos</code> (máx. 3): fotos de la persona buscada, solo para reconocimiento facial. Si un reporte futuro coincide, el suscriptor recibe el aviso <strong>sin ver ninguna foto</strong>.</li>
+  <li>Todo aviso incluye enlace de baja de un clic.</li>
+</ul>
+
+<p class="subtle">Publica solo información que creas cierta — ver <a href="/terminos">términos</a> y <a href="/privacidad">privacidad</a>.</p>`
       )
     );
   });
