@@ -20,6 +20,32 @@ function decodePhoto(p) {
   }
 }
 
+// Turn SendGrid's raw response into an actionable sentence in Spanish.
+function emailVerdict(email) {
+  if (!email.sendgrid_key_present) {
+    return 'SENDGRID_API_KEY no está definida en este entorno de Vercel. Agrégala en Settings → Environment Variables (Production) y vuelve a desplegar.';
+  }
+  if (!email.sendgrid_key_looks_valid) {
+    return `La clave no empieza por "SG." (empieza por "${email.sendgrid_key_prefix}"), así que no parece una API key de SendGrid. Genera una en SendGrid → Settings → API Keys con permiso "Mail Send".`;
+  }
+  const t = email.test || {};
+  if (t.ok) return 'Correo enviado correctamente. Si no llega, revisa spam y la Activity Feed de SendGrid.';
+  const err = String(t.error || '');
+  if (t.status === 401) {
+    return 'SendGrid rechazó la clave (401). Genera una nueva API key con permiso "Mail Send" y actualízala en Vercel.';
+  }
+  if (t.status === 403) {
+    if (/Sender Identity|from address/i.test(err)) {
+      return `SendGrid rechaza el remitente ${email.from} (403): no está verificado. Verifícalo en SendGrid → Settings → Sender Authentication (Single Sender o dominio). Alternativa inmediata: define EMAIL_FROM en Vercel con un remitente ya verificado.`;
+    }
+    return `SendGrid devolvió 403: la clave existe pero no tiene permiso "Mail Send", o el remitente ${email.from} no está verificado.`;
+  }
+  if (t.error && /fetch/i.test(err)) {
+    return 'El entorno no pudo hacer la petición HTTP a SendGrid (fetch falló). Revisa la versión de Node en Vercel.';
+  }
+  return `SendGrid respondió ${t.status || 'sin estado'}: ${err.slice(0, 300)}`;
+}
+
 function apiRoutes(store, matcher) {
   const router = express.Router();
   router.use(express.json({ limit: '16mb' }));
@@ -73,7 +99,7 @@ function apiRoutes(store, matcher) {
     '/updates',
     requireKey,
     wrap(async (req, res) => {
-      const { name, status, message, location, reporter } = req.body || {};
+      const { name, status, message, location, reporter, contact } = req.body || {};
       if (!name || !String(name).trim()) return res.status(400).json({ error: 'Falta name' });
       if (!STATUSES.includes(status)) {
         return res.status(400).json({ error: `status debe ser uno de: ${STATUSES.join(', ')}` });
@@ -86,9 +112,10 @@ function apiRoutes(store, matcher) {
         lat: typeof req.body.lat === 'number' ? req.body.lat : parseFloat(req.body.lat),
         lng: typeof req.body.lng === 'number' ? req.body.lng : parseFloat(req.body.lng),
         source: 'api',
-        reporter
+        reporter,
+        contact
       });
-      notifySubscribers(store, person, update).catch((e) => console.error('[api notify]', e));
+      await notifySubscribers(store, person, update);
       const photo = decodePhoto(req.body.photo);
       if (photo) {
         await processPhoto(store, matcher, {
@@ -142,12 +169,61 @@ function apiRoutes(store, matcher) {
           }
         }
         if (needsVerification) {
-          sendVerificationEmail(person, sub).catch((e) => console.error('[api verify email]', e));
+          await sendVerificationEmail(person, sub);
         }
         res.status(201).json({ ok: true, pending_verification: needsVerification, photos_stored: photosStored });
       } catch (e) {
         res.status(400).json({ error: e.message });
       }
+    })
+  );
+
+  // Test records created while diagnosing the email pipeline. The purge below
+  // can only ever touch these exact names, so it needs no secret to be safe.
+  const TEST_RECORD_NAMES = [
+    'prueba entrega correo',
+    'verificacion final',
+    'cadena completa',
+    'prueba suscribir',
+    'zona horaria',
+    'conteo prueba'
+  ];
+
+  // POST /api/maintenance/purge-test-data — remove only the seeded test rows.
+  router.post(
+    '/maintenance/purge-test-data',
+    wrap(async (req, res) => {
+      const { normalize } = require('../names');
+      const removed = [];
+      for (const name of TEST_RECORD_NAMES) {
+        for (const p of await store.searchPeople(name, { limit: 20, minScore: 0.6 })) {
+          const norm = normalize(p.full_name);
+          // Only exact matches or the same name plus a trailing id.
+          if (!TEST_RECORD_NAMES.some((t) => norm === t || norm.startsWith(t + ' '))) continue;
+          const deleted = await store.deletePerson(p.id);
+          if (deleted) removed.push({ id: p.id, name: p.full_name });
+        }
+      }
+      res.json({ ok: true, removed_count: removed.length, removed });
+    })
+  );
+
+  // DELETE /api/people/:id — honours the deletion requests promised in the
+  // privacy policy. Requires API_KEY; disabled entirely when it is unset.
+  router.delete(
+    '/people/:id',
+    wrap(async (req, res) => {
+      if (!env.API_KEY) {
+        return res
+          .status(503)
+          .json({ error: 'Borrado deshabilitado: define API_KEY para habilitarlo.' });
+      }
+      if ((req.get('authorization') || '') !== `Bearer ${env.API_KEY}`) {
+        return res.status(401).json({ error: 'API key inválida o ausente' });
+      }
+      const deleted = await store.deletePerson(req.params.id);
+      if (!deleted) return res.status(404).json({ error: 'Persona no encontrada' });
+      res.json({ ok: true, deleted: { id: deleted.id, full_name: deleted.full_name } });
     })
   );
 
@@ -163,6 +239,66 @@ function apiRoutes(store, matcher) {
     })
   );
 
+  // GET /api/diag/sendgrid — ask SendGrid about deliverability for an address:
+  // suppressions (bounce/block/spam/invalid), verified senders, and whether the
+  // sending domain is authenticated (SPF/DKIM). A 202 from the send API only
+  // means "accepted"; these are the reasons mail still never lands.
+  router.get(
+    '/diag/sendgrid',
+    wrap(async (req, res) => {
+      const key = (process.env.SENDGRID_API_KEY || env.SENDGRID_API_KEY || '').trim();
+      if (!key) return res.status(400).json({ error: 'SENDGRID_API_KEY no configurada' });
+      const address = String(req.query.email || '').trim();
+
+      const get = async (path) => {
+        try {
+          const r = await fetch(`https://api.sendgrid.com${path}`, {
+            headers: { Authorization: `Bearer ${key}` }
+          });
+          const text = await r.text();
+          let body;
+          try {
+            body = JSON.parse(text);
+          } catch {
+            body = text.slice(0, 300);
+          }
+          return { status: r.status, body };
+        } catch (e) {
+          return { error: e.message };
+        }
+      };
+
+      const [bounces, blocks, spam, invalid, senders, domains] = await Promise.all([
+        address ? get(`/v3/suppression/bounces/${encodeURIComponent(address)}`) : { skipped: true },
+        address ? get(`/v3/suppression/blocks/${encodeURIComponent(address)}`) : { skipped: true },
+        address ? get(`/v3/suppression/spam_reports/${encodeURIComponent(address)}`) : { skipped: true },
+        address ? get(`/v3/suppression/invalid_emails/${encodeURIComponent(address)}`) : { skipped: true },
+        get('/v3/verified_senders'),
+        get('/v3/whitelabel/domains')
+      ]);
+
+      const domainList = Array.isArray(domains.body) ? domains.body : [];
+      const fromDomain = env.EMAIL_FROM.split('@')[1];
+      const matching = domainList.find((d) => d.domain === fromDomain);
+
+      res.json({
+        from: env.EMAIL_FROM,
+        checked_address: address || '(pasa ?email= para revisar supresiones)',
+        suppressions: { bounces, blocks, spam, invalid },
+        verified_senders_status: senders.status,
+        verified_senders: Array.isArray(senders.body?.results)
+          ? senders.body.results.map((v) => ({ email: v.from_email, verified: v.verified }))
+          : senders.body,
+        domain_authentication:
+          domains.status !== 200
+            ? `No se pudo verificar: la API key solo tiene permiso "Mail Send" (SendGrid respondió ${domains.status}). Revísalo en SendGrid → Settings → Sender Authentication.`
+            : matching
+              ? { domain: matching.domain, valid: matching.valid }
+              : `El dominio ${fromDomain} no aparece autenticado en SendGrid. Sin SPF/DKIM propios, Gmail y Outlook suelen mandar el correo a spam — sobre todo si el destinatario es del mismo dominio que el remitente.`
+      });
+    })
+  );
+
   // GET /api/diag — configuration and live self-test. Never exposes secrets,
   // never sends email (a GET must not have side effects — see POST /api/diag/test-email).
   router.get(
@@ -171,14 +307,28 @@ function apiRoutes(store, matcher) {
       if (typeof matcher.ensureReady === 'function') {
         await matcher.ensureReady();
       }
+      // Read the key live: config captured at module load can be stale.
+      const liveKey = (process.env.SENDGRID_API_KEY || env.SENDGRID_API_KEY || '').trim();
       const out = {
         base_url: env.BASE_URL,
         database: {
           driver: process.env.DATABASE_URL || process.env.POSTGRES_URL || process.env.STORAGE_URL ? 'postgres' : 'sqlite (efímero)',
           ok: false
         },
+        runtime: {
+          node: process.version,
+          vercel_env: process.env.VERCEL_ENV || '(local)',
+          fetch_available: typeof fetch === 'function'
+        },
         email: {
-          sendgrid_key_present: !!env.SENDGRID_API_KEY,
+          sendgrid_key_present: !!liveKey,
+          // Fingerprint only — never the secret itself.
+          sendgrid_key_len: liveKey.length,
+          sendgrid_key_prefix: liveKey.slice(0, 3),
+          sendgrid_key_looks_valid: /^SG\./.test(liveKey),
+          raw_key_had_whitespace:
+            !!process.env.SENDGRID_API_KEY &&
+            process.env.SENDGRID_API_KEY !== process.env.SENDGRID_API_KEY.trim(),
           from: env.EMAIL_FROM
         },
         faces: {
@@ -218,13 +368,23 @@ function apiRoutes(store, matcher) {
       if (!email || !String(email).trim()) {
         return res.status(400).json({ error: 'Falta email' });
       }
+      // Same key fingerprinting as GET /api/diag so emailVerdict can produce
+      // its actionable sentence on the send path too (never the secret itself).
+      const liveKey = (process.env.SENDGRID_API_KEY || env.SENDGRID_API_KEY || '').trim();
+      const info = {
+        sendgrid_key_present: !!liveKey,
+        sendgrid_key_prefix: liveKey.slice(0, 3),
+        sendgrid_key_looks_valid: /^SG\./.test(liveKey),
+        from: env.EMAIL_FROM
+      };
       const { sendEmail } = require('../notify');
-      const result = await sendEmail(
+      info.test = await sendEmail(
         String(email).trim(),
         'Prueba de configuración — aqui.online',
         'Si recibes este correo, el envío desde aqui.online funciona correctamente.'
       );
-      res.json({ email: { test: result } });
+      info.veredicto = emailVerdict(info);
+      res.json({ email: info });
     })
   );
 
