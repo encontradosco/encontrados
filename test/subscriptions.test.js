@@ -64,7 +64,7 @@ test('web flow: subscribe → check email → verify link → unsubscribe link',
     body: new URLSearchParams({ email: 'elena.familia@ejemplo.com' }),
     redirect: 'manual'
   });
-  assert.equal(res.status, 302);
+  assert.equal(res.status, 303);
   assert.match(res.headers.get('location'), /revisa-tu-correo/);
 
   const checkPage = await fetch(`${base}${res.headers.get('location')}`);
@@ -85,4 +85,35 @@ test('web flow: subscribe → check email → verify link → unsubscribe link',
 
   const badToken = await fetch(`${base}/verify?token=nope`);
   assert.equal(badToken.status, 404);
+});
+
+test('redirect targets survive a re-POSTed redirect (Safari XHR behavior)', async (t) => {
+  const app = await createApp(await createSqliteAdapter(':memory:'), nullMatcher);
+  const server = await new Promise((resolve) => {
+    const s = app.listen(0, () => resolve(s));
+  });
+  t.after(() => server.close());
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const store = app.locals.store;
+
+  // Subscribing must redirect with 303 so browsers switch to GET when following.
+  const { person } = await store.findOrCreatePerson('Rocío Álvarez');
+  const res = await fetch(`${base}/person/${person.id}/subscribe`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ email: 'test@ejemplo.com' }),
+    redirect: 'manual'
+  });
+  assert.equal(res.status, 303);
+  const target = res.headers.get('location');
+
+  // Even if a browser re-POSTs the redirect target, it must not 404.
+  const reposted = await fetch(`${base}${target}`, { method: 'POST' });
+  assert.equal(reposted.status, 200);
+  assert.match(await reposted.text(), /sigue el enlace que te enviamos por correo/);
+
+  // Same for the search flow's redirect target.
+  const [sub] = await store.getSubscriptions(person.id);
+  const verifyPost = await fetch(`${base}/verify?token=${sub.verify_token}`, { method: 'POST' });
+  assert.equal(verifyPost.status, 200);
 });

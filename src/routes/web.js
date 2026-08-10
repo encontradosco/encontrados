@@ -74,8 +74,8 @@ ${
   <input type="search" name="q" value="${esc(q)}" placeholder="Nombre de la persona (ej. Juan Pérez)" aria-label="Nombre">
   <label class="file-label"><span>📷 O sube 1–3 fotos de la persona para buscar por rostro</span>
     <input type="file" name="photos" accept="image/*" multiple></label>
-  <input type="email" name="email" placeholder="Tu correo (opcional — te avisamos si hay noticias)" aria-label="Tu correo">
   ${PRIVACY_NOTE}
+  <input type="email" name="email" placeholder="Tu correo (opcional — te avisamos si hay noticias)" aria-label="Tu correo">
   <button>🔎 Buscar</button>
 </form>
 <p class="subtle">No importa si no recuerdas el nombre exacto: buscamos por similitud y pronunciación.</p>
@@ -141,7 +141,7 @@ document.addEventListener('submit', function (ev) {
       const email = (req.body.email || '').trim();
       const files = (req.files || []).slice(0, MAX_QUERY_PHOTOS);
       if (!q && !files.length) {
-        return res.redirect('/buscar');
+        return res.redirect(303, '/buscar');
       }
 
       const sections = [];
@@ -196,7 +196,7 @@ document.addEventListener('submit', function (ev) {
         await attachQueryPhotos(person, sub, files);
         if (needsVerification) {
           sendVerificationEmail(person, sub).catch((e) => console.error('[buscar verify]', e));
-          return res.redirect(checkEmailUrl(q ? `/buscar?q=${encodeURIComponent(q)}` : '/buscar'));
+          return res.redirect(303, checkEmailUrl(q ? `/buscar?q=${encodeURIComponent(q)}` : '/buscar'));
         }
         notice = '<p class="notice">🔔 Te avisaremos cuando haya novedades.</p>';
       } else if (files.length) {
@@ -228,6 +228,7 @@ document.addEventListener('submit', function (ev) {
   <input name="name" value="${esc(req.query.name || '')}" placeholder="Nombre de la persona (si lo sabes)" aria-label="Nombre de la persona">
   <label class="file-label"><span>📷 Foto de la persona (galería o cámara — clave si no sabes su nombre)</span>
     <input type="file" name="photo" accept="image/*"></label>
+  ${PRIVACY_NOTE}
   <select name="status" required aria-label="Estado">
     <option value="" disabled selected>Estado *</option>
     ${options}
@@ -238,7 +239,6 @@ document.addEventListener('submit', function (ev) {
   <button type="button" id="geo-btn" class="secondary">📍 Compartir mi ubicación actual</button>
   <input type="hidden" name="lat" id="lat"><input type="hidden" name="lng" id="lng">
   <input name="reporter" placeholder="Tu nombre o teléfono (opcional)" aria-label="Tu nombre o teléfono">
-  ${PRIVACY_NOTE}
   <button>Enviar reporte</button>
 </form>
 <script>
@@ -301,7 +301,7 @@ ${LOCATION_SCRIPT}`,
           contentType: req.file.mimetype
         });
       }
-      res.redirect(`/person/${person.id}?reported=1`);
+      res.redirect(303, `/person/${person.id}?reported=1`);
     })
   );
 
@@ -368,9 +368,9 @@ ${
     await attachQueryPhotos(person, sub, req.files);
     if (needsVerification) {
       sendVerificationEmail(person, sub).catch((e) => console.error('[verify email]', e));
-      return res.redirect(checkEmailUrl(`/person/${person.id}`));
+      return res.redirect(303, checkEmailUrl(`/person/${person.id}`));
     }
-    res.redirect(`/person/${person.id}?subscribed=1`);
+    res.redirect(303, `/person/${person.id}?subscribed=1`);
   });
 
   router.post('/person/:id/subscribe', upload.array('photos', 8), subscribeHandler);
@@ -391,14 +391,14 @@ ${
       await attachQueryPhotos(person, sub, req.files);
       if (needsVerification) {
         sendVerificationEmail(person, sub).catch((e) => console.error('[verify email]', e));
-        return res.redirect(checkEmailUrl(`/person/${person.id}`));
+        return res.redirect(303, checkEmailUrl(`/person/${person.id}`));
       }
-      res.redirect(`/person/${person.id}?subscribed=1`);
+      res.redirect(303, `/person/${person.id}?subscribed=1`);
     })
   );
 
   // Full-screen "check your email" page
-  router.get('/revisa-tu-correo', (req, res) => {
+  router.all('/revisa-tu-correo', (req, res) => {
     const next = String(req.query.next || '/');
     const safeNext = next.startsWith('/') ? next : '/';
     res.send(
@@ -417,7 +417,7 @@ ${
   });
 
   // Email verification link → full-screen confirmation
-  router.get(
+  router.all(
     '/verify',
     wrap(async (req, res) => {
       const sub = await store.verifySubscription(req.query.token);
