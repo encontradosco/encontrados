@@ -4,7 +4,7 @@ const env = require('./env');
 const { STATUS_LABEL } = require('./notify');
 
 const DEFAULT_DESCRIPTION =
-  'Reporta el estado de una persona o busca a tus seres queridos tras el terremoto en Colombia del 10 de agosto. Gratuito, rápido y privado.';
+  'Encuentro y reporto a personas por nombre o por reconocimiento facial. Tras el terremoto en Colombia del 10 de agosto. Información provista por voluntarios y extraída de bases de datos públicas.';
 
 function esc(s) {
   return String(s ?? '')
