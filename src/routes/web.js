@@ -74,7 +74,7 @@ function webRoutes(store, matcher) {
           'Inicio',
           `
 <div class="hero">
-  <h1>Busca perdidos usando reconocimiento facial</h1>
+  <h1>Busca/reporta perdidos usando reconocimiento facial</h1>
 </div>
 <div class="big-actions">
   <a class="big-btn report" href="/report">
@@ -92,7 +92,7 @@ ${
 }
 `,
           {
-            fullTitle: 'aqui.online — Encuentra y reporta personas por nombre o por reconocimiento facial',
+            fullTitle: 'Busca/reporta perdidos usando reconocimiento facial — aqui.online',
             description:
               'Tras el terremoto en Colombia del 10 de agosto. Información provista por voluntarios y extraída de bases de datos públicas.',
             path: '/'

@@ -4,7 +4,7 @@ const env = require('./env');
 const { STATUS_LABEL } = require('./notify');
 
 const DEFAULT_DESCRIPTION =
-  'Encuentra y reporta personas por nombre o por reconocimiento facial. Tras el terremoto en Colombia del 10 de agosto. Información provista por voluntarios y extraída de bases de datos públicas.';
+  'Busca/reporta perdidos usando reconocimiento facial. Tras el terremoto en Colombia del 10 de agosto. Información provista por voluntarios y extraída de bases de datos públicas.';
 
 function esc(s) {
   return String(s ?? '')
