@@ -20,6 +20,32 @@ function decodePhoto(p) {
   }
 }
 
+// Turn SendGrid's raw response into an actionable sentence in Spanish.
+function emailVerdict(email) {
+  if (!email.sendgrid_key_present) {
+    return 'SENDGRID_API_KEY no está definida en este entorno de Vercel. Agrégala en Settings → Environment Variables (Production) y vuelve a desplegar.';
+  }
+  if (!email.sendgrid_key_looks_valid) {
+    return `La clave no empieza por "SG." (empieza por "${email.sendgrid_key_prefix}"), así que no parece una API key de SendGrid. Genera una en SendGrid → Settings → API Keys con permiso "Mail Send".`;
+  }
+  const t = email.test || {};
+  if (t.ok) return 'Correo enviado correctamente. Si no llega, revisa spam y la Activity Feed de SendGrid.';
+  const err = String(t.error || '');
+  if (t.status === 401) {
+    return 'SendGrid rechazó la clave (401). Genera una nueva API key con permiso "Mail Send" y actualízala en Vercel.';
+  }
+  if (t.status === 403) {
+    if (/Sender Identity|from address/i.test(err)) {
+      return `SendGrid rechaza el remitente ${email.from} (403): no está verificado. Verifícalo en SendGrid → Settings → Sender Authentication (Single Sender o dominio). Alternativa inmediata: define EMAIL_FROM en Vercel con un remitente ya verificado.`;
+    }
+    return `SendGrid devolvió 403: la clave existe pero no tiene permiso "Mail Send", o el remitente ${email.from} no está verificado.`;
+  }
+  if (t.error && /fetch/i.test(err)) {
+    return 'El entorno no pudo hacer la petición HTTP a SendGrid (fetch falló). Revisa la versión de Node en Vercel.';
+  }
+  return `SendGrid respondió ${t.status || 'sin estado'}: ${err.slice(0, 300)}`;
+}
+
 function apiRoutes(store, matcher) {
   const router = express.Router();
   router.use(express.json({ limit: '16mb' }));
@@ -169,14 +195,28 @@ function apiRoutes(store, matcher) {
       if (typeof matcher.ensureReady === 'function') {
         await matcher.ensureReady();
       }
+      // Read the key live: config captured at module load can be stale.
+      const liveKey = (process.env.SENDGRID_API_KEY || env.SENDGRID_API_KEY || '').trim();
       const out = {
         base_url: env.BASE_URL,
         database: {
           driver: process.env.DATABASE_URL || process.env.POSTGRES_URL || process.env.STORAGE_URL ? 'postgres' : 'sqlite (efímero)',
           ok: false
         },
+        runtime: {
+          node: process.version,
+          vercel_env: process.env.VERCEL_ENV || '(local)',
+          fetch_available: typeof fetch === 'function'
+        },
         email: {
-          sendgrid_key_present: !!env.SENDGRID_API_KEY,
+          sendgrid_key_present: !!liveKey,
+          // Fingerprint only — never the secret itself.
+          sendgrid_key_len: liveKey.length,
+          sendgrid_key_prefix: liveKey.slice(0, 3),
+          sendgrid_key_looks_valid: /^SG\./.test(liveKey),
+          raw_key_had_whitespace:
+            !!process.env.SENDGRID_API_KEY &&
+            process.env.SENDGRID_API_KEY !== process.env.SENDGRID_API_KEY.trim(),
           from: env.EMAIL_FROM
         },
         faces: {
@@ -208,6 +248,7 @@ function apiRoutes(store, matcher) {
           'Prueba de configuración — aqui.online',
           'Si recibes este correo, el envío desde aqui.online funciona correctamente.'
         );
+        out.email.veredicto = emailVerdict(out.email);
       }
 
       res.json(out);

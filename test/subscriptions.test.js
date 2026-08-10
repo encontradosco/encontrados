@@ -5,6 +5,7 @@ const { createStore } = require('../src/people');
 const { notifySubscribers } = require('../src/notify');
 const { createApp } = require('../src/server');
 const { nullMatcher } = require('../src/faces');
+const { fakeSendgrid } = require('./helpers');
 
 async function freshStore() {
   return createStore(await createSqliteAdapter(':memory:'));
@@ -49,11 +50,15 @@ test('unsubscribe by token deletes the subscription', async () => {
 });
 
 test('web flow: subscribe → check email → verify link → unsubscribe link', async (t) => {
+  const sg = await fakeSendgrid();
   const app = await createApp(await createSqliteAdapter(':memory:'), nullMatcher);
   const server = await new Promise((resolve) => {
     const s = app.listen(0, () => resolve(s));
   });
-  t.after(() => server.close());
+  t.after(() => {
+    server.close();
+    sg.stop();
+  });
   const base = `http://127.0.0.1:${server.address().port}`;
   const store = app.locals.store;
 
@@ -88,11 +93,15 @@ test('web flow: subscribe → check email → verify link → unsubscribe link',
 });
 
 test('redirect targets survive a re-POSTed redirect (Safari XHR behavior)', async (t) => {
+  const sg = await fakeSendgrid();
   const app = await createApp(await createSqliteAdapter(':memory:'), nullMatcher);
   const server = await new Promise((resolve) => {
     const s = app.listen(0, () => resolve(s));
   });
-  t.after(() => server.close());
+  t.after(() => {
+    server.close();
+    sg.stop();
+  });
   const base = `http://127.0.0.1:${server.address().port}`;
   const store = app.locals.store;
 

@@ -28,8 +28,9 @@ module.exports = {
   DB_PATH: process.env.DB_PATH || path.join(__dirname, '..', 'data', 'aqui.db'),
   API_KEY: process.env.API_KEY || '',
 
-  SENDGRID_API_KEY: process.env.SENDGRID_API_KEY || '',
-  EMAIL_FROM: 'a@torrenegra.com',
+  // Trim: a stray newline from copy-paste makes SendGrid return 401.
+  SENDGRID_API_KEY: (process.env.SENDGRID_API_KEY || '').trim(),
+  EMAIL_FROM: (process.env.EMAIL_FROM || 'a@torrenegra.com').trim(),
 
   WHATSAPP_TOKEN: process.env.WHATSAPP_TOKEN || '',
   WHATSAPP_PHONE_NUMBER_ID: process.env.WHATSAPP_PHONE_NUMBER_ID || '',
