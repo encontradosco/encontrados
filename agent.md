@@ -17,7 +17,7 @@ ayuda a nadie.
 
 ## Contexto del proyecto
 
-- **Aquí** (aqui.online): tablero de estado de personas en emergencias.
+- **aqui.online**: tablero de estado de personas en emergencias.
 - Toda la interfaz y los mensajes al usuario son **en español**.
 - Canales activos: web y API REST. WhatsApp está implementado pero dormido (sin credenciales aún) — no mostrar referencias a WhatsApp en la interfaz hasta que se active. (Telegram fue retirado.)
 - Fotos: solo para reconocimiento facial (AWS Rekognition). NUNCA crear rutas que muestren o sirvan fotos.

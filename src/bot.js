@@ -6,7 +6,7 @@ const { processPhoto, MAX_QUERY_PHOTOS } = require('./facematch');
 const { nullMatcher } = require('./faces');
 
 const HELP = [
-  '🆘 *Aquí* — información de personas en emergencias.',
+  '🆘 *aqui.online* — información de personas en emergencias.',
   '',
   'Comandos:',
   '• BUSCAR <nombre> — consultar el estado de una persona',

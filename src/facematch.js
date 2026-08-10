@@ -16,7 +16,7 @@ const MAX_QUERY_PHOTOS = 3;
 
 function matchText(matchedPerson, similarity, sub) {
   return [
-    `🔔 Aquí — posible coincidencia por reconocimiento facial (${Math.round(similarity)}% de similitud).`,
+    `🔔 aqui.online — posible coincidencia por reconocimiento facial (${Math.round(similarity)}% de similitud).`,
     `Un reporte sobre *${matchedPerson.full_name}* podría corresponder a la persona que buscas.`,
     `Ver reportes: ${env.BASE_URL}/person/${matchedPerson.id}`,
     '',
@@ -36,7 +36,7 @@ async function notifyFaceMatch(store, sub, matchedPerson, similarity) {
   );
   const text = matchText(matchedPerson, similarity, sub);
   if (sub.channel === 'email') {
-    await sendEmail(sub.address, `Posible coincidencia sobre la persona que buscas — Aquí`, text);
+    await sendEmail(sub.address, `Posible coincidencia sobre la persona que buscas — aqui.online`, text);
   } else if (sub.channel === 'whatsapp') {
     await sendWhatsApp(sub.address, text);
   }

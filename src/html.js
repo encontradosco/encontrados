@@ -109,7 +109,7 @@ const RESIZE_SCRIPT = `<script>
 </script>`;
 
 function layout(title, body, meta = {}) {
-  const fullTitle = meta.fullTitle || `${title} — Aquí · Personas y terremoto en Colombia`;
+  const fullTitle = meta.fullTitle || `${title} — aqui.online · Personas y terremoto en Colombia`;
   const description = meta.description || DEFAULT_DESCRIPTION;
   const url = meta.path ? `${env.BASE_URL}${meta.path}` : env.BASE_URL;
   return `<!doctype html>
@@ -119,7 +119,7 @@ function layout(title, body, meta = {}) {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(fullTitle)}</title>
 <meta name="description" content="${esc(description)}">
-<meta property="og:site_name" content="Aquí">
+<meta property="og:site_name" content="aqui.online">
 <meta property="og:type" content="website">
 <meta property="og:locale" content="es_CO">
 <meta property="og:title" content="${esc(fullTitle)}">
@@ -133,7 +133,7 @@ function layout(title, body, meta = {}) {
 <body>
 <div class="tricolor"><span class="y"></span><span class="b"></span><span class="r"></span></div>
 <header>
-  <a class="brand" href="/">📍 Aquí</a>
+  <a class="brand" href="/">📍 aqui.online</a>
   <nav>
     <a href="/buscar">Buscar</a>
     <a href="/report" class="cta">Reportar estado</a>
@@ -144,7 +144,7 @@ function layout(title, body, meta = {}) {
 ${body}
 </main>
 <footer>
-  <p>Aquí — información de personas en emergencias. Las fotos que subas nunca se comparten ni se muestran: solo se usan para reconocimiento facial.</p>
+  <p>aqui.online — información de personas en emergencias. Las fotos que subas nunca se comparten ni se muestran: solo se usan para reconocimiento facial.</p>
   <p><a href="/privacidad">Política de privacidad</a> · <a href="/terminos">Términos de servicio</a></p>
 </footer>
 ${RESIZE_SCRIPT}
