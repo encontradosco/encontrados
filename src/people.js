@@ -128,6 +128,11 @@ function createStore(adapter) {
     return adapter.counts();
   }
 
+  // Deletes the person and, by cascade, their reports, subscriptions and photos.
+  async function deletePerson(id) {
+    return isoRow(await adapter.deletePerson(id));
+  }
+
   return {
     STATUSES,
     getPerson,
@@ -150,6 +155,7 @@ function createStore(adapter) {
     countQueryPhotos,
     photosMissingFaceId,
     counts,
+    deletePerson,
     close: () => adapter.close()
   };
 }
