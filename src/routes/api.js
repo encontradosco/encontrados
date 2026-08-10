@@ -1,7 +1,7 @@
 const express = require('express');
 const env = require('../env');
 const { notifySubscribers, sendVerificationEmail } = require('../notify');
-const { STATUSES } = require('../people');
+const { STATUSES, SOURCES } = require('../people');
 const { processPhoto, backfillUnindexedPhotos, MAX_QUERY_PHOTOS } = require('../facematch');
 
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
@@ -67,8 +67,14 @@ function apiRoutes(store, matcher) {
   );
 
   // POST /api/updates — report status by name (creates the person if new)
-  // { name, status, message?, location?, reporter?, photo?: { base64, content_type } }
+  // { name, status, message?, location?, reporter?, source?, external_id?,
+  //   photo?: { base64, content_type } }
   // The photo is used ONLY for face matching; it is never displayed or shared.
+  // - source: one of 'web'|'whatsapp'|'api'|'aggregator'; defaults to 'api' if
+  //   omitted or not one of those values (e.g. an aggregator identifying itself).
+  // - external_id: the caller's own id for this update. When present, a repeat
+  //   POST with the same external_id updates this same update idempotently
+  //   instead of creating a duplicate — safe to retry or re-sync from upstream.
   router.post(
     '/updates',
     requireKey,
@@ -78,6 +84,11 @@ function apiRoutes(store, matcher) {
       if (!STATUSES.includes(status)) {
         return res.status(400).json({ error: `status debe ser uno de: ${STATUSES.join(', ')}` });
       }
+      const source = SOURCES.includes(req.body.source) ? req.body.source : 'api';
+      const externalId =
+        req.body.external_id != null && String(req.body.external_id).trim()
+          ? String(req.body.external_id).trim()
+          : undefined;
       const { person, created } = await store.findOrCreatePerson(name);
       const update = await store.addUpdate(person.id, {
         status,
@@ -85,14 +96,20 @@ function apiRoutes(store, matcher) {
         location,
         lat: typeof req.body.lat === 'number' ? req.body.lat : parseFloat(req.body.lat),
         lng: typeof req.body.lng === 'number' ? req.body.lng : parseFloat(req.body.lng),
-        source: 'api',
-        reporter
+        source,
+        reporter,
+        externalId
       });
-      notifySubscribers(store, person, update).catch((e) => console.error('[api notify]', e));
+      // With external_id, the upsert may have landed on a different person
+      // than the one just looked up (e.g. the aggregator's name for this
+      // external_id drifted). Resolve who actually owns the timeline row
+      // before notifying, so alerts never go to the wrong subscribers.
+      const owner = update.person_id === person.id ? person : (await store.getPerson(update.person_id)) || person;
+      notifySubscribers(store, owner, update).catch((e) => console.error('[api notify]', e));
       const photo = decodePhoto(req.body.photo);
       if (photo) {
         await processPhoto(store, matcher, {
-          personId: person.id,
+          personId: owner.id,
           kind: 'report',
           updateId: update.id,
           bytes: photo.bytes,
@@ -100,7 +117,7 @@ function apiRoutes(store, matcher) {
         });
       }
       res.status(201).json({
-        person_id: person.id,
+        person_id: owner.id,
         person_created: created,
         update,
         photo_stored: !!photo

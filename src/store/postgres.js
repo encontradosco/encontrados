@@ -36,8 +36,9 @@ async function createPostgresAdapter(connectionString) {
       location TEXT,
       lat DOUBLE PRECISION,
       lng DOUBLE PRECISION,
-      source TEXT NOT NULL CHECK (source IN ('web','whatsapp','api')),
+      source TEXT NOT NULL CHECK (source IN ('web','whatsapp','api','aggregator')),
       reporter TEXT,
+      external_id TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
     CREATE INDEX IF NOT EXISTS idx_updates_person ON updates(person_id, created_at DESC);
@@ -78,6 +79,22 @@ async function createPostgresAdapter(connectionString) {
   await pool.query('ALTER TABLE updates ADD COLUMN IF NOT EXISTS lat DOUBLE PRECISION');
   await pool.query('ALTER TABLE updates ADD COLUMN IF NOT EXISTS lng DOUBLE PRECISION');
 
+  // Integration seam for an external aggregator: external_id lets a caller
+  // re-POST the same update idempotently (see insertUpdate below), and
+  // 'aggregator' is a real source distinct from the app's own web/whatsapp/api.
+  await pool.query('ALTER TABLE updates ADD COLUMN IF NOT EXISTS external_id TEXT');
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_updates_external_id
+      ON updates(external_id) WHERE external_id IS NOT NULL
+  `);
+  // Widen the source CHECK for DBs created before 'aggregator' existed.
+  // Cheap on this table's scale; matches the ADD COLUMN IF NOT EXISTS pattern above.
+  await pool.query('ALTER TABLE updates DROP CONSTRAINT IF EXISTS updates_source_check');
+  await pool.query(`
+    ALTER TABLE updates ADD CONSTRAINT updates_source_check
+      CHECK (source IN ('web','whatsapp','api','aggregator'))
+  `);
+
   const one = async (sql, params) => (await pool.query(sql, params)).rows[0];
   const all = async (sql, params) => (await pool.query(sql, params)).rows;
 
@@ -108,10 +125,24 @@ async function createPostgresAdapter(connectionString) {
       }
       return all('SELECT * FROM people LIMIT 5000');
     },
-    async insertUpdate(personId, { status, message, location, lat, lng, source, reporter }) {
+    // When externalId is set, this is an idempotent upsert keyed on it: a
+    // second POST with the same externalId updates status/message/location/
+    // lat/lng/reporter on the SAME timeline row instead of creating a new one
+    // (the aggregator re-sending its latest snapshot doesn't duplicate the
+    // person's history). Without externalId, behavior is unchanged: a plain
+    // insert every time.
+    async insertUpdate(personId, { status, message, location, lat, lng, source, reporter, externalId }) {
       return one(
-        `INSERT INTO updates (person_id, status, message, location, lat, lng, source, reporter)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+        `INSERT INTO updates (person_id, status, message, location, lat, lng, source, reporter, external_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         ON CONFLICT (external_id) WHERE external_id IS NOT NULL DO UPDATE SET
+           status = EXCLUDED.status,
+           message = EXCLUDED.message,
+           location = EXCLUDED.location,
+           lat = EXCLUDED.lat,
+           lng = EXCLUDED.lng,
+           reporter = EXCLUDED.reporter
+         RETURNING *`,
         [
           personId,
           status,
@@ -120,7 +151,8 @@ async function createPostgresAdapter(connectionString) {
           Number.isFinite(lat) ? lat : null,
           Number.isFinite(lng) ? lng : null,
           source,
-          reporter || null
+          reporter || null,
+          externalId || null
         ]
       );
     },

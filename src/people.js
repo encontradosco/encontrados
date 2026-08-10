@@ -4,6 +4,9 @@ const crypto = require('crypto');
 const { normalize, phoneticKey, matchScore } = require('./names');
 
 const STATUSES = ['safe', 'injured', 'missing', 'deceased', 'unknown'];
+// 'aggregator': updates pushed by an external data aggregator, distinct from
+// the app's own web/whatsapp/api channels (see POST /api/updates).
+const SOURCES = ['web', 'whatsapp', 'api', 'aggregator'];
 
 // Postgres returns Date objects; SQLite returns strings. Present ISO strings everywhere.
 function isoRow(row) {
@@ -42,10 +45,19 @@ function createStore(adapter) {
     return { person: isoRow(person), created: true };
   }
 
-  async function addUpdate(personId, { status, message, location, lat, lng, source, reporter }) {
+  async function addUpdate(personId, { status, message, location, lat, lng, source, reporter, externalId }) {
     if (!STATUSES.includes(status)) throw new Error(`Invalid status: ${status}`);
     return isoRow(
-      await adapter.insertUpdate(personId, { status, message, location, lat, lng, source, reporter })
+      await adapter.insertUpdate(personId, {
+        status,
+        message,
+        location,
+        lat,
+        lng,
+        source,
+        reporter,
+        externalId
+      })
     );
   }
 
@@ -130,6 +142,7 @@ function createStore(adapter) {
 
   return {
     STATUSES,
+    SOURCES,
     getPerson,
     searchPeople,
     findOrCreatePerson,
@@ -154,4 +167,4 @@ function createStore(adapter) {
   };
 }
 
-module.exports = { createStore, STATUSES };
+module.exports = { createStore, STATUSES, SOURCES };
