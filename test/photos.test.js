@@ -314,3 +314,31 @@ test('buscar results replace the form with a Nueva búsqueda button', async (t) 
   assert.match(noneHtml, /No encontramos/);
   assert.match(noneHtml, /data-require-name-or-photos/);
 });
+
+test('photo-only search renders a result page (not a bounce back to the form)', async (t) => {
+  const matcher = fakeMatcher();
+  const { server, base, store } = await startApp(matcher);
+  t.after(() => server.close());
+
+  const { person } = await store.findOrCreatePerson('Camilo Restrepo');
+  const update = await store.addUpdate(person.id, { status: 'safe', source: 'web' });
+  await processPhoto(store, matcher, {
+    personId: person.id, kind: 'report', updateId: update.id,
+    bytes: photoBytes('camilo'), contentType: 'image/jpeg'
+  });
+
+  // photo only, no name at all
+  const fd = new FormData();
+  fd.append('photos', new File([photoBytes('camilo')], 'f.jpg', { type: 'image/jpeg' }));
+  const res = await fetch(`${base}/buscar`, { method: 'POST', body: fd });
+  assert.equal(res.status, 200);
+  const html = await res.text();
+  assert.match(html, /Posibles coincidencias por rostro/);
+  assert.match(html, /Camilo Restrepo/);
+
+  // photo with no match states it explicitly instead of showing nothing
+  const fd2 = new FormData();
+  fd2.append('photos', new File([photoBytes('desconocido')], 'f.jpg', { type: 'image/jpeg' }));
+  const res2 = await fetch(`${base}/buscar`, { method: 'POST', body: fd2 });
+  assert.match(await res2.text(), /no encontramos coincidencias todavía/);
+});

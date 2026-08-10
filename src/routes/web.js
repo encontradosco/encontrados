@@ -185,7 +185,13 @@ document.addEventListener('submit', function (ev) {
           }
           sections.push('<h2>Posibles coincidencias por rostro</h2>' + cards.join(''));
         } else if (matcher.enabled) {
-          sections.push('<p class="subtle">Sin coincidencias por rostro todavía.</p>');
+          sections.push(
+            `<div class="error"><p>🔍 Revisamos ${files.length === 1 ? 'tu foto' : `tus ${files.length} fotos`} contra todos los reportes con foto y <strong>no encontramos coincidencias todavía</strong>.</p><p>Deja tu correo abajo y te avisaremos apenas alguien reporte a esta persona.</p></div>`
+          );
+        } else {
+          sections.push(
+            '<div class="error"><p>El reconocimiento facial no está disponible en este momento. Guardamos tu búsqueda: deja tu correo abajo y te avisaremos.</p></div>'
+          );
         }
       }
 

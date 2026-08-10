@@ -87,8 +87,9 @@ const RESIZE_SCRIPT = `<script>
 
     // 2) upload (30-100%)
     p.set(30, 'Enviando… 0%');
+    var requestUrl = new URL(form.getAttribute('action') || location.href, location.href).href;
     var xhr = new XMLHttpRequest();
-    xhr.open(form.method || 'POST', form.action);
+    xhr.open(form.method || 'POST', requestUrl);
     xhr.upload.onprogress = function (e) {
       if (!e.lengthComputable) return;
       var pct = e.loaded / e.total;
@@ -96,8 +97,16 @@ const RESIZE_SCRIPT = `<script>
     };
     xhr.onload = function () {
       p.set(100, '¡Listo!');
-      if (xhr.responseURL) { window.location.href = xhr.responseURL; return; }
-      document.open(); document.write(xhr.responseText); document.close();
+      // Only navigate when the server actually redirected us somewhere else.
+      // For a page rendered in place (e.g. search results) responseURL equals
+      // the request URL, and navigating there would discard the results.
+      if (xhr.responseURL && xhr.responseURL.split('#')[0] !== requestUrl.split('#')[0]) {
+        window.location.href = xhr.responseURL;
+        return;
+      }
+      document.open();
+      document.write(xhr.responseText);
+      document.close();
     };
     xhr.onerror = function () {
       p.set(100, 'Error de conexión. Revisa tu señal e inténtalo de nuevo.');
