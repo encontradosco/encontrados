@@ -161,7 +161,15 @@ test('diag gives an actionable verdict for each failure mode', async (t) => {
 
   const app2 = await startApp();
   t.after(() => app2.server.close());
-  const diag = await (await fetch(`${app2.base}/api/diag?email=x@ejemplo.com`)).json();
+  // The test send lives on POST /api/diag/test-email now — GET /api/diag is
+  // side-effect-free (see security/diag-reindex-hardening).
+  const diag = await (
+    await fetch(`${app2.base}/api/diag/test-email`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'x@ejemplo.com' })
+    })
+  ).json();
   assert.equal(diag.email.test.ok, false);
   assert.equal(diag.email.test.status, 403);
   assert.match(diag.email.veredicto, /no está verificado|Sender Authentication/);
