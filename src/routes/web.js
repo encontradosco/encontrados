@@ -53,11 +53,10 @@ function remember(res, name, value) {
 
 const RESCUE_PRIVACY = `<p class="privacy">🔒 <strong>La foto no se guarda.</strong> Se compara al instante contra las fotos de las personas reportadas como desaparecidas y se borra de inmediato: no queda almacenada en ningún servidor. Solo conservamos su <em>firma facial</em> (un código que no permite reconstruir la imagen) para poder avisarte si alguien empieza a buscar a esta persona.</p>`;
 
-// Where this list comes from — one small line under the listing heading, not a
-// section of its own competing with it. Kept honest: only the first two
-// actually feed the list today, so nothing here implies data is already
-// flowing from a source that isn't wired up yet.
-const SOURCES_NOTE = `<p class="subtle sources-note">Fuentes de información de desaparecidos: Encontrados.co, Colombia Te Busca. Próximamente: El Espectador, El Tiempo, El País, Semana, Cambio, Medicina Legal, UNGRD, Defensa Civil</p>`;
+// One small line under the listing heading. Kept honest — only Colombia Te
+// Busca is actually integrated today; the rest are listed as "coming soon" so
+// nobody assumes data is already flowing from a source that isn't wired up yet.
+const SOURCES_NOTE = `<p class="sources-note">Fuentes de información de desaparecidos: Encontrados.co, <a href="https://colombiatebusca.com" target="_blank" rel="noopener">Colombia Te Busca</a>. Próximamente: El Espectador, El Tiempo, El País, Semana, Cambio, Medicina Legal, UNGRD, Defensa Civil.</p>`;
 
 // The possible-duplicate finding travels from POST /report to the person page
 // in a short-lived cookie rather than in the URL, and this is the whole reason
@@ -159,7 +158,6 @@ function duplicateNotice({ person, sameName, priorPhoto, candidates }) {
 ${sameNameCard}
 ${otherCards}`;
 }
-
 const REPORT_PRIVACY = `<p class="privacy">📢 Las fotos del reporte <strong>se publican</strong> en la lista de personas desaparecidas, con los puntos de reconocimiento facial marcados sobre el rostro. Es lo que permite que un rescatista reconozca a la persona que tiene al lado. Sube solo fotos que quieras hacer públicas.</p>`;
 
 // Photos stored before thumbnails existed catch up on their own, so nobody has
@@ -474,9 +472,9 @@ ${body}
   router.get('/report', (req, res) => {
     res.send(
       layout(
-        'Reportar desaparecido',
+        'Reporta desaparecido',
         `
-<h1 class="compact">Reportar una persona desaparecida</h1>
+<h1 class="compact">Reporta una persona desaparecida</h1>
 <p class="subtle">Cuando un rescatista tenga a esta persona, verá tus datos de contacto para avisarte.</p>
 <form class="stack compact" method="post" action="/report" enctype="multipart/form-data" data-resize-photos data-require-photos>
   <label class="file-label"><span>📷 Fotos de la persona * (1 a 3 — así la reconocen los rescatistas)</span>
@@ -489,7 +487,7 @@ ${body}
   </span>
   <input name="contact" required value="${esc(readCookie(req, REPORTER_COOKIE))}" placeholder="Tu teléfono o correo para que te contacten *" aria-label="Teléfono o correo de contacto">
   <textarea name="message" rows="2" placeholder="Otros datos que ayuden a reconocerla (opcional)" aria-label="Datos adicionales"></textarea>
-  <button>Reportar desaparecido</button>
+  <button>Reporta desaparecido</button>
 </form>
 <script>
 document.addEventListener('submit', function (ev) {
@@ -504,7 +502,7 @@ document.addEventListener('submit', function (ev) {
 </script>
 ${LOCATION_SCRIPT}`,
         {
-          fullTitle: 'Reportar una persona desaparecida — encontrados.co',
+          fullTitle: 'Reporta una persona desaparecida — encontrados.co',
           description:
             'Reporta a una persona desaparecida con sus fotos, el lugar donde crees que estaba y tu contacto. Los rescatistas podrán reconocerla y avisarte.',
           path: '/report'

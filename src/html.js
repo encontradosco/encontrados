@@ -272,7 +272,7 @@ function layout(title, body, meta = {}) {
   <a class="brand" href="/">❤️‍🩹 encontrados.co</a>
   <nav>
     <a href="/rescate">Soy rescatista</a>
-    <a href="/report" class="cta">Reportar desaparecido</a>
+    <a href="/report" class="cta">Reporta desaparecido</a>
   </nav>
 </header>
 <div class="banner">🇨🇴 <strong>Terremoto en Colombia — lunes 10 de agosto.</strong></div>
@@ -280,7 +280,7 @@ function layout(title, body, meta = {}) {
 ${body}
 </main>
 <footer>
-  <p><span class="credit">Hecho con 💙 por <a href="https://x.com/ni500" target="_blank" rel="noopener">Nicolas Contreras</a> y <a href="https://me.torrenegra.com" target="_blank" rel="noopener">Alexander Torrenegra</a></span> · <a href="https://github.com/torrenegra/encontrados" target="_blank" rel="noopener">Github</a> · <a href="/privacidad">Privacidad</a> · <a href="/terminos">Términos</a></p>
+  <p><span class="credit">Hecho con 💙 por <a href="https://x.com/ni500" target="_blank" rel="noopener">Ni500</a> y <a href="https://me.torrenegra.com" target="_blank" rel="noopener">Torrenegra</a></span> · <a href="https://github.com/torrenegra/encontrados" target="_blank" rel="noopener">Github</a> · <a href="/privacidad">Privacidad</a> · <a href="/terminos">Términos</a></p>
 </footer>
 ${RESIZE_SCRIPT}
 ${TIME_SCRIPT}

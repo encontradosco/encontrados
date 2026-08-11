@@ -353,11 +353,7 @@ button:disabled { opacity: 0.55; cursor: progress; }
 }
 /* One quiet line under the listing heading — it credits the sources without
    competing with the list of people, which is what the page is for. */
-.sources-note {
-  margin: -0.4rem 0 1.1rem;
-  font-size: 0.78rem;
-  line-height: 1.45;
-}
+.sources-note { color: var(--muted); font-size: 0.78rem; margin: -0.4rem 0 0.8rem; }
 
 /* Possible-duplicate warning: a stack of "this may be the same person" cards,
    each led by the face, because the photo is what a reader actually judges. */
