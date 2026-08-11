@@ -18,6 +18,20 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const REPORTER_COOKIE = 'aqui_reporter';
 const EMAIL_COOKIE = 'aqui_email';
 
+// A contact value is often a single clean phone or email — make it tappable.
+// Anything else (mixed text like "correo · teléfono", a name, notes) is left
+// as plain text: we only linkify when we're sure what it is.
+const PHONE_ONLY_RE = /^[+\d][\d\s().-]*$/;
+function contactLink(contact) {
+  const c = String(contact || '').trim();
+  if (!c) return '';
+  if (EMAIL_RE.test(c)) return `<a href="mailto:${esc(c)}">${esc(c)}</a>`;
+  if (PHONE_ONLY_RE.test(c) && (c.match(/\d/g) || []).length >= 7) {
+    return `<a href="tel:${esc(c.replace(/[^\d+]/g, ''))}">${esc(c)}</a>`;
+  }
+  return esc(c);
+}
+
 function readCookie(req, name) {
   const raw = req.headers.cookie || '';
   const hit = raw.split(';').map((c) => c.trim()).find((c) => c.startsWith(name + '='));
@@ -39,7 +53,7 @@ function remember(res, name, value) {
   );
 }
 
-const RESCUE_PRIVACY = `<p class="privacy">🔒 <strong>Tu foto no se guarda.</strong> Se compara al instante contra las fotos de las personas reportadas como desaparecidas y se borra de inmediato: no queda almacenada en ningún servidor. Solo conservamos su <em>firma facial</em> (un código que no permite reconstruir la imagen) para poder avisarte si alguien empieza a buscar a esta persona.</p>`;
+const RESCUE_PRIVACY = `<p class="privacy">🔒 <strong>Gracias a nuestra IA, podemos avisarte si alguien busca a esta persona.</strong> Tu foto se compara al instante contra los reportes de desaparecidos y se borra de inmediato: no queda almacenada en ningún servidor. Solo conservamos su <em>firma facial</em> (un código que no permite reconstruir la imagen) para poder avisarte si alguien la reporta después.</p>`;
 
 const REPORT_PRIVACY = `<p class="privacy">🔒 Las fotos <strong>nunca</strong> se muestran públicamente ni se comparten: solo se usan para que un rescatista pueda reconocer a la persona por su rostro.</p>`;
 
@@ -88,7 +102,9 @@ function webRoutes(store, matcher) {
     <span class="btn-sub">Subes una foto, la comparamos y la borramos al instante</span>
   </a>
   <a class="big-btn search" href="/report">
+    <span class="btn-eyebrow">👪 Buscas a alguien</span>
     <span class="btn-title">📢 Reportar desaparecido</span>
+    <span class="btn-sub">Sube su foto, cuéntanos dónde y cómo contactarte</span>
   </a>
 </div>
 ${searchPrompt}
@@ -228,7 +244,7 @@ ${rescueForm(email)}`
         remember(res, EMAIL_COOKIE, email);
       }
 
-      const { available, matches } = await identifyRescuedPerson(store, matcher, {
+      const { available, matches, photoId } = await identifyRescuedPerson(store, matcher, {
         bytes: req.file.buffer,
         contentType: req.file.mimetype,
         personId: person.id,
@@ -243,28 +259,33 @@ ${rescueForm(email)}`
       if (!available) {
         body = `<div class="error"><p>El reconocimiento facial no está disponible en este momento. Inténtalo de nuevo en unos minutos.</p></div>`;
       } else if (!matches.length) {
-        body = `<div class="error">
+        body = `<div class="notice">
   <p><strong>Nadie ha reportado a esta persona como desaparecida todavía.</strong></p>
-  <p>${
+  ${
     sub
-      ? 'Te avisaremos por correo apenas alguien la busque (confirma tu correo con el enlace que te enviamos).'
-      : 'Vuelve a intentarlo más tarde, o déjanos tu correo para avisarte apenas alguien la busque.'
-  }</p>
+      ? '<p>Te avisaremos por correo apenas alguien la busque (confirma tu correo con el enlace que te enviamos).</p>'
+      : `<p>Déjanos tu correo y te avisamos apenas alguien la busque — no hace falta que vuelvas a subir la foto.</p>
+  <form class="stack compact" method="post" action="/rescate/${person.id}/subscribe">
+    <input type="hidden" name="photoId" value="${esc(photoId)}">
+    <input type="email" name="email" required placeholder="Tu correo" aria-label="Tu correo">
+    <button>🔔 Avísame cuando alguien la busque</button>
+  </form>`
+  }
 </div>`;
       } else {
         body =
           `<h2>${matches.length === 1 ? 'La están buscando' : 'Coincidencias encontradas'}</h2>` +
+          `<div class="warning"><p>⚠️ <strong>Antes de contactar:</strong> confirma la identidad por otro medio — documento, videollamada, un familiar — antes de compartir ubicación o moverte.</p></div>` +
           matches
             .map(
               (m) => `<article class="card">
   <h3><a href="/person/${m.person.id}">${esc(m.person.full_name)}</a></h3>
   <p>👤 Coincidencia facial: <strong>${Math.round(m.similarity)}%</strong></p>
-  ${m.update && m.update.contact ? `<p>📞 <strong>Contacta a quien la busca:</strong> ${esc(m.update.contact)}</p>` : '<p class="subtle">Sin datos de contacto en el reporte.</p>'}
+  ${m.update && m.update.contact ? `<p>📞 <strong>Contacta a quien la busca:</strong> ${contactLink(m.update.contact)}</p>` : '<p class="subtle">Sin datos de contacto en el reporte.</p>'}
   ${m.update && m.update.location ? `<p class="loc">📍 Visto por última vez: ${esc(m.update.location)}</p>` : ''}
 </article>`
             )
-            .join('') +
-          '<p class="subtle">Verifica siempre la identidad antes de entregar información sensible.</p>';
+            .join('');
       }
 
       res.send(
@@ -272,8 +293,57 @@ ${rescueForm(email)}`
           'Resultado',
           `<h1 class="compact">Resultado</h1>
 ${body}
-<p class="notice">🔒 La foto que subiste ya fue borrada. No quedó almacenada en ningún servidor.</p>
+<p class="notice">🔒 Borramos tu foto al instante — y aun así, gracias a nuestra IA, podemos reconocer a esta persona y avisarte si alguien la reporta después.</p>
 <p><a class="big-btn report" href="/rescate">📸 Consultar otra persona</a></p>`
+        )
+      );
+    })
+  );
+
+  // The rescuer's face was already indexed by the /rescate POST above, even
+  // when no match was found and no email was given. This lets them add an
+  // email afterward WITHOUT re-uploading the photo or re-running the facial
+  // match — purely additive: it never touches identifyRescuedPerson or the
+  // matching pipeline in facematch.js, only links the existing photo row to
+  // the new subscription so a later match still finds it.
+  router.post(
+    '/rescate/:personId/subscribe',
+    wrap(async (req, res) => {
+      const person = await store.getPerson(req.params.personId);
+      if (!person) {
+        return res.status(404).send(layout('No encontrado', '<p class="error">Persona no encontrada.</p>'));
+      }
+      const email = (req.body.email || '').trim();
+      if (!EMAIL_RE.test(email)) {
+        return res.status(400).send(
+          layout(
+            'Avísame cuando la busquen',
+            `<h1 class="compact">Ese correo no parece válido</h1>
+<p class="error">Revisa el correo e inténtalo de nuevo.</p>
+<p><a href="/rescate">Volver</a></p>`
+          )
+        );
+      }
+
+      const { sub, needsVerification } = await store.subscribe(person.id, 'email', email);
+      const photoId = req.body.photoId;
+      if (photoId) {
+        await store.setPhotoSubscriptionId(photoId, sub.id);
+      }
+      if (needsVerification) {
+        await sendVerificationEmail(person, sub);
+      }
+      remember(res, EMAIL_COOKIE, email);
+
+      res.send(
+        layout(
+          'Aviso registrado',
+          `<div class="takeover">
+  <div class="takeover-emoji">📬</div>
+  <h1>Listo: confirma tu correo para activar el aviso.</h1>
+  <p>Te escribimos a <strong>${esc(email)}</strong> con un enlace de confirmación. Sin ese paso no podremos avisarte.</p>
+  <p class="subtle"><a href="/">Ir al inicio</a></p>
+</div>`
         )
       );
     })

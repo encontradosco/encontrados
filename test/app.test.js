@@ -85,6 +85,9 @@ test('home lists missing people and offers both actions', async (t) => {
   assert.match(html, /mira quién está buscando la persona que rescataste/i);
   assert.match(html, /Mira quién la está buscando/);
   assert.match(html, /Reportar desaparecido/);
+  // Both home buttons carry the same eyebrow + title + subtitle structure.
+  assert.match(html, /👪 Buscas a alguien/);
+  assert.match(html, /Sube su foto, cuéntanos dónde y cómo contactarte/);
 
   // a reported person shows up in the listing
   const fd = new FormData();
