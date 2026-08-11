@@ -163,8 +163,8 @@ function createStore(adapter) {
     return byPerson;
   }
 
-  async function setPhotoThumbnail(photoId, bytes, contentType) {
-    return adapter.setPhotoThumbnail(photoId, bytes, contentType);
+  async function setPhotoThumbnails(photoId, sizes) {
+    return adapter.setPhotoThumbnails(photoId, sizes);
   }
 
   async function photosMissingDerivatives(limit = 100) {
@@ -217,7 +217,7 @@ function createStore(adapter) {
     addPhoto,
     setPhotoFaceId,
     setPhotoFaceDetail,
-    setPhotoThumbnail,
+    setPhotoThumbnails,
     getPhoto,
     reportPhotoByPerson,
     clearPhotoContent,

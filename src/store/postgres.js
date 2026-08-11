@@ -68,6 +68,7 @@ async function createPostgresAdapter(connectionString) {
       face_detail JSONB,
       thumb BYTEA,
       thumb_type TEXT,
+      thumb_large BYTEA,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
     CREATE INDEX IF NOT EXISTS idx_photos_face ON photos(face_id);
@@ -88,6 +89,7 @@ async function createPostgresAdapter(connectionString) {
   await pool.query('ALTER TABLE photos ADD COLUMN IF NOT EXISTS face_detail JSONB');
   await pool.query('ALTER TABLE photos ADD COLUMN IF NOT EXISTS thumb BYTEA');
   await pool.query('ALTER TABLE photos ADD COLUMN IF NOT EXISTS thumb_type TEXT');
+  await pool.query('ALTER TABLE photos ADD COLUMN IF NOT EXISTS thumb_large BYTEA');
 
   // Integration seam for an external aggregator: external_id lets a caller
   // re-POST the same update idempotently (see insertUpdate below), and
@@ -258,12 +260,11 @@ async function createPostgresAdapter(connectionString) {
         photoId
       ]);
     },
-    async setPhotoThumbnail(photoId, bytes, contentType) {
-      await pool.query('UPDATE photos SET thumb = $1, thumb_type = $2 WHERE id = $3', [
-        bytes,
-        contentType,
-        photoId
-      ]);
+    async setPhotoThumbnails(photoId, { small, large, contentType }) {
+      await pool.query(
+        'UPDATE photos SET thumb = $1, thumb_large = $2, thumb_type = $3 WHERE id = $4',
+        [small, large, contentType, photoId]
+      );
     },
     async getPhoto(id) {
       return one('SELECT * FROM photos WHERE id = $1', [id]);
@@ -276,7 +277,7 @@ async function createPostgresAdapter(connectionString) {
         `SELECT DISTINCT ON (person_id) id, person_id, content_type, face_id, face_detail, thumb_type
          FROM photos
          WHERE kind = 'report' AND person_id = ANY($1) AND octet_length(content) > 0
-         ORDER BY person_id, (thumb IS NULL), (face_detail IS NULL), id`,
+         ORDER BY person_id, (thumb IS NULL), (thumb_large IS NULL), (face_detail IS NULL), id`,
         [personIds]
       );
     },
@@ -288,7 +289,8 @@ async function createPostgresAdapter(connectionString) {
       return all(
         `SELECT * FROM photos
          WHERE kind = 'report' AND octet_length(content) > 0
-           AND (thumb IS NULL OR face_detail IS NULL OR NOT jsonb_exists(face_detail, 'box'))
+           AND (thumb IS NULL OR thumb_large IS NULL
+                OR face_detail IS NULL OR NOT jsonb_exists(face_detail, 'box'))
          ORDER BY id LIMIT $1`,
         [limit]
       );
