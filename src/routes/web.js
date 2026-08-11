@@ -57,6 +57,8 @@ const REPORT_PRIVACY = `<p class="privacy">📢 Las fotos del reporte <strong>se
 // gets frozen mid-sweep, the work is idempotent and simply resumes next time.
 const SWEEP_INTERVAL_MS = 60000;
 const SWEEP_BATCH = 5;
+// Names are a cheap text scan, no image work, so a bigger batch is free.
+const SWEEP_NAMES = 200;
 
 // State per app, not per module: a serverless instance builds exactly one app,
 // so the throttle behaves the same in production — and two apps in one process
@@ -69,8 +71,14 @@ function createSweeper(store, matcher) {
     if (sweeping || now - lastSweep < SWEEP_INTERVAL_MS) return;
     lastSweep = now;
     sweeping = true;
-    backfillPhotoDerivatives(store, matcher, SWEEP_BATCH)
-      .catch((e) => console.error('[fotos] barrido automático falló:', e.message))
+    Promise.all([
+      backfillPhotoDerivatives(store, matcher, SWEEP_BATCH),
+      store.recasePersonNames(SWEEP_NAMES)
+    ])
+      .then(([, names]) => {
+        if (names.fixed.length) console.log(`[nombres] recapitalizados ${names.fixed.length}`);
+      })
+      .catch((e) => console.error('[mantenimiento] barrido automático falló:', e.message))
       .finally(() => {
         sweeping = false;
       });
@@ -186,21 +194,33 @@ ${list}
   // thumbnail or their geometry — once they all have both, it does nothing and
   // costs nothing, however many times it is called.
   router.all(
-    '/fotos/actualizar',
+    ['/mantenimiento', '/fotos/actualizar'],
     wrap(async (req, res) => {
       const limit = Math.min(parseInt(req.query.limit || '100', 10) || 100, 500);
       const r = await backfillPhotoDerivatives(store, matcher, limit);
+      const names = await store.recasePersonNames(500);
       res.send(
         layout(
-          'Actualizar fotos',
-          `<h1 class="compact">Actualizar fotos</h1>
+          'Poner al día',
+          `<h1 class="compact">Poner al día</h1>
+<h2>Nombres</h2>
+${
+  names.fixed.length
+    ? `<p>✅ Recapitalizados <strong>${names.fixed.length}</strong> de ${names.checked} nombres.</p>
+<ul class="subtle">${names.fixed
+        .slice(0, 10)
+        .map((f) => `<li>${esc(f.from)} → <strong>${esc(f.to)}</strong></li>`)
+        .join('')}</ul>`
+    : `<p>✅ Los ${names.checked} nombres ya están bien escritos.</p>`
+}
+<h2>Fotos</h2>
 ${
   r.processed === 0
     ? '<p>✅ <strong>Todas las fotos están al día.</strong> No quedaba nada por hacer.</p>'
     : `<p>✅ Procesadas <strong>${r.processed}</strong> foto(s): ${r.thumbnails} miniatura(s) y ${r.geometry} rostro(s) detectado(s).${
         r.failed ? ` ${r.failed} no se pudo(ieron) procesar.` : ''
       }</p>
-<p><a class="big-btn report" href="/fotos/actualizar?limit=${limit}">Procesar las siguientes ${limit}</a></p>
+<p><a class="big-btn report" href="/mantenimiento?limit=${limit}">Procesar las siguientes ${limit}</a></p>
 <p class="subtle">Repite hasta que diga que están todas al día. También ocurre solo, poco a poco, a medida que la gente visita el inicio.</p>`
 }
 ${
@@ -209,7 +229,7 @@ ${
     : ''
 }
 <p><a href="/">← Volver al inicio</a></p>`,
-          { path: '/fotos/actualizar' }
+          { path: '/mantenimiento' }
         )
       );
     })

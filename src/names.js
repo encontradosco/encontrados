@@ -65,6 +65,16 @@ const LOWERCASE_PARTICLES = new Set([
   'di', 'du', 'van', 'von', 'der', 'den', 'bin', 'al', 'el'
 ]);
 
+// A capital letter in the middle of a word is almost always deliberate
+// ("McDonald", "DiCaprio"). Only rewrite what carries no such signal: all
+// caps ("EMMANUEL"), all lowercase ("hurtado"), or already title case.
+function looksDeliberate(part) {
+  if (part.length < 2) return false;
+  const rest = part.slice(1);
+  if (rest === rest.toLocaleLowerCase('es')) return false; // no inner capital
+  return part !== part.toLocaleUpperCase('es'); // ALL CAPS is not a choice
+}
+
 function capitalizeWord(word) {
   if (!word) return word;
   // Split on hyphens/apostrophes, keeping the separators.
@@ -72,7 +82,7 @@ function capitalizeWord(word) {
     .split(/([-'’])/)
     .map((part, i) => {
       if (i % 2 === 1) return part; // the separator itself
-      if (!part) return part;
+      if (!part || looksDeliberate(part)) return part;
       return part[0].toLocaleUpperCase('es') + part.slice(1).toLocaleLowerCase('es');
     })
     .join('');

@@ -108,6 +108,12 @@ async function createSqliteAdapter(dbPath) {
     async getPerson(id) {
       return getPersonStmt.get(id);
     },
+    async allPeople(limit) {
+      return db.prepare('SELECT id, full_name FROM people ORDER BY id LIMIT ?').all(limit);
+    },
+    async updatePersonName(id, fullName) {
+      db.prepare('UPDATE people SET full_name = ? WHERE id = ?').run(fullName, id);
+    },
     async exactByNormalized(normalized) {
       return db.prepare('SELECT * FROM people WHERE normalized_name = ?').get(normalized);
     },

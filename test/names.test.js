@@ -48,6 +48,19 @@ test('titleCaseName fixes how a name was typed', () => {
   assert.equal(titleCaseName(''), '');
 });
 
+test('a capital inside a word is left alone: it was meant', () => {
+  assert.equal(titleCaseName('Ana McDonald'), 'Ana McDonald');
+  assert.equal(titleCaseName('Leonardo DiCaprio'), 'Leonardo DiCaprio');
+  // ALL CAPS carries no such intent, so it still gets fixed.
+  assert.equal(titleCaseName('ANA MCDONALD'), 'Ana Mcdonald');
+});
+
+test('re-casing an already-cased name changes nothing', () => {
+  for (const name of ['Emmanuel Paul Prieto Travieso', 'María de los Ángeles Gómez', 'Ana McDonald']) {
+    assert.equal(titleCaseName(name), name);
+  }
+});
+
 test('re-casing a name never changes how it matches', () => {
   const typed = 'EMMANUEL PAUL PRIETO TRAVIESO';
   assert.equal(normalize(titleCaseName(typed)), normalize(typed));
