@@ -160,6 +160,14 @@ function apiRoutes(store, matcher) {
           contentType: photo.contentType
         });
       }
+      // "This report was appended to a record that already existed." Read from
+      // where the update ACTUALLY landed, not from the name lookup: with
+      // external_id the upsert can keep its original person while
+      // findOrCreatePerson inserted a fresh row for the drifted name, and
+      // reporting `false` there would be exactly backwards — the caller is told
+      // "new person created" precisely when the report joined an old one.
+      const mergedIntoExisting = !created || String(owner.id) !== String(person.id);
+
       res.status(201).json({
         person_id: owner.id,
         person_created: created,
@@ -169,15 +177,21 @@ function apiRoutes(store, matcher) {
         // false` already meant "appended to an existing record"; this spells
         // that out and adds the face-based collisions a name never sees.
         duplicate: {
-          merged_into_existing_person: !created,
+          merged_into_existing_person: mergedIntoExisting,
           candidates: candidates.map((c) => ({
             person_id: c.person.id,
             full_name: c.person.full_name,
             reason: c.reason,
-            similarity: c.similarity,
+            // Only a FACE match carries a comparable percentage. The name
+            // signal is a fuzzy string score on a different scale entirely, and
+            // shipping both under one key invites `if (similarity >= 80) merge`
+            // — which would collapse "Juan Carlos Pérez" and "Juan Camilo
+            // Pérez", two different missing people, into one record.
+            similarity: c.reason === 'face' ? c.similarity : null,
+            name_score: c.reason === 'name' ? c.similarity / 100 : null,
             url: `${env.BASE_URL}/person/${c.person.id}`
           })),
-          warning: duplicateWarning({ mergedIntoExisting: !created, candidates })
+          warning: duplicateWarning({ mergedIntoExisting, candidates })
         }
       });
     })

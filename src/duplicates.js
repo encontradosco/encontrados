@@ -8,12 +8,13 @@
 // This module is ADVISORY, always. A suspected duplicate NEVER blocks a report
 // and never rejects one: in an emergency the worst possible outcome is a report
 // the system threw away because it believed it already had it. Everything here
-// produces a warning plus the option to merge; the data lands either way.
+// produces a warning; nothing here changes a record, and the data lands either
+// way. Callers run it AFTER the write for the same reason — see POST /report.
 //
 // Two independent signals:
 //   face — the strong one, and the only one a person can verify with their own
-//          eyes. The photo is searched against the indexed report faces BEFORE
-//          it is stored, so it can never match itself.
+//          eyes. Pass `excludePersonId` so the report's own freshly-indexed
+//          photos don't come back as matches on themselves.
 //   name — the weak one, and the one that already acts alone: a name scoring
 //          >= 0.85 is merged by findOrCreatePerson before this module is asked
 //          anything. What is left for us is the band below that, where the
@@ -67,7 +68,7 @@ async function findDuplicateCandidates(
           }
         } catch (e) {
           // Rekognition being down must never break reporting.
-          console.error('[duplicados] la búsqueda facial falló:', e.message);
+          console.error('[duplicados] la búsqueda facial falló:', e && e.message);
         }
       }
     }
@@ -87,21 +88,24 @@ async function findDuplicateCandidates(
       .slice(0, limit);
 
     const photos = await store.reportPhotoByPerson(ranked.map((c) => c.personId));
-    const out = [];
-    for (const c of ranked) {
-      const person = await store.getPerson(c.personId);
-      if (!person) continue;
-      out.push({
-        person,
-        photo: photos.get(c.personId) || null,
-        update: await store.getLatestUpdate(c.personId),
-        reason: c.reason,
-        similarity: Math.round(c.similarity)
-      });
-    }
-    return out;
+    // Hydrated concurrently: the ids are all known here, and awaiting them one
+    // by one added a round trip per candidate to a request a family is waiting on.
+    const out = await Promise.all(
+      ranked.map(async (c) => {
+        const person = await store.getPerson(c.personId);
+        if (!person) return null;
+        return {
+          person,
+          photo: photos.get(c.personId) || null,
+          update: await store.getLatestUpdate(c.personId),
+          reason: c.reason,
+          similarity: Math.round(c.similarity)
+        };
+      })
+    );
+    return out.filter(Boolean);
   } catch (e) {
-    console.error('[duplicados] la detección falló por completo:', e.message);
+    console.error('[duplicados] la detección falló por completo:', e && e.message);
     return [];
   }
 }
