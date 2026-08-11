@@ -19,7 +19,7 @@ const HELP = [
   'Ejemplo: BIEN Juan Pérez: hablé con él @ albergue San José',
   '',
   '📷 Puedes adjuntar una foto poniendo el comando como leyenda de la imagen.',
-  '🔒 Las fotos NUNCA se comparten ni se muestran a nadie: solo se usan para reconocimiento facial y avisarte si hay coincidencia.'
+  '🔒 Gracias a nuestra IA, reconocemos a esta persona por su firma facial y te avisamos si hay coincidencia — tus fotos nunca se comparten ni se muestran a nadie.'
 ].join('\n');
 
 const COMMANDS = [

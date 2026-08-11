@@ -63,7 +63,36 @@ test('a rescuer sees who is looking for the person, with their contact', async (
   assert.match(html, /Camila Rojas/);
   assert.match(html, /Coincidencia facial/);
   assert.match(html, /hermana@ejemplo\.com · 300 111 2222/, 'debe mostrar el contacto de quien la busca');
-  assert.match(html, /ya fue borrada/);
+  assert.match(html, /Borramos tu foto al instante/);
+  assert.match(html, /Antes de contactar/, 'debe mostrar la advertencia de verificar identidad sobre las tarjetas');
+});
+
+test('a phone-only contact renders as a tap-to-call link', async (t) => {
+  const matcher = fakeMatcher();
+  const { server, base } = await startApp(matcher);
+  t.after(() => server.close());
+
+  await reportMissing(base, { name: 'Laura Gómez', contact: '3001234567', face: 'laura' });
+
+  const fd = new FormData();
+  fd.set('photo', new File([photoBytes('laura')], 'rescatada.jpg', { type: 'image/jpeg' }));
+  const html = await (await fetch(`${base}/rescate`, { method: 'POST', body: fd })).text();
+
+  assert.match(html, /<a href="tel:3001234567">3001234567<\/a>/);
+});
+
+test('an email-only contact renders as a mailto link', async (t) => {
+  const matcher = fakeMatcher();
+  const { server, base } = await startApp(matcher);
+  t.after(() => server.close());
+
+  await reportMissing(base, { name: 'Mario Rojas', contact: 'familia@ejemplo.com', face: 'mario' });
+
+  const fd = new FormData();
+  fd.set('photo', new File([photoBytes('mario')], 'rescatada.jpg', { type: 'image/jpeg' }));
+  const html = await (await fetch(`${base}/rescate`, { method: 'POST', body: fd })).text();
+
+  assert.match(html, /<a href="mailto:familia@ejemplo\.com">familia@ejemplo\.com<\/a>/);
 });
 
 test("the rescuer's photo is never stored, only its face signature", async (t) => {

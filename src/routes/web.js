@@ -18,6 +18,20 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const REPORTER_COOKIE = 'aqui_reporter';
 const EMAIL_COOKIE = 'aqui_email';
 
+// A contact value is often a single clean phone or email — make it tappable.
+// Anything else (mixed text like "correo · teléfono", a name, notes) is left
+// as plain text: we only linkify when we're sure what it is.
+const PHONE_ONLY_RE = /^[+\d][\d\s().-]*$/;
+function contactLink(contact) {
+  const c = String(contact || '').trim();
+  if (!c) return '';
+  if (EMAIL_RE.test(c)) return `<a href="mailto:${esc(c)}">${esc(c)}</a>`;
+  if (PHONE_ONLY_RE.test(c) && (c.match(/\d/g) || []).length >= 7) {
+    return `<a href="tel:${esc(c.replace(/[^\d+]/g, ''))}">${esc(c)}</a>`;
+  }
+  return esc(c);
+}
+
 function readCookie(req, name) {
   const raw = req.headers.cookie || '';
   const hit = raw.split(';').map((c) => c.trim()).find((c) => c.startsWith(name + '='));
@@ -39,7 +53,7 @@ function remember(res, name, value) {
   );
 }
 
-const RESCUE_PRIVACY = `<p class="privacy">🔒 <strong>Tu foto no se guarda.</strong> Se compara al instante contra las fotos de las personas reportadas como desaparecidas y se borra de inmediato: no queda almacenada en ningún servidor. Solo conservamos su <em>firma facial</em> (un código que no permite reconstruir la imagen) para poder avisarte si alguien empieza a buscar a esta persona.</p>`;
+const RESCUE_PRIVACY = `<p class="privacy">🔒 <strong>Gracias a nuestra IA, podemos avisarte si alguien busca a esta persona.</strong> Tu foto se compara al instante contra los reportes de desaparecidos y se borra de inmediato: no queda almacenada en ningún servidor. Solo conservamos su <em>firma facial</em> (un código que no permite reconstruir la imagen) para poder avisarte si alguien la reporta después.</p>`;
 
 const REPORT_PRIVACY = `<p class="privacy">🔒 Las fotos <strong>nunca</strong> se muestran públicamente ni se comparten: solo se usan para que un rescatista pueda reconocer a la persona por su rostro.</p>`;
 
@@ -78,7 +92,9 @@ function webRoutes(store, matcher) {
     <span class="btn-sub">Subes una foto, la comparamos y la borramos al instante</span>
   </a>
   <a class="big-btn search" href="/report">
+    <span class="btn-eyebrow">👪 Buscas a alguien</span>
     <span class="btn-title">📢 Reportar desaparecido</span>
+    <span class="btn-sub">Sube su foto, cuéntanos dónde y cómo contactarte</span>
   </a>
 </div>
 ${list}
@@ -180,7 +196,7 @@ ${rescueForm(email)}`
       if (!available) {
         body = `<div class="error"><p>El reconocimiento facial no está disponible en este momento. Inténtalo de nuevo en unos minutos.</p></div>`;
       } else if (!matches.length) {
-        body = `<div class="error">
+        body = `<div class="notice">
   <p><strong>Nadie ha reportado a esta persona como desaparecida todavía.</strong></p>
   <p>${
     sub
@@ -191,17 +207,17 @@ ${rescueForm(email)}`
       } else {
         body =
           `<h2>${matches.length === 1 ? 'La están buscando' : 'Coincidencias encontradas'}</h2>` +
+          `<div class="warning"><p>⚠️ <strong>Antes de contactar:</strong> confirma la identidad por otro medio — documento, videollamada, un familiar — antes de compartir ubicación o moverte.</p></div>` +
           matches
             .map(
               (m) => `<article class="card">
   <h3><a href="/person/${m.person.id}">${esc(m.person.full_name)}</a></h3>
   <p>👤 Coincidencia facial: <strong>${Math.round(m.similarity)}%</strong></p>
-  ${m.update && m.update.contact ? `<p>📞 <strong>Contacta a quien la busca:</strong> ${esc(m.update.contact)}</p>` : '<p class="subtle">Sin datos de contacto en el reporte.</p>'}
+  ${m.update && m.update.contact ? `<p>📞 <strong>Contacta a quien la busca:</strong> ${contactLink(m.update.contact)}</p>` : '<p class="subtle">Sin datos de contacto en el reporte.</p>'}
   ${m.update && m.update.location ? `<p class="loc">📍 Visto por última vez: ${esc(m.update.location)}</p>` : ''}
 </article>`
             )
-            .join('') +
-          '<p class="subtle">Verifica siempre la identidad antes de entregar información sensible.</p>';
+            .join('');
       }
 
       res.send(
@@ -209,7 +225,7 @@ ${rescueForm(email)}`
           'Resultado',
           `<h1 class="compact">Resultado</h1>
 ${body}
-<p class="notice">🔒 La foto que subiste ya fue borrada. No quedó almacenada en ningún servidor.</p>
+<p class="notice">🔒 Borramos tu foto al instante — y aun así, gracias a nuestra IA, podemos reconocer a esta persona y avisarte si alguien la reporta después.</p>
 <p><a class="big-btn report" href="/rescate">📸 Consultar otra persona</a></p>`
         )
       );

@@ -220,6 +220,14 @@ button:disabled { opacity: 0.55; cursor: progress; }
   padding: 0.65rem 0.9rem;
   border-radius: 10px;
 }
+.warning {
+  background: #fdf3d9;
+  border: 1px solid #e8c565;
+  padding: 0.65rem 0.9rem;
+  border-radius: 10px;
+  font-weight: 600;
+  color: var(--ink);
+}
 .privacy {
   background: #f4efe4;
   border: 1px solid var(--border-strong);
