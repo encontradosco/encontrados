@@ -1,7 +1,8 @@
 const crypto = require('crypto');
 const express = require('express');
 const multer = require('multer');
-const { sendVerificationEmail } = require('../notify');
+const env = require('../env');
+const { sendVerificationEmail, sendEmail } = require('../notify');
 const {
   processPhoto,
   identifyRescuedPerson,
@@ -61,6 +62,31 @@ const RESCUE_PRIVACY = `<p class="privacy">🔒 <strong>La foto no se guarda.</s
 // lookup-by-identity form or an intake channel is not a source of faces — so
 // they are not promised here as "coming soon".
 const SOURCES_NOTE = `<p class="sources-note">Fuentes de información de desaparecidos: Encontrados.co y <a href="https://colombiatebusca.com" target="_blank" rel="noopener">Colombia Te Busca</a>, el registro público donde las familias publican fotos y buscan a sus desaparecidos.</p>`;
+
+// What the rescuer can DO with a match depends on what the report carries.
+// Reports typed into the app bring the family's contact; the fichas imported
+// from public registries bring none — and a match that ends in "sin datos de
+// contacto" is a dead end exactly when it matters most. In that case the app
+// flips the ask: the rescuer leaves a number and where the person can be
+// found, and the operators relay the aviso back to the source registry (for
+// Colombia Te Busca, filling their information form on the rescuer's behalf).
+function matchContactBlock(m) {
+  if (m.update && m.update.contact) {
+    // An aviso's contact is another RESCUER, not the family — say so.
+    const label =
+      m.update.source === 'rescate' ? 'Contacto del rescatista que la tiene' : 'Contacta a quien la busca';
+    return `<p>📞 <strong>${label}:</strong> ${esc(m.update.contact)}</p>`;
+  }
+  return `<div class="aviso">
+  <p><strong>La están buscando, pero el reporte no trae un contacto directo.</strong> Déjanos tu número y dónde puede ser localizada: nosotros nos encargamos de hacerle llegar el aviso a quien la busca.</p>
+  <form class="stack compact" method="post" action="/rescate/aviso">
+    <input type="hidden" name="person_id" value="${m.person.id}">
+    <input name="phone" required maxlength="60" placeholder="Tu teléfono (WhatsApp si tienes) *" aria-label="Teléfono del rescatista">
+    <input name="location" required maxlength="160" placeholder="Dónde puede ser localizada la persona *" aria-label="Dónde puede ser localizada la persona">
+    <button class="big-btn report" type="submit">Avisar a quien la busca</button>
+  </form>
+</div>`;
+}
 
 // The possible-duplicate finding travels from POST /report to the person page
 // in a short-lived cookie rather than in the URL, and this is the whole reason
@@ -462,7 +488,7 @@ ${rescueForm(email)}`
               (m) => `<article class="card">
   <h3><a href="/person/${m.person.id}">${esc(m.person.full_name)}</a></h3>
   <p>👤 Coincidencia facial: <strong>${Math.round(m.similarity)}%</strong></p>
-  ${m.update && m.update.contact ? `<p>📞 <strong>Contacta a quien la busca:</strong> ${esc(m.update.contact)}</p>` : '<p class="subtle">Sin datos de contacto en el reporte.</p>'}
+  ${matchContactBlock(m)}
   ${m.update && m.update.location ? `<p class="loc">📍 Visto por última vez: ${esc(m.update.location)}</p>` : ''}
 </article>`
             )
@@ -476,6 +502,82 @@ ${rescueForm(email)}`
           `<h1 class="compact">Resultado</h1>
 ${body}
 <p class="notice">🔒 La foto que subiste ya fue borrada. No quedó almacenada en ningún servidor.</p>
+<p><a class="big-btn report" href="/rescate">🔍 Consultar otra persona</a></p>`
+        )
+      );
+    })
+  );
+
+  // A rescuer matched a ficha that carries no family contact (typically one
+  // imported from a public registry). The aviso lands on the person's
+  // timeline with status 'missing' ON PURPOSE: the person's current status is
+  // the latest update's status, and an unverified sighting must not delist
+  // them. The phone and the person's whereabouts travel in `contact`, which
+  // is never rendered publicly (updateCard drops it; only a future
+  // face-matched rescuer sees it) — the public page must not announce where a
+  // vulnerable person can be found. Operators verify and relay to the source
+  // registry; only a verified reunion flips the status.
+  router.post(
+    '/rescate/aviso',
+    wrap(async (req, res) => {
+      const personId = String(req.body.person_id || '').trim();
+      const phone = String(req.body.phone || '')
+        .trim()
+        .slice(0, 60);
+      const location = String(req.body.location || '')
+        .trim()
+        .slice(0, 160);
+      const person = personId ? await store.getPerson(personId) : null;
+      if (!person || !phone || !location) {
+        return res.status(400).send(
+          layout(
+            'Aviso incompleto',
+            `<h1 class="compact">Falta información</h1>
+<div class="error"><p>Necesitamos tu teléfono y el lugar donde puede ser localizada la persona.</p></div>
+<p><a class="big-btn report" href="/rescate">Volver a intentar</a></p>`
+          )
+        );
+      }
+
+      await store.addUpdate(person.id, {
+        status: 'missing',
+        message:
+          'Aviso de un rescatista: la persona fue vista y sabemos dónde puede ser localizada. Estamos haciendo llegar el aviso a quien la busca.',
+        source: 'rescate',
+        contact: `${phone} · la persona puede ser localizada en: ${location}`
+      });
+
+      // Best effort: the aviso already lives in the timeline; this mail is the
+      // operators' real-time signal to go relay it to the source registry. An
+      // email failure must never lose the aviso. Read live, not from the
+      // module snapshot — same staleness trap /api/diag documents for the
+      // SendGrid key.
+      const avisoEmail = (process.env.AVISO_EMAIL || env.AVISO_EMAIL || '').trim();
+      if (avisoEmail) {
+        try {
+          await sendEmail(
+            avisoEmail,
+            `Aviso de rescatista — ${person.full_name}`,
+            [
+              'Un rescatista informa dónde puede ser localizada una persona reportada como desaparecida.',
+              `Persona: ${person.full_name} (${env.BASE_URL}/person/${person.id})`,
+              `Teléfono del rescatista: ${phone}`,
+              `Dónde puede ser localizada: ${location}`,
+              '',
+              'Siguiente paso: verificar y hacer llegar el aviso a la fuente del reporte (Colombia Te Busca: llenar su formulario de información en nombre del rescatista).'
+            ].join('\n')
+          );
+        } catch (e) {
+          console.error('[rescate:aviso] email failed:', e.message);
+        }
+      }
+
+      res.send(
+        layout(
+          'Aviso enviado',
+          `<h1 class="compact">Aviso enviado ✅</h1>
+<p><strong>Nos encargamos de hacerle llegar tu aviso a quien busca a ${esc(person.full_name)}.</strong> Te contactarán al número que dejaste.</p>
+<p class="subtle">Tu teléfono no se muestra públicamente: solo se comparte para coordinar el reencuentro.</p>
 <p><a class="big-btn report" href="/rescate">🔍 Consultar otra persona</a></p>`
         )
       );

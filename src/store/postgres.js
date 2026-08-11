@@ -37,7 +37,7 @@ async function createPostgresAdapter(connectionString) {
       lat DOUBLE PRECISION,
       lng DOUBLE PRECISION,
       contact TEXT,
-      source TEXT NOT NULL CHECK (source IN ('web','whatsapp','api','aggregator')),
+      source TEXT NOT NULL CHECK (source IN ('web','whatsapp','api','aggregator','rescate')),
       reporter TEXT,
       external_id TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -99,12 +99,13 @@ async function createPostgresAdapter(connectionString) {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_updates_external_id
       ON updates(external_id) WHERE external_id IS NOT NULL
   `);
-  // Widen the source CHECK for DBs created before 'aggregator' existed.
+  // Widen the source CHECK for DBs created before 'aggregator' (and later
+  // 'rescate', a rescuer's aviso via POST /rescate/aviso) existed.
   // Cheap on this table's scale; matches the ADD COLUMN IF NOT EXISTS pattern above.
   await pool.query('ALTER TABLE updates DROP CONSTRAINT IF EXISTS updates_source_check');
   await pool.query(`
     ALTER TABLE updates ADD CONSTRAINT updates_source_check
-      CHECK (source IN ('web','whatsapp','api','aggregator'))
+      CHECK (source IN ('web','whatsapp','api','aggregator','rescate'))
   `);
 
   const one = async (sql, params) => (await pool.query(sql, params)).rows[0];
@@ -324,14 +325,17 @@ async function createPostgresAdapter(connectionString) {
     },
     // Report photos still missing a thumbnail or the detection geometry. A row
     // whose face_detail holds only a crop (thumbnailed while Rekognition was
-    // down) has no "box" yet, so it stays in this set until it gets one.
+    // down) has no "box" yet, so it stays in this set until it gets one — but
+    // a row marked no_face is done: Rekognition already looked and found no
+    // face, so retrying it every run would burn DetectFaces forever.
     // jsonb_exists, not the ? operator: node-pg reads ? as a placeholder.
     async photosMissingDerivatives(limit) {
       return all(
         `SELECT * FROM photos
          WHERE kind = 'report' AND octet_length(content) > 0
            AND (thumb IS NULL OR thumb_large IS NULL
-                OR face_detail IS NULL OR NOT jsonb_exists(face_detail, 'box'))
+                OR face_detail IS NULL
+                OR NOT (jsonb_exists(face_detail, 'box') OR jsonb_exists(face_detail, 'no_face')))
          ORDER BY id LIMIT $1`,
         [limit]
       );
