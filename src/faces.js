@@ -7,6 +7,11 @@
 // A REPORT photo is stored and is shown publicly alongside the detection
 // geometry (see GET /photo/:id and src/html.js facePlate).
 
+// Keeps the pre-rename name ON PURPOSE. This is not branding: it identifies the
+// Rekognition collection holding every face indexed so far. Changing the
+// default would point production at a new, empty collection and silently break
+// matching for everyone already in it. Renaming it means migrating the
+// collection and re-indexing — set FACE_COLLECTION_ID if you ever do.
 const COLLECTION_ID = process.env.FACE_COLLECTION_ID || 'aqui-faces';
 const THRESHOLD = parseFloat(process.env.FACE_MATCH_THRESHOLD || '90');
 

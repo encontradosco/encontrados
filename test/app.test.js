@@ -270,7 +270,7 @@ test('the contact is remembered between reports via a cookie', async (t) => {
   const res = await fetch(`${base}/report`, { method: 'POST', body: fd, redirect: 'manual' });
   assert.equal(res.status, 303);
 
-  const cookie = res.headers.getSetCookie().find((c) => c.startsWith('aqui_reporter='));
+  const cookie = res.headers.getSetCookie().find((c) => c.startsWith('encontrados_reporter='));
   assert.ok(cookie, 'no se guardó la cookie de contacto');
 
   const form = await fetch(`${base}/report`, { headers: { cookie: cookie.split(';')[0] } });
