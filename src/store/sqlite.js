@@ -60,6 +60,8 @@ async function createSqliteAdapter(dbPath) {
       content_type TEXT NOT NULL,
       face_id TEXT,
       face_detail TEXT,
+      thumb BLOB,
+      thumb_type TEXT,
       created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
     );
     CREATE INDEX IF NOT EXISTS idx_photos_face ON photos(face_id);
@@ -75,10 +77,13 @@ async function createSqliteAdapter(dbPath) {
   try {
     db.exec('ALTER TABLE updates ADD COLUMN contact TEXT');
   } catch { /* already exists */ }
-  // Detection geometry (bounding box + landmarks) for the public overlay.
-  try {
-    db.exec('ALTER TABLE photos ADD COLUMN face_detail TEXT');
-  } catch { /* already exists */ }
+  // Detection geometry (bounding box + landmarks) for the public overlay, and
+  // the face thumbnail the public listing loads instead of the full photo.
+  for (const col of ['face_detail TEXT', 'thumb BLOB', 'thumb_type TEXT']) {
+    try {
+      db.exec(`ALTER TABLE photos ADD COLUMN ${col}`);
+    } catch { /* already exists */ }
+  }
   // Older dev databases: add external_id if missing. Note: SQLite can't widen
   // an existing CHECK constraint via ALTER TABLE, so a pre-existing local
   // ./data/aqui.db still rejects source='aggregator' until it's recreated
@@ -239,28 +244,38 @@ async function createSqliteAdapter(dbPath) {
         photoId
       );
     },
+    async setPhotoThumbnail(photoId, bytes, contentType) {
+      db.prepare('UPDATE photos SET thumb = ?, thumb_type = ? WHERE id = ?').run(
+        bytes,
+        contentType,
+        photoId
+      );
+    },
     async getPhoto(id) {
       return db.prepare('SELECT * FROM photos WHERE id = ?').get(id);
     },
     // One photo per person for the public listing: the earliest report photo
-    // that still has bytes and, preferably, detection geometry to draw.
+    // that still has bytes and, preferably, a thumbnail to show.
     async reportPhotosForPeople(personIds) {
       if (!personIds.length) return [];
       const marks = personIds.map(() => '?').join(',');
       return db
         .prepare(
-          `SELECT id, person_id, content_type, face_id, face_detail FROM photos
+          `SELECT id, person_id, content_type, face_id, face_detail, thumb_type FROM photos
            WHERE kind = 'report' AND person_id IN (${marks}) AND length(content) > 0
-           ORDER BY person_id, (face_detail IS NULL), id`
+           ORDER BY person_id, (thumb IS NULL), (face_detail IS NULL), id`
         )
         .all(...personIds);
     },
-    // Report photos indexed before the geometry was captured.
-    async photosMissingFaceDetail(limit) {
+    // Report photos still missing a thumbnail or the detection geometry. A row
+    // whose face_detail holds only a crop (thumbnailed while Rekognition was
+    // down) has no "box" yet, so it stays in this set until it gets one.
+    async photosMissingDerivatives(limit) {
       return db
         .prepare(
           `SELECT * FROM photos
-           WHERE face_detail IS NULL AND kind = 'report' AND length(content) > 0
+           WHERE kind = 'report' AND length(content) > 0
+             AND (thumb IS NULL OR face_detail IS NULL OR face_detail NOT LIKE '%"box"%')
            ORDER BY id LIMIT ?`
         )
         .all(limit);

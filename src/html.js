@@ -39,13 +39,40 @@ const LANDMARK_LABEL = {
 };
 
 function pct(n) {
-  return `${(Math.min(1, Math.max(0, Number(n) || 0)) * 100).toFixed(3)}%`;
+  const v = Number(n);
+  return `${(Number.isFinite(v) ? v * 100 : 0).toFixed(3)}%`;
 }
 
+// The overlay coordinates are ratios of the ORIGINAL photo, and the thumbnail
+// is a crop of it — so they have to be moved into the crop's own coordinate
+// space before they land anywhere near the right pixel.
+function toCropSpace(detail) {
+  const c = detail.crop;
+  if (!c || !c.w || !c.h) return detail;
+  const mapX = (x) => (x - c.l) / c.w;
+  const mapY = (y) => (y - c.t) / c.h;
+  return {
+    ...detail,
+    box: detail.box
+      ? { l: mapX(detail.box.l), t: mapY(detail.box.t), w: detail.box.w / c.w, h: detail.box.h / c.h }
+      : null,
+    // A landmark can fall outside the crop on an off-centre face; pinning it to
+    // the edge would be a lie, so drop it.
+    points: (detail.points || [])
+      .map((p) => ({ ...p, x: mapX(p.x), y: mapY(p.y) }))
+      .filter((p) => p.x >= 0 && p.x <= 1 && p.y >= 0 && p.y <= 1)
+  };
+}
+
+// The listing loads the face thumbnail, never the full photo, and only once
+// PHOTO_SCRIPT decides the visitor's connection can afford it. Without
+// JavaScript the <noscript> copy loads normally.
 function facePlate(photo, personName) {
-  if (!photo) return '';
-  const detail = photo.face_detail;
+  if (!photo || !photo.thumb_type) return '';
+  const detail = photo.face_detail ? toCropSpace(photo.face_detail) : null;
   const alt = `Foto del reporte de ${personName}`;
+  const src = `/photo/${photo.id}/thumb`;
+
   let overlay = '';
   if (detail && detail.box) {
     const { l, t, w, h } = detail.box;
@@ -63,11 +90,65 @@ function facePlate(photo, personName) {
       h
     )}">${confidence}</div>${points}`;
   }
-  return `<div class="face${overlay ? '' : ' plain'}">
-  <img src="/photo/${photo.id}" alt="${esc(alt)}" loading="lazy" decoding="async">
+
+  // The <img> is built by PHOTO_SCRIPT, not rendered here: an <img> that is
+  // hidden with display:none never satisfies loading="lazy" in Chrome, so it
+  // would sit there forever without fetching anything.
+  return `<div class="face pending" data-src="${src}" data-alt="${esc(alt)}">
+  <button type="button" class="face-load">📷 Ver foto</button>
+  <noscript><img class="face-noscript" src="${src}" alt="${esc(alt)}" width="240" height="240"></noscript>
   ${overlay}
 </div>`;
 }
+
+// Photos are the heaviest thing on this page, and the people refreshing it are
+// often on one bar of signal. Load the thumbnails only when the connection can
+// clearly afford them; otherwise leave a button so it stays the visitor's call.
+//
+// Deliberately written to survive toString(): it is unit-tested here in Node
+// and shipped to the browser inside PHOTO_SCRIPT, so there is only ever one
+// copy of the rule. Keep it self-contained — no closures, no modern syntax.
+function thumbnailsAreAffordable(c) {
+  if (!c) return true; // nothing to go on: don't punish the visitor
+  if (c.saveData) return false; // they explicitly asked to save data
+  var t = c.effectiveType || '';
+  if (t === 'slow-2g' || t === '2g') return false;
+  if (t === '3g') return (c.downlink || 0) >= 0.5;
+  return true;
+}
+
+const PHOTO_SCRIPT = `<script>
+(function () {
+  var affordable = ${thumbnailsAreAffordable.toString()};
+
+  function show(face) {
+    var src = face.getAttribute('data-src');
+    if (!src || face.querySelector('img:not(.face-noscript)')) return;
+    face.classList.add('loading');
+    var img = document.createElement('img');
+    img.alt = face.getAttribute('data-alt') || '';
+    img.width = 240;
+    img.height = 240;
+    img.loading = 'lazy';
+    img.decoding = 'async';
+    img.addEventListener('load', function () {
+      face.classList.remove('pending');
+      face.classList.remove('loading');
+    });
+    img.addEventListener('error', function () { face.classList.remove('loading'); });
+    img.src = src;
+    face.insertBefore(img, face.firstChild);
+  }
+
+  var faces = document.querySelectorAll('.face.pending');
+  var ok = affordable(navigator.connection || navigator.mozConnection || navigator.webkitConnection);
+  Array.prototype.forEach.call(faces, function (face) {
+    if (ok) return show(face);
+    var btn = face.querySelector('.face-load');
+    if (btn) btn.addEventListener('click', function () { show(face); });
+  });
+})();
+</script>`;
 
 // Client-side downscale + XHR upload with a visible progress bar. Emergency
 // users on weak connections must see that something is happening.
@@ -198,10 +279,11 @@ function layout(title, body, meta = {}) {
 ${body}
 </main>
 <footer>
-  <p><a href="/privacidad">Política de privacidad</a> · <a href="/terminos">Términos de servicio</a></p>
+  <p><span class="credit">Hecho con 💙 por <a href="https://x.com/ni500" target="_blank" rel="noopener">Nicolas Contreras</a> y <a href="https://me.torrenegra.com" target="_blank" rel="noopener">Alexander Torrenegra</a></span> · <a href="/privacidad">Política de privacidad</a> · <a href="/terminos">Términos de servicio</a></p>
 </footer>
 ${RESIZE_SCRIPT}
 ${TIME_SCRIPT}
+${PHOTO_SCRIPT}
 </body>
 </html>`;
 }
@@ -324,6 +406,7 @@ module.exports = {
   fmtDate,
   timeTag,
   facePlate,
+  thumbnailsAreAffordable,
   PRIVACY_NOTE,
   LOCATION_SCRIPT
 };

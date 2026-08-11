@@ -66,6 +66,8 @@ async function createPostgresAdapter(connectionString) {
       content_type TEXT NOT NULL,
       face_id TEXT,
       face_detail JSONB,
+      thumb BYTEA,
+      thumb_type TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
     CREATE INDEX IF NOT EXISTS idx_photos_face ON photos(face_id);
@@ -81,8 +83,11 @@ async function createPostgresAdapter(connectionString) {
   await pool.query('ALTER TABLE updates ADD COLUMN IF NOT EXISTS lat DOUBLE PRECISION');
   await pool.query('ALTER TABLE updates ADD COLUMN IF NOT EXISTS lng DOUBLE PRECISION');
   await pool.query('ALTER TABLE updates ADD COLUMN IF NOT EXISTS contact TEXT');
-  // Detection geometry (bounding box + landmarks) for the public overlay.
+  // Detection geometry (bounding box + landmarks) for the public overlay, and
+  // the face thumbnail the public listing loads instead of the full photo.
   await pool.query('ALTER TABLE photos ADD COLUMN IF NOT EXISTS face_detail JSONB');
+  await pool.query('ALTER TABLE photos ADD COLUMN IF NOT EXISTS thumb BYTEA');
+  await pool.query('ALTER TABLE photos ADD COLUMN IF NOT EXISTS thumb_type TEXT');
 
   // Integration seam for an external aggregator: external_id lets a caller
   // re-POST the same update idempotently (see insertUpdate below), and
@@ -253,26 +258,37 @@ async function createPostgresAdapter(connectionString) {
         photoId
       ]);
     },
+    async setPhotoThumbnail(photoId, bytes, contentType) {
+      await pool.query('UPDATE photos SET thumb = $1, thumb_type = $2 WHERE id = $3', [
+        bytes,
+        contentType,
+        photoId
+      ]);
+    },
     async getPhoto(id) {
       return one('SELECT * FROM photos WHERE id = $1', [id]);
     },
     // One photo per person for the public listing: the earliest report photo
-    // that still has bytes and, preferably, detection geometry to draw.
+    // that still has bytes and, preferably, a thumbnail to show.
     async reportPhotosForPeople(personIds) {
       if (!personIds.length) return [];
       return all(
-        `SELECT DISTINCT ON (person_id) id, person_id, content_type, face_id, face_detail
+        `SELECT DISTINCT ON (person_id) id, person_id, content_type, face_id, face_detail, thumb_type
          FROM photos
          WHERE kind = 'report' AND person_id = ANY($1) AND octet_length(content) > 0
-         ORDER BY person_id, (face_detail IS NULL), id`,
+         ORDER BY person_id, (thumb IS NULL), (face_detail IS NULL), id`,
         [personIds]
       );
     },
-    // Report photos indexed before the geometry was captured.
-    async photosMissingFaceDetail(limit) {
+    // Report photos still missing a thumbnail or the detection geometry. A row
+    // whose face_detail holds only a crop (thumbnailed while Rekognition was
+    // down) has no "box" yet, so it stays in this set until it gets one.
+    // jsonb_exists, not the ? operator: node-pg reads ? as a placeholder.
+    async photosMissingDerivatives(limit) {
       return all(
         `SELECT * FROM photos
-         WHERE face_detail IS NULL AND kind = 'report' AND octet_length(content) > 0
+         WHERE kind = 'report' AND octet_length(content) > 0
+           AND (thumb IS NULL OR face_detail IS NULL OR NOT jsonb_exists(face_detail, 'box'))
          ORDER BY id LIMIT $1`,
         [limit]
       );

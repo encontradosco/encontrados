@@ -33,10 +33,22 @@ ayuda a nadie.
     sobreviven los metadatos faciales.
   - **Reporte de desaparecido** (`kind='report'`): la foto SÍ se guarda y SÍ se
     publica, en la lista de personas desaparecidas, con los puntos de detección
-    facial dibujados encima (`GET /photo/:id` + `facePlate()` en `src/html.js`).
-    Es el propósito del reporte: que un rescatista reconozca a la persona.
-  - `GET /photo/:id` sirve únicamente fotos `kind='report'`. Nunca ampliarlo a
-    fotos de rescatistas.
+    facial dibujados encima (`facePlate()` en `src/html.js`). Es el propósito
+    del reporte: que un rescatista reconozca a la persona.
+  - `GET /photo/:id` (foto completa) y `GET /photo/:id/thumb` (miniatura del
+    rostro) sirven únicamente fotos `kind='report'`. Nunca ampliarlos a fotos
+    de rescatistas.
+- La lista pública NUNCA carga la foto completa: usa la miniatura cuadrada de
+  240px recortada sobre el rostro (`src/thumbs.js`), ~3 KB en vez de cientos.
+  Y ni siquiera esa se descarga sola si la conexión es mala: la regla vive en
+  `thumbnailsAreAffordable()` (`src/html.js`), que se testea en Node y se
+  manda al navegador con `toString()` — hay una sola copia, no la dupliques.
+  En 2G, 3G lento o con ahorro de datos se muestra un botón «Ver foto» y la
+  decisión es del visitante. Mucha gente consulta esto con una barra de señal.
+- `POST /api/reindex` es idempotente y pone al día las fotos ya guardadas
+  (miniatura + geometría). La geometría de una foto ya indexada se saca con
+  `DetectFaces`, nunca con `IndexFaces`: reindexarla duplicaría el rostro en
+  la colección.
 - Producción: Vercel (función serverless única + Postgres/Neon). Dev/tests: SQLite.
 - Remitente de correo fijo: `a@torrenegra.com` (SendGrid).
 - Suscripciones por correo requieren verificación; toda alerta lleva enlace de baja.
