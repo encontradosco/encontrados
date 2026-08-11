@@ -1,0 +1,45 @@
+name: Proponer una mejora
+description: Una idea para que la aplicación le sirva mejor a quien busca o a quien rescata
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Las mejores propuestas acá empiezan por **a quién le sirve y para qué**, no por
+        la solución técnica. Si ya sabes cómo implementarla, cuéntalo también — pero
+        primero el problema.
+
+  - type: textarea
+    id: problema
+    attributes:
+      label: Qué problema resuelve
+      description: Para quién — rescatista, familia que busca, alguien del equipo — y qué le cuesta hoy.
+      placeholder: |
+        Un rescatista que ya encontró a la persona no tiene cómo avisar que apareció,
+        así que la ficha se queda marcada como desaparecida y otros la siguen buscando.
+    validations:
+      required: true
+
+  - type: textarea
+    id: propuesta
+    attributes:
+      label: Qué propones
+      description: Tu idea. Si hay más de un camino, dilos y qué cuesta cada uno — eso ayuda a decidir.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternativas
+    attributes:
+      label: Qué más consideraste
+      description: Opcional. Qué otra cosa podría resolverlo y por qué esta te parece mejor.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: alcance
+    attributes:
+      label: Antes de mandar
+      options:
+        - label: Esto no expone datos de personas reales ni cambia quién puede ver qué, o si lo hace, lo dije explícitamente arriba.
+          required: true

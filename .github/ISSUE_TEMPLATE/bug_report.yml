@@ -1,0 +1,54 @@
+name: Reportar un error
+description: Algo no funciona como debería en encontrados.co
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Gracias por reportarlo.
+
+        ⚠️ **Si encontraste un problema de seguridad o privacidad** — datos que no
+        deberían verse, borrado que no borra, acceso que no debería existir — **no
+        lo escribas acá.** Sigue [SECURITY.md](https://github.com/torrenegra/encontrados/blob/main/SECURITY.md);
+        un issue público le da la pista a cualquiera antes de que alcancemos a arreglarlo.
+
+        🚫 **Nunca pegues datos de una persona real** — nombres, teléfonos, correos,
+        documentos o fotos. Descríbelo sin los datos adentro.
+
+  - type: textarea
+    id: que-paso
+    attributes:
+      label: Qué pasó
+      description: Qué esperabas y qué pasó en su lugar.
+      placeholder: Al subir una foto desde el celular, el botón se queda cargando y nunca responde.
+    validations:
+      required: true
+
+  - type: textarea
+    id: pasos
+    attributes:
+      label: Cómo reproducirlo
+      description: Los pasos exactos. Si depende de una foto o un reporte específico, dilo sin incluir los datos.
+      placeholder: |
+        1. Entrar a /rescate desde un celular
+        2. Tomar una foto con la cámara
+        3. Tocar "Buscar"
+    validations:
+      required: true
+
+  - type: input
+    id: donde
+    attributes:
+      label: Dónde
+      description: Dispositivo, navegador y — si es visual — el ancho de pantalla.
+      placeholder: iPhone 13, Safari, 390px
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Algo más
+      description: Pantallazos (sin datos personales), mensajes de error, lo que sea que ayude.
+    validations:
+      required: false
