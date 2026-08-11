@@ -118,6 +118,46 @@ test('every uploaded photo is searched, not just the first', async (t) => {
   assert.equal(found.length, 1, 'el retrato #2 debe encontrar el duplicado');
 });
 
+// POST /api/updates runs the duplicate check BEFORE the photo is indexed, so
+// on a cold invocation it is the first face call of the request — and
+// `enabled` reads false until something wakes the lazy matcher. The check must
+// wake it itself, or a bulk sync into a fresh instance silently loses every
+// duplicate advisory.
+test('the duplicate check wakes a matcher that is still asleep', async (t) => {
+  const store = createStore(await createSqliteAdapter(':memory:'));
+  t.after(() => store.close());
+  const real = fakeMatcher();
+  let awake = false;
+  const matcher = {
+    get enabled() {
+      return awake;
+    },
+    async ensureReady() {
+      awake = true;
+    },
+    searchByImage: real.searchByImage.bind(real),
+    indexFace: real.indexFace.bind(real),
+    detectFace: real.detectFace.bind(real)
+  };
+
+  const { person } = await store.findOrCreatePerson('Juan Carlos Pérez');
+  const photo = await store.addPhoto({
+    personId: person.id,
+    kind: 'report',
+    content: Buffer.from('foto'),
+    contentType: 'image/jpeg'
+  });
+  const { faceId } = await real.indexFace();
+  await store.setPhotoFaceId(photo.id, faceId);
+
+  const found = await findDuplicateCandidates(store, matcher, {
+    name: 'Persona Sin Identificar',
+    photos: [Buffer.from('retrato')]
+  });
+
+  assert.equal(found.length, 1, 'el duplicado debe encontrarse aunque el matcher llegara dormido');
+});
+
 test("a rescuer's face is never reported as a duplicate report", async (t) => {
   const store = createStore(await createSqliteAdapter(':memory:'));
   t.after(() => store.close());

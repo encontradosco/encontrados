@@ -467,3 +467,44 @@ test('viewing the home page catches old photos up on its own', async (t) => {
   const photo = await store.getPhoto(1);
   assert.ok(photo.thumb && photo.thumb.length, 'la miniatura debe haberse generado sola');
 });
+
+// A cold serverless invocation used to tell the rescuer "reconocimiento facial
+// no disponible": `enabled` is a getter over the lazily-built real matcher and
+// reads false until something initializes it. The rescue flow must wake it —
+// the very first rescuer to reach a fresh instance is exactly the one who must
+// not be turned away.
+test('a rescue photo arriving before the matcher is initialized still finds the match', async (t) => {
+  const real = fakeMatcher();
+  let awake = false;
+  const lazyMatcher = {
+    get enabled() {
+      return awake;
+    },
+    async ensureReady() {
+      awake = true;
+    },
+    indexFace: real.indexFace.bind(real),
+    detectFace: real.detectFace.bind(real),
+    searchByImage: real.searchByImage.bind(real)
+  };
+
+  const { server, base } = await startApp(lazyMatcher);
+  t.after(() => server.close());
+
+  await reportMissing(base, {
+    name: 'Camila Rojas',
+    contact: 'hermana@ejemplo.com · 300 111 2222',
+    face: 'camila'
+  });
+
+  // The rescue request lands on a NEW cold instance: the report above woke
+  // this matcher, so put it back to sleep before the rescuer arrives.
+  awake = false;
+
+  const fd = new FormData();
+  fd.set('photo', new File([await photoBytes('camila')], 'rescatada.jpg', { type: 'image/jpeg' }));
+  const html = await (await fetch(`${base}/rescate`, { method: 'POST', body: fd })).text();
+
+  assert.doesNotMatch(html, /no está disponible/);
+  assert.match(html, /Camila Rojas/, 'la coincidencia debe encontrarse aunque el matcher llegara dormido');
+});
