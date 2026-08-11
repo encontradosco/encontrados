@@ -300,8 +300,14 @@ h1.compact .subtle { font-family: var(--font-sans); font-weight: 400; font-size:
 
 form.stack { display: grid; gap: 0.6rem; margin: 1rem 0; }
 form.stack.compact { gap: 0.5rem; margin: 0.6rem 0; }
-.file-label { display: flex; flex-direction: column; gap: 0.2rem; }
-.file-label span { font-weight: 400; font-size: 0.85rem; color: var(--muted); }
+/* .field-label: same anatomy as .file-label, for every text field. The label
+   stays visible while typing — a placeholder vanishes exactly when a stressed
+   reporter needs to double-check what goes where — and the placeholder is
+   demoted to an example. */
+.file-label,
+.field-label { display: flex; flex-direction: column; gap: 0.2rem; }
+.file-label span,
+.field-label > span:first-child { font-weight: 400; font-size: 0.85rem; color: var(--muted); }
 
 input, select, textarea, button {
   font: inherit;
@@ -313,7 +319,9 @@ input, select, textarea, button {
   background: var(--surface);
   color: var(--ink);
 }
-input::placeholder, textarea::placeholder { color: #9a978d; }
+/* Was #9a978d — 2.9:1 on white, below the 4.5:1 AA floor. Now that visible
+   labels carry the meaning, placeholders are just examples, but still legible. */
+input::placeholder, textarea::placeholder { color: var(--muted); }
 input:focus, select:focus, textarea:focus {
   outline: none;
   border-color: var(--accent);
