@@ -206,8 +206,10 @@ function webRoutes(store, matcher) {
   router.get(
     '/',
     wrap(async (req, res) => {
-      const missing = await store.getMissingPeople(50);
-      const reunited = await store.getReunitedCount();
+      const [missing, reunited] = await Promise.all([
+        store.getMissingPeople(50),
+        store.getReunitedCount()
+      ]);
       // The only number on this page that is good news. It is also the honest
       // counterweight to the missing count right next to it.
       const reunitedNote = reunited

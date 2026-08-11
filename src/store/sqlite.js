@@ -176,6 +176,9 @@ async function createSqliteAdapter(dbPath) {
     // later confirmed alive stayed on the list forever: their family sees them
     // still listed as missing, and rescuers keep looking for someone who is
     // already home.
+    // The `reports` count this query used to return is gone: nothing rendered
+    // it, and keeping it meant a second full GROUP BY over every update on the
+    // busiest page of the site.
     async missingPeople(limit) {
       return db
         .prepare(
@@ -183,13 +186,10 @@ async function createSqliteAdapter(dbPath) {
              SELECT u.person_id, u.status, u.created_at,
                     ROW_NUMBER() OVER (PARTITION BY u.person_id ORDER BY u.created_at DESC, u.id DESC) AS rn
              FROM updates u
-           ), reports AS (
-             SELECT person_id, COUNT(*) AS n FROM updates GROUP BY person_id
            )
-           SELECT p.id, p.full_name, l.status, l.created_at AS last_report, r.n AS reports
+           SELECT p.id, p.full_name, l.status, l.created_at AS last_report
            FROM people p
            JOIN latest l ON l.person_id = p.id AND l.rn = 1
-           JOIN reports r ON r.person_id = p.id
            WHERE l.status = 'missing'
            ORDER BY l.created_at DESC
            LIMIT ?`

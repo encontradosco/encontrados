@@ -327,7 +327,7 @@ button.secondary:hover { background: #f4efe4; border-color: var(--accent); color
 button:disabled { opacity: 0.55; cursor: progress; }
 
 /* The one good-news number on the home page. */
-.reunited-count { color: var(--ok, #2f7d3a); font-weight: 600; white-space: nowrap; }
+.reunited-count { color: #4a7c59; font-weight: 600; white-space: nowrap; }
 
 .search-row { display: flex; gap: 0.5rem; }
 .search-row input { flex: 1; }
