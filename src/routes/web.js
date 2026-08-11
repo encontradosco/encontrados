@@ -67,7 +67,7 @@ const SOURCES_SECTION = `
   <p class="subtle">Seguimos añadiendo más fuentes.</p>
 </section>
 <section class="notice sources-cta">
-  <p>¿Tienes más datos, o quieres acceso al API para reportar? Avísanos: <a href="https://github.com/torrenegra/encontrados/issues" target="_blank" rel="noopener">abre un issue en GitHub</a> · escríbele a Alex (<!-- HANDLE_ALEX: pendiente, red social de Alex Torrenegra -->[red de Alex — pendiente]) · o a Nic (<!-- HANDLE_NIC: pendiente, red social de Nicolas Contreras -->[red de Nic — pendiente]).</p>
+  <p>¿Tienes más datos, o quieres acceso al API para reportar? Avísanos: <a href="https://github.com/torrenegra/encontrados/issues" target="_blank" rel="noopener">abre un issue en GitHub</a> · escríbele a Alex (<a href="https://x.com/torrenegra" target="_blank" rel="noopener">@torrenegra</a>) · o a Nic (<a href="https://x.com/ni500" target="_blank" rel="noopener">@ni500</a>).</p>
 </section>`;
 
 const REPORT_PRIVACY = `<p class="privacy">📢 Las fotos del reporte <strong>se publican</strong> en la lista de personas desaparecidas, con los puntos de reconocimiento facial marcados sobre el rostro. Es lo que permite que un rescatista reconozca a la persona que tiene al lado. Sube solo fotos que quieras hacer públicas.</p>`;
