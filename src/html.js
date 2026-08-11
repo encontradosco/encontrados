@@ -253,6 +253,25 @@ const WRITE_US = `<a href="https://x.com/ni500" target="_blank" rel="noopener">E
 const OUTREACH = `<p class="outreach">¿Deseas contribuir? Puedes usar tu agente de AI para hacer crawling de redes sociales y encontrar reportes de desaparecidos. ${WRITE_US}.</p>
   <p class="outreach">¿Eres parte del equipo de ColombiaTeBusca? Puedes integrar nuestra tech directamente o podemos integrarla por Uds. ${WRITE_US}.</p>`;
 
+// Money, last of all. People do ask where to donate, and the honest answer is
+// "not here" — so the line says that first and then hands over three labelled
+// destinations on Vaki, the crowdfunding platform, named in plain text so
+// nobody clicks without knowing where they land.
+//
+// Three constraints shaped it, in this order:
+//   1. It must never compete with "Reporta desaparecido". Someone looking for
+//      their sister cannot meet a money button first, so this sits at the very
+//      bottom, under the credits and under the two asks, in the same quiet
+//      .outreach style — no new CSS, no new weight, nothing to notice unless
+//      you were looking for it.
+//   2. The country is LABELLED, never detected. Geolocation breaks on a VPN
+//      and, worse, on the diaspora — a good share of the people reporting from
+//      this site do it from +34 and +54 numbers, and guessing would send them
+//      to the wrong door with no way back.
+//   3. One paragraph, three links, zero JavaScript. Same budget as everything
+//      else here.
+const GIVE = `<p class="outreach">Este sitio no recibe donaciones. Si quieres aportar dinero, estos enlaces llevan a Vaki, una plataforma de recaudo colectivo: <a href="https://vaki.co/explorar" target="_blank" rel="noopener">ver campañas abiertas en Colombia</a> · <a href="https://helpcolombia.vaki.org" target="_blank" rel="noopener">donar desde Estados Unidos, con Vaki Foundation</a> · <a href="https://vaki.co/crear" target="_blank" rel="noopener">crear una vaki para ayudar a alguien en particular</a>.</p>`;
+
 function layout(title, body, meta = {}) {
   const fullTitle = meta.fullTitle || `${title} — encontrados.co · Personas y terremoto en Colombia`;
   const description = meta.description || DEFAULT_DESCRIPTION;
@@ -292,6 +311,7 @@ ${body}
 <footer>
   <p><span class="credit">Hecho con 💙 por <a href="https://x.com/ni500" target="_blank" rel="noopener">Ni500</a> y <a href="https://me.torrenegra.com" target="_blank" rel="noopener">Torrenegra</a></span> · <a href="/ideas">💡 Ideas</a> · <a href="/bug">🐛 Reporta bug</a> · <a href="https://github.com/torrenegra/encontrados" target="_blank" rel="noopener">Github</a> · <a href="/privacidad">Privacidad</a> · <a href="/terminos">Términos</a></p>
 ${OUTREACH}
+${GIVE}
 </footer>
 ${RESIZE_SCRIPT}
 ${TIME_SCRIPT}
