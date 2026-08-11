@@ -4,6 +4,18 @@ const { createSqliteAdapter } = require('../src/store/sqlite');
 const { createApp } = require('../src/server');
 const { fakeSendgrid } = require('./helpers');
 
+// Same shape Rekognition returns: every coordinate a ratio of the image.
+const FAKE_GEOMETRY = {
+  box: { l: 0.25, t: 0.1, w: 0.5, h: 0.6 },
+  points: [
+    { t: 'eyeLeft', x: 0.4, y: 0.3 },
+    { t: 'eyeRight', x: 0.6, y: 0.3 },
+    { t: 'nose', x: 0.5, y: 0.45 }
+  ],
+  pose: { roll: 1, yaw: -2, pitch: 3 },
+  confidence: 99.5
+};
+
 // Identical bytes = same face, so the whole pipeline runs without AWS.
 function fakeMatcher() {
   const indexed = new Map();
@@ -11,13 +23,17 @@ function fakeMatcher() {
   const key = (b) => b.toString('utf8');
   return {
     enabled: true,
-    calls: { index: 0, search: 0 },
+    calls: { index: 0, search: 0, detect: 0 },
     async indexFace(bytes) {
       this.calls.index++;
       const id = `face-${++n}`;
       if (!indexed.has(key(bytes))) indexed.set(key(bytes), []);
       indexed.get(key(bytes)).push(id);
-      return id;
+      return { faceId: id, geometry: FAKE_GEOMETRY };
+    },
+    async detectFace() {
+      this.calls.detect++;
+      return FAKE_GEOMETRY;
     },
     async searchByImage(bytes) {
       this.calls.search++;
@@ -137,10 +153,70 @@ test('removed flows are gone: no public search, no family alerts', async (t) => 
   }
 });
 
-test('privacy: no route ever serves photo bytes', async (t) => {
+// Report photos are public on purpose. A RESCUER's photo is not: its bytes are
+// dropped at upload, and /photo/:id refuses to serve 'query' rows regardless.
+test("privacy: /photo/:id serves report photos but never a rescuer's", async (t) => {
+  const { server, base, store } = await startApp();
+  t.after(() => server.close());
+
+  await reportMissing(base, { name: 'Lucía Ortega', contact: '300 555 1111', face: 'lucia' });
+
+  const fd = new FormData();
+  fd.set('photo', new File([photoBytes('lucia')], 'rescatada.jpg', { type: 'image/jpeg' }));
+  fd.set('email', 'rescatista@ejemplo.com');
+  await fetch(`${base}/rescate`, { method: 'POST', body: fd });
+
+  const counts = await store.counts();
+  assert.equal(counts.photos_report, 1);
+  assert.equal(counts.photos_query, 1);
+
+  // Walk every photo row: report rows serve their bytes, query rows 404.
+  let served = 0;
+  for (let id = 1; id <= counts.photos; id++) {
+    const photo = await store.getPhoto(id);
+    const res = await fetch(`${base}/photo/${id}`);
+    if (photo.kind === 'report') {
+      assert.equal(res.status, 200, `report photo ${id} should be served`);
+      assert.match(res.headers.get('content-type'), /^image\//);
+      assert.ok((await res.arrayBuffer()).byteLength > 0);
+      served++;
+    } else {
+      assert.equal(res.status, 404, `rescuer photo ${id} must never be served`);
+    }
+  }
+  assert.equal(served, 1);
+
+  // No other photo route exists, and unknown ids stay 404.
+  for (const path of ['/photos/1', '/api/photos/1', '/photo/9999', '/photo/abc']) {
+    assert.equal((await fetch(`${base}${path}`)).status, 404, path);
+  }
+});
+
+test('the missing list shows each report photo with its detection overlay', async (t) => {
   const { server, base } = await startApp();
   t.after(() => server.close());
-  for (const path of ['/photos/1', '/photo/1', '/api/photos/1']) {
-    assert.equal((await fetch(`${base}${path}`)).status, 404);
-  }
+
+  await reportMissing(base, { name: 'Andrés Beltrán', contact: '300 555 2222', face: 'andres' });
+
+  const html = await (await fetch(base)).text();
+  assert.match(html, /<img src="\/photo\/1"/);
+  // Bounding box and landmarks, positioned as percentages of the photo.
+  assert.match(html, /class="face-box" style="left:25\.000%;top:10\.000%;width:50\.000%;height:60\.000%"/);
+  assert.match(html, /class="face-pt" style="left:40\.000%;top:30\.000%"/);
+  assert.match(html, /title="ojo izquierdo"/);
+  assert.equal((html.match(/class="face-pt"/g) || []).length, 3);
+});
+
+test('a photo without detection geometry still renders, without an overlay', async (t) => {
+  const matcher = fakeMatcher();
+  matcher.indexFace = async () => ({ faceId: 'face-x', geometry: null });
+  const { server, base } = await startApp(matcher);
+  t.after(() => server.close());
+
+  await reportMissing(base, { name: 'Sara Nieto', contact: '300 555 3333', face: 'sara' });
+
+  const html = await (await fetch(base)).text();
+  assert.match(html, /<img src="\/photo\/1"/);
+  assert.ok(!html.includes('face-pt'));
+  assert.ok(!html.includes('face-box'));
 });

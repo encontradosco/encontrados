@@ -2,7 +2,12 @@ const express = require('express');
 const env = require('../env');
 const { notifySubscribers, sendVerificationEmail } = require('../notify');
 const { STATUSES, SOURCES } = require('../people');
-const { processPhoto, backfillUnindexedPhotos, MAX_QUERY_PHOTOS } = require('../facematch');
+const {
+  processPhoto,
+  backfillUnindexedPhotos,
+  backfillFaceDetail,
+  MAX_QUERY_PHOTOS
+} = require('../facematch');
 const { publicUpdate } = require('../privacy');
 
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
@@ -248,12 +253,17 @@ function apiRoutes(store, matcher) {
   // POST/GET /api/reindex — index photos stored while matching was down and
   // notify anyone whose search now matches. Safe to run repeatedly.
   // Triggers AWS Rekognition + subscriber notifications, so it requires the API key.
+  //
+  // Also fills in the detection geometry of report photos indexed before it was
+  // captured, so the public overlay appears on them too.
   router.all(
     '/reindex',
     requireKey,
     wrap(async (req, res) => {
       const limit = Math.min(parseInt(req.query.limit || '100', 10) || 100, 500);
-      res.json(await backfillUnindexedPhotos(store, matcher, limit));
+      const indexed = await backfillUnindexedPhotos(store, matcher, limit);
+      const geometry = await backfillFaceDetail(store, matcher, limit);
+      res.json({ ...indexed, geometry });
     })
   );
 
@@ -398,8 +408,8 @@ function apiRoutes(store, matcher) {
       const { sendEmail } = require('../notify');
       info.test = await sendEmail(
         String(email).trim(),
-        'Prueba de configuración — aqui.online',
-        'Si recibes este correo, el envío desde aqui.online funciona correctamente.'
+        'Prueba de configuración — encontrados.co',
+        'Si recibes este correo, el envío desde encontrados.co funciona correctamente.'
       );
       info.veredicto = emailVerdict(info);
       res.json({ email: info });
