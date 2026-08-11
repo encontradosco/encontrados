@@ -31,6 +31,10 @@ module.exports = {
   // Trim: a stray newline from copy-paste makes SendGrid return 401.
   SENDGRID_API_KEY: (process.env.SENDGRID_API_KEY || '').trim(),
   EMAIL_FROM: (process.env.EMAIL_FROM || 'a@torrenegra.com').trim(),
+  // Where a rescuer's aviso (POST /rescate/aviso) is mailed so an operator can
+  // relay it to the source registry. Unset = no mail; the aviso still lands on
+  // the person's timeline.
+  AVISO_EMAIL: (process.env.AVISO_EMAIL || '').trim(),
 
   WHATSAPP_TOKEN: process.env.WHATSAPP_TOKEN || '',
   WHATSAPP_PHONE_NUMBER_ID: process.env.WHATSAPP_PHONE_NUMBER_ID || '',

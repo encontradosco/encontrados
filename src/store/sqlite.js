@@ -30,7 +30,7 @@ async function createSqliteAdapter(dbPath) {
       lat REAL,
       lng REAL,
       contact TEXT,
-      source TEXT NOT NULL CHECK (source IN ('web','whatsapp','api','aggregator')),
+      source TEXT NOT NULL CHECK (source IN ('web','whatsapp','api','aggregator','rescate')),
       reporter TEXT,
       external_id TEXT,
       created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
@@ -314,14 +314,17 @@ async function createSqliteAdapter(dbPath) {
     },
     // Report photos still missing a thumbnail or the detection geometry. A row
     // whose face_detail holds only a crop (thumbnailed while Rekognition was
-    // down) has no "box" yet, so it stays in this set until it gets one.
+    // down) has no "box" yet, so it stays in this set until it gets one — but
+    // a row marked no_face is done: Rekognition already looked and found no
+    // face, so retrying it every run would burn DetectFaces forever.
     async photosMissingDerivatives(limit) {
       return db
         .prepare(
           `SELECT * FROM photos
            WHERE kind = 'report' AND length(content) > 0
              AND (thumb IS NULL OR thumb_large IS NULL
-                  OR face_detail IS NULL OR face_detail NOT LIKE '%"box"%')
+                  OR face_detail IS NULL
+                  OR (face_detail NOT LIKE '%"box"%' AND face_detail NOT LIKE '%"no_face"%'))
            ORDER BY id LIMIT ?`
         )
         .all(limit);

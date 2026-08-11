@@ -166,6 +166,7 @@ async function backfillPhotoDerivatives(store, matcher, limit = 100) {
   let geometries = 0;
   let waiting = 0;
   let failed = 0;
+  let noFace = 0;
 
   for (const photo of pending) {
     const hasBox = !!(photo.face_detail && photo.face_detail.box);
@@ -184,8 +185,19 @@ async function backfillPhotoDerivatives(store, matcher, limit = 100) {
         geometry = await matcher.detectFace(bytes);
         if (geometry) geometries++;
       }
-      if (await storeThumbnail(store, photo.id, bytes, geometry)) {
+      const thumb = await storeThumbnail(store, photo.id, bytes, geometry);
+      if (thumb) {
         thumbs++;
+        if (!geometry && matcher.enabled) {
+          // Rekognition looked and found no face. Without a mark, this photo
+          // re-enters photosMissingDerivatives on EVERY run and gets a
+          // DetectFaces call each time, forever — the pending counter never
+          // reaches 0 and the loop burns Rekognition on photos that will
+          // never yield a box. storeThumbnail just rewrote face_detail, so
+          // the mark goes on top of what it stored.
+          await store.setPhotoFaceDetail(photo.id, { crop: thumb.crop, no_face: true });
+          noFace++;
+        }
       } else {
         failed++;
       }
@@ -196,7 +208,7 @@ async function backfillPhotoDerivatives(store, matcher, limit = 100) {
   }
 
   console.log(
-    `[facematch:derivatives] pendientes=${pending.length} miniaturas=${thumbs} geometrias=${geometries} esperando=${waiting} fallidas=${failed}`
+    `[facematch:derivatives] pendientes=${pending.length} miniaturas=${thumbs} geometrias=${geometries} sin_rostro=${noFace} esperando=${waiting} fallidas=${failed}`
   );
   return {
     ok: true,
@@ -205,6 +217,7 @@ async function backfillPhotoDerivatives(store, matcher, limit = 100) {
     processed: pending.length - waiting,
     thumbnails: thumbs,
     geometry: geometries,
+    no_face: noFace,
     waiting,
     failed,
     face_matching: matcher.enabled

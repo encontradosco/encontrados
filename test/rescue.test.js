@@ -508,3 +508,109 @@ test('a rescue photo arriving before the matcher is initialized still finds the 
   assert.doesNotMatch(html, /no está disponible/);
   assert.match(html, /Camila Rojas/, 'la coincidencia debe encontrarse aunque el matcher llegara dormido');
 });
+
+// The fichas imported from public registries carry no family contact. A match
+// against one of them used to end in "sin datos de contacto" — a dead end for
+// the rescuer exactly when it matters most. Now the app flips the ask: the
+// rescuer leaves a number and where the person can be found, the aviso lands
+// on the timeline (without delisting the person and without publishing the
+// whereabouts), and the operators get an email to relay it to the source
+// registry.
+test('a match without family contact offers the aviso form and stores the aviso', async (t) => {
+  const sg = await fakeSendgrid();
+  process.env.AVISO_EMAIL = 'avisos@example.com';
+  t.after(() => {
+    sg.stop();
+    delete process.env.AVISO_EMAIL;
+  });
+
+  const matcher = fakeMatcher();
+  const { server, base, store } = await startApp(matcher);
+  t.after(() => server.close());
+
+  // A ficha as the aggregator pushes it: report + photo, NO contact.
+  const { person } = await store.findOrCreatePerson('Mariana Prueba Torres');
+  const update = await store.addUpdate(person.id, {
+    status: 'missing',
+    source: 'aggregator',
+    location: 'Quibdó'
+  });
+  const photo = await store.addPhoto({
+    personId: person.id,
+    kind: 'report',
+    updateId: update.id,
+    content: await photoBytes('mariana'),
+    contentType: 'image/jpeg'
+  });
+  const { faceId } = await matcher.indexFace(await photoBytes('mariana'));
+  await store.setPhotoFaceId(photo.id, faceId);
+
+  // The rescuer uploads the same face.
+  const fd = new FormData();
+  fd.set('photo', new File([await photoBytes('mariana')], 'r.jpg', { type: 'image/jpeg' }));
+  const html = await (await fetch(`${base}/rescate`, { method: 'POST', body: fd })).text();
+
+  assert.match(html, /Mariana Prueba Torres/);
+  assert.doesNotMatch(html, /Sin datos de contacto/);
+  assert.match(html, /action="\/rescate\/aviso"/, 'debe ofrecer el formulario de aviso, no un callejón sin salida');
+
+  // The rescuer leaves their number and where the person is.
+  const res = await fetch(`${base}/rescate/aviso`, {
+    method: 'POST',
+    body: new URLSearchParams({
+      person_id: String(person.id),
+      phone: '300 999 8877',
+      location: 'Albergue San José, Quibdó'
+    })
+  });
+  assert.equal(res.status, 200);
+  assert.match(await res.text(), /Aviso enviado/);
+
+  // On the timeline, without delisting, with the whereabouts kept out of the
+  // public fields (they travel in `contact`, which updateCard never renders).
+  const latest = await store.getLatestUpdate(person.id);
+  assert.equal(latest.source, 'rescate');
+  assert.equal(latest.status, 'missing', 'un avistamiento sin verificar no puede sacar a la persona del listado');
+  assert.match(latest.contact, /300 999 8877/);
+  assert.match(latest.contact, /Albergue San José/);
+  assert.ok(!latest.location, 'el paradero de una persona vulnerable no va al timeline público');
+
+  // The operators got the relay signal, with the details.
+  const mailBodies = sg.received.map((r) => JSON.stringify(r.body));
+  const mail = mailBodies.find((b) => b.includes('avisos@example.com'));
+  assert.ok(mail, 'debe llegar el correo del aviso al buzón del operador');
+  assert.match(mail, /300 999 8877/);
+
+  // A SECOND rescuer matching the same person now sees the first rescuer's
+  // contact, labelled as what it is — a rescuer, not the family.
+  const fd2 = new FormData();
+  fd2.set('photo', new File([await photoBytes('mariana')], 'r2.jpg', { type: 'image/jpeg' }));
+  const html2 = await (await fetch(`${base}/rescate`, { method: 'POST', body: fd2 })).text();
+  assert.match(html2, /Contacto del rescatista que la tiene/);
+});
+
+// Rekognition can look at a real photo and find no face (group shots from
+// afar, blurry rubble). Without a mark those photos re-enter the backfill on
+// every run forever: 27 of them were burning a DetectFaces call each sweep in
+// production, and the pending counter never reached 0.
+test('a photo with no detectable face is marked and leaves the backfill loop', async (t) => {
+  const matcher = fakeMatcher();
+  matcher.detectFace = async () => null; // Rekognition looked; nothing there.
+  const { server, base, store } = await startApp(matcher);
+  t.after(() => server.close());
+
+  await reportMissing(base, { name: 'Rosa Gil', contact: '300 555 5555', face: 'rosa' });
+  // As if the photo predated derivatives entirely (same setup as above).
+  await store.setPhotoThumbnails(1, { small: null, large: null, contentType: null });
+  await store.setPhotoFaceDetail(1, null);
+  assert.equal((await store.photosMissingDerivatives(10)).length, 1);
+
+  const { backfillPhotoDerivatives } = require('../src/facematch');
+  const first = await backfillPhotoDerivatives(store, matcher, 10);
+  assert.equal(first.no_face, 1);
+  assert.equal((await store.photosMissingDerivatives(10)).length, 0, 'la foto marcada no debe volver a la cola');
+  assert.equal((await store.getPhoto(1)).face_detail.no_face, true);
+
+  const second = await backfillPhotoDerivatives(store, matcher, 10);
+  assert.equal(second.processed, 0, 'la segunda corrida no debe reprocesarla');
+});
