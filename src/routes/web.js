@@ -502,10 +502,16 @@ function webRoutes(store, matcher) {
         ? `<h2>Reportes de desaparecidos más recientes${reunitedNote}</h2>${SOURCES_NOTE}` +
           missing
             .map((p) => {
+              // #65: the whole card is a tap target for the ficha (stretched
+              // link in CSS), and the rescuer's action sits right on the card
+              // instead of waiting at the end of the ficha. The aria-label
+              // carries the name — twenty identical "¿La tienes contigo?"
+              // links would be indistinguishable to a screen reader.
               return `<article class="card person">
   <div class="person-info">
-    <h3><a href="/person/${p.id}">${esc(p.full_name)}</a></h3>
+    <h3><a class="card-link" href="/person/${p.id}">${esc(p.full_name)}</a></h3>
     <p class="meta">Último reporte: ${timeTag(p.last_report)}</p>
+    <a class="card-cta" href="/rescate" aria-label="¿Tienes contigo a ${esc(p.full_name)}? Mira quién la busca">🔍 ¿La tienes contigo?</a>
   </div>
   ${facePlate(photos.get(p.id), p.full_name)}
 </article>`;
@@ -1110,7 +1116,7 @@ ${updates.length ? updates.map((u) => updateCard(u)).join('') : '<p class="subtl
   ${facePlate(photo, person.full_name, { large: true })}
 </div>
 <p class="subtle">Los datos de contacto de quien reporta solo se muestran a un rescatista cuando el rostro coincide.</p>
-<p><a class="big-btn report" href="/rescate">🔍 ¿La tienes contigo? Mira quién la busca</a></p>`,
+<div class="sticky-cta"><a class="big-btn report" href="/rescate">🔍 ¿La tienes contigo? Mira quién la busca</a></div>`,
           {
             fullTitle: `${person.full_name} — reportada como desaparecida · encontrados.co`,
             description: `${person.full_name} fue reportada como desaparecida tras el terremoto en Colombia. Si la rescataste, encontrados.co te dice quién la está buscando.`,
