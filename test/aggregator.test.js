@@ -1,5 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert');
+const sharp = require('sharp');
 const { createSqliteAdapter } = require('../src/store/sqlite');
 const { createApp } = require('../src/server');
 const { nullMatcher } = require('../src/faces');
@@ -99,4 +100,60 @@ test('API: without external_id, behavior is unchanged (each POST creates a new u
   const detail = await fetch(`${base}/api/people/${secondBody.person_id}`);
   const person = await detail.json();
   assert.equal(person.updates.length, 2, 'sin external_id cada POST debe seguir creando un update nuevo');
+});
+
+// A cold serverless invocation used to drop the photo's face indexing on the
+// floor: `enabled` is a getter over the lazily-built real matcher, so it reads
+// false until something initializes it. The photo was still stored, and the
+// only trace was a console.warn — so a bulk import could leave hundreds of
+// people with no face geometry and no match, looking perfectly fine.
+test('API: a photo arriving before the matcher is initialized still gets indexed', async (t) => {
+  let awake = false;
+  const indexedPhotoIds = [];
+  const lazyMatcher = {
+    get enabled() {
+      return awake;
+    },
+    async ensureReady() {
+      awake = true;
+    },
+    async searchByImage() {
+      return [];
+    },
+    async indexFace(bytes, photoId) {
+      indexedPhotoIds.push(photoId);
+      return { faceId: `face-${indexedPhotoIds.length}`, geometry: null };
+    },
+    async detectFace() {
+      return null;
+    }
+  };
+
+  const app = await createApp(await createSqliteAdapter(':memory:'), lazyMatcher);
+  const server = await new Promise((resolve) => {
+    const s = app.listen(0, () => resolve(s));
+  });
+  t.after(() => server.close());
+  const base = `http://127.0.0.1:${server.address().port}`;
+
+  const jpeg = await sharp({
+    create: { width: 200, height: 200, channels: 3, background: { r: 10, g: 120, b: 200 } }
+  })
+    .jpeg()
+    .toBuffer();
+
+  const res = await postUpdate(base, {
+    name: 'Ana María Restrepo',
+    status: 'missing',
+    external_id: 'agg-cold-start',
+    photo: { base64: jpeg.toString('base64'), content_type: 'image/jpeg' }
+  });
+
+  assert.equal(res.status, 201);
+  assert.equal((await res.json()).photo_stored, true);
+  assert.deepEqual(
+    indexedPhotoIds.length,
+    1,
+    'the photo must be indexed even though the matcher was still asleep when it arrived'
+  );
 });

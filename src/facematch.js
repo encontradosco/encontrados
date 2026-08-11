@@ -99,6 +99,14 @@ async function processPhoto(store, matcher, { personId, kind, updateId, subscrip
     contentType
   });
 
+  // Wake the lazy matcher BEFORE reading `enabled`: it is a getter over the
+  // real matcher, which does not exist until something initializes it. On a
+  // cold serverless invocation the flag reads false even though Rekognition is
+  // perfectly available, and the photo below is stored without indexing — no
+  // face geometry for the public overlay, no match for whoever is searching.
+  // Every other entry point already does this; this one was the exception.
+  if (typeof matcher.ensureReady === 'function') await matcher.ensureReady();
+
   if (!matcher.enabled) {
     console.warn(
       `[facematch] matcher disabled — photo ${photo.id} stored WITHOUT indexing (will be picked up by /api/reindex)`
