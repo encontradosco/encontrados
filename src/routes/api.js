@@ -230,8 +230,10 @@ function apiRoutes(store, matcher) {
 
   // POST/GET /api/reindex — index photos stored while matching was down and
   // notify anyone whose search now matches. Safe to run repeatedly.
+  // Triggers AWS Rekognition + subscriber notifications, so it requires the API key.
   router.all(
     '/reindex',
+    requireKey,
     wrap(async (req, res) => {
       const limit = Math.min(parseInt(req.query.limit || '100', 10) || 100, 500);
       res.json(await backfillUnindexedPhotos(store, matcher, limit));
@@ -298,8 +300,8 @@ function apiRoutes(store, matcher) {
     })
   );
 
-  // GET /api/diag — configuration and live self-test. Never exposes secrets.
-  // ?email=you@example.com sends a real test email and reports the result.
+  // GET /api/diag — configuration and live self-test. Never exposes secrets,
+  // never sends email (a GET must not have side effects — see POST /api/diag/test-email).
   router.get(
     '/diag',
     wrap(async (req, res) => {
@@ -352,17 +354,38 @@ function apiRoutes(store, matcher) {
         out.database.error = e.message;
       }
 
-      if (req.query.email) {
-        const { sendEmail } = require('../notify');
-        out.email.test = await sendEmail(
-          String(req.query.email),
-          'Prueba de configuración — aqui.online',
-          'Si recibes este correo, el envío desde aqui.online funciona correctamente.'
-        );
-        out.email.veredicto = emailVerdict(out.email);
-      }
-
       res.json(out);
+    })
+  );
+
+  // POST /api/diag/test-email — sends a real test email and reports the result.
+  // A side effect that spends SendGrid quota belongs behind the API key, not on a GET.
+  // { email }
+  router.post(
+    '/diag/test-email',
+    requireKey,
+    wrap(async (req, res) => {
+      const email = req.body && req.body.email;
+      if (!email || !String(email).trim()) {
+        return res.status(400).json({ error: 'Falta email' });
+      }
+      // Same key fingerprinting as GET /api/diag so emailVerdict can produce
+      // its actionable sentence on the send path too (never the secret itself).
+      const liveKey = (process.env.SENDGRID_API_KEY || env.SENDGRID_API_KEY || '').trim();
+      const info = {
+        sendgrid_key_present: !!liveKey,
+        sendgrid_key_prefix: liveKey.slice(0, 3),
+        sendgrid_key_looks_valid: /^SG\./.test(liveKey),
+        from: env.EMAIL_FROM
+      };
+      const { sendEmail } = require('../notify');
+      info.test = await sendEmail(
+        String(email).trim(),
+        'Prueba de configuración — aqui.online',
+        'Si recibes este correo, el envío desde aqui.online funciona correctamente.'
+      );
+      info.veredicto = emailVerdict(info);
+      res.json({ email: info });
     })
   );
 
