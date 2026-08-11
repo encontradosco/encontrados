@@ -228,6 +228,13 @@ async function createSqliteAdapter(dbPath) {
     async setPhotoFaceId(photoId, faceId) {
       db.prepare('UPDATE photos SET face_id = ? WHERE id = ?').run(faceId, photoId);
     },
+    // Links an already-indexed photo to a subscription created AFTER the
+    // photo was stored (e.g. a rescuer adds their email post-hoc). Without
+    // this, matchStoredPhoto's later lookup by subscription_id would find
+    // nothing and silently never notify.
+    async setPhotoSubscriptionId(photoId, subscriptionId) {
+      db.prepare('UPDATE photos SET subscription_id = ? WHERE id = ?').run(subscriptionId, photoId);
+    },
     // Rescue photos are never kept: only the face signature survives.
     async clearPhotoContent(photoId) {
       db.prepare('UPDATE photos SET content = ? WHERE id = ?').run(Buffer.alloc(0), photoId);

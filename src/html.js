@@ -233,18 +233,29 @@ const LOCATION_SCRIPT = `<script>
     if (!navigator.geolocation) { btn.textContent = 'GPS no disponible en este navegador'; return; }
     btn.textContent = '📍 Obteniendo ubicación…';
     navigator.geolocation.getCurrentPosition(function (pos) {
-      document.getElementById('lat').value = pos.coords.latitude.toFixed(6);
-      document.getElementById('lng').value = pos.coords.longitude.toFixed(6);
+      var lat = pos.coords.latitude;
+      var lng = pos.coords.longitude;
+      document.getElementById('lat').value = lat.toFixed(6);
+      document.getElementById('lng').value = lng.toFixed(6);
       btn.textContent = '✅ Ubicación compartida';
+      // Prefill 'location' with the GPS coordinates RIGHT AWAY, before the
+      // reverse-geocode call below. 'location' is a required field, and on
+      // bad signal the Nominatim fetch can fail or time out — if that left
+      // it empty, the whole report (photos, name, contact) would be
+      // discarded by the server. The fetch below only ever IMPROVES this
+      // text; it must never be the only thing that fills it in.
+      var loc = document.getElementById('location');
+      if (loc) loc.value = 'Ubicación GPS compartida (' + lat.toFixed(4) + ', ' + lng.toFixed(4) + ')';
       // GPS is more precise than a typed address: hide the address field.
       var field = document.getElementById('location-field');
       if (field) field.style.display = 'none';
-      fetch('https://nominatim.openstreetmap.org/reverse?format=json&lat=' + pos.coords.latitude + '&lon=' + pos.coords.longitude)
+      fetch('https://nominatim.openstreetmap.org/reverse?format=json&lat=' + lat + '&lon=' + lng)
         .then(function (r) { return r.json(); })
         .then(function (d) {
-          var loc = document.getElementById('location');
-          if (d.display_name && !loc.value) loc.value = d.display_name.split(',').slice(0, 4).join(',');
-          if (loc && loc.value) btn.textContent = '✅ ' + loc.value;
+          if (d.display_name && loc) {
+            loc.value = d.display_name.split(',').slice(0, 4).join(',');
+            btn.textContent = '✅ ' + loc.value;
+          }
         }).catch(function () {});
     }, function () { btn.textContent = 'No se pudo obtener la ubicación'; });
   });

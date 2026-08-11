@@ -130,6 +130,10 @@ function createStore(adapter) {
     return adapter.setPhotoFaceId(photoId, faceId);
   }
 
+  async function setPhotoSubscriptionId(photoId, subscriptionId) {
+    return adapter.setPhotoSubscriptionId(photoId, subscriptionId);
+  }
+
   async function clearPhotoContent(photoId) {
     return adapter.clearPhotoContent(photoId);
   }
@@ -175,6 +179,7 @@ function createStore(adapter) {
     getSubscriptionById,
     addPhoto,
     setPhotoFaceId,
+    setPhotoSubscriptionId,
     clearPhotoContent,
     photosByFaceIds,
     countQueryPhotos,

@@ -158,6 +158,85 @@ test('a rescuer can subscribe and is alerted when someone reports that person', 
   assert.match(text, /unsubscribe\?token=/);
 });
 
+test('no match, no upfront email: the result offers an inline "notify me" form', async (t) => {
+  const { server, base } = await startApp();
+  t.after(() => server.close());
+  const fd = new FormData();
+  fd.set('photo', new File([photoBytes('sin-correo')], 'r.jpg', { type: 'image/jpeg' }));
+  const html = await (await fetch(`${base}/rescate`, { method: 'POST', body: fd })).text();
+  assert.match(html, /action="\/rescate\/\d+\/subscribe"/, 'debe ofrecer el mini-form de aviso por correo');
+  assert.match(html, /name="photoId"/);
+});
+
+test('no match, upfront email already given: no duplicate inline form is shown', async (t) => {
+  const { server, base } = await startApp();
+  t.after(() => server.close());
+  const fd = new FormData();
+  fd.set('photo', new File([photoBytes('con-correo')], 'r.jpg', { type: 'image/jpeg' }));
+  fd.set('email', 'rescatista2@ejemplo.com');
+  const html = await (await fetch(`${base}/rescate`, { method: 'POST', body: fd })).text();
+  assert.doesNotMatch(html, /action="\/rescate\/\d+\/subscribe"/);
+});
+
+test('adding an email after the fact (no re-upload) still alerts on a later match', async (t) => {
+  const matcher = fakeMatcher();
+  const sg = await fakeSendgrid();
+  const { server, base } = await startApp(matcher);
+  t.after(() => {
+    server.close();
+    sg.stop();
+  });
+
+  // Rescuer uploads a photo with NO email — face gets indexed, no subscription yet.
+  const fd = new FormData();
+  fd.set('photo', new File([photoBytes('tardio')], 'r.jpg', { type: 'image/jpeg' }));
+  const html = await (await fetch(`${base}/rescate`, { method: 'POST', body: fd })).text();
+  const form = /action="(\/rescate\/\d+\/subscribe)"[\s\S]*?name="photoId" value="(\d+)"/.exec(html);
+  assert.ok(form, 'el resultado debe traer la acción del mini-form y el photoId');
+  const [, action, photoId] = form;
+
+  // They come back later and leave an email — WITHOUT re-uploading the photo.
+  const subRes = await fetch(`${base}${action}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ email: 'llega-tarde@ejemplo.com', photoId })
+  });
+  assert.equal(subRes.status, 200);
+  assert.equal(sg.received.length, 1, 'debe enviarse el correo de verificación');
+  const link = /https?:\/\/[^\s]+\/verify\?token=([a-f0-9]+)/.exec(sg.received[0].body.content[0].value);
+  assert.ok(link);
+  await fetch(`${base}/verify?token=${link[1]}`);
+  sg.received.length = 0;
+
+  // Now a family reports that same person missing — the rescuer must still
+  // be alerted, even though the subscription was created AFTER the photo.
+  await reportMissing(base, { name: 'Beatriz Salazar', contact: '300 222 3333', face: 'tardio' });
+
+  assert.equal(sg.received.length, 1, 'el aviso debe llegar aunque el correo se agregó después de subir la foto');
+  const text = sg.received[0].body.content[0].value;
+  assert.match(text, /Beatriz Salazar/);
+});
+
+test('the post-hoc subscribe endpoint rejects an invalid email and an unknown person', async (t) => {
+  const { server, base, store } = await startApp();
+  t.after(() => server.close());
+
+  const { person } = await store.findOrCreatePerson('Alguien Rescatado');
+  const bad = await fetch(`${base}/rescate/${person.id}/subscribe`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ email: 'no-es-un-correo' })
+  });
+  assert.equal(bad.status, 400);
+
+  const missing = await fetch(`${base}/rescate/999999/subscribe`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ email: 'valido@ejemplo.com' })
+  });
+  assert.equal(missing.status, 404);
+});
+
 test('removed flows are gone: no public search, no family alerts', async (t) => {
   const { server, base } = await startApp();
   t.after(() => server.close());
