@@ -69,12 +69,11 @@ function webRoutes(store, matcher) {
           'Inicio',
           `
 <div class="hero">
-  <h1>Voluntarios, rescatistas, bomberos, policías y hospitales: mira quién está buscando la persona que rescataste</h1>
+  <h1>Voluntarios, rescatistas, bomberos, policías y hospitales</h1>
 </div>
 <div class="big-actions">
   <a class="big-btn report" href="/rescate">
-    <span class="btn-eyebrow">🚑 🚒 👮 🏥 Tienes a la persona contigo</span>
-    <span class="btn-title">📸 Mira quién la está buscando</span>
+    <span class="btn-title">📸 Mira quién está buscando la persona que rescataste</span>
     <span class="btn-sub">Subes una foto, la comparamos y la borramos al instante</span>
   </a>
   <a class="big-btn search" href="/report">
@@ -85,7 +84,7 @@ ${list}
 `,
           {
             fullTitle:
-              'Voluntarios, rescatistas, bomberos, policías y hospitales: mira quién está buscando la persona que rescataste — aqui.online',
+              'Voluntarios, rescatistas, bomberos, policías y hospitales — aqui.online',
             description:
               'Si rescataste a alguien, sube su foto y te decimos quién la está buscando. La foto se borra de inmediato. También puedes reportar a una persona desaparecida.',
             path: '/'

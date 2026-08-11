@@ -113,16 +113,6 @@ h1.compact .subtle { font-family: var(--font-sans); font-weight: 400; font-size:
   text-decoration: none;
   transition: background 0.15s ease, border-color 0.15s ease;
 }
-.btn-eyebrow {
-  display: block;
-  font-weight: 500;
-  font-size: 0.78rem;
-  line-height: 1.35;
-  margin-bottom: 0.4rem;
-  padding-bottom: 0.35rem;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.35);
-  opacity: 0.95;
-}
 .btn-title { display: block; }
 .btn-sub {
   display: block;

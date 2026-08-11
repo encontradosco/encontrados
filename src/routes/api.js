@@ -1,8 +1,9 @@
 const express = require('express');
 const env = require('../env');
 const { notifySubscribers, sendVerificationEmail } = require('../notify');
-const { STATUSES } = require('../people');
+const { STATUSES, SOURCES } = require('../people');
 const { processPhoto, backfillUnindexedPhotos, MAX_QUERY_PHOTOS } = require('../facematch');
+const { publicUpdate } = require('../privacy');
 
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
@@ -71,7 +72,7 @@ function apiRoutes(store, matcher) {
           id: p.id,
           full_name: p.full_name,
           score: p.score,
-          latest_update: (await store.getLatestUpdate(p.id)) || null
+          latest_update: publicUpdate(await store.getLatestUpdate(p.id))
         }))
       );
       res.json({ results });
@@ -87,14 +88,20 @@ function apiRoutes(store, matcher) {
       res.json({
         id: person.id,
         full_name: person.full_name,
-        updates: await store.getUpdates(person.id)
+        updates: (await store.getUpdates(person.id)).map(publicUpdate)
       });
     })
   );
 
   // POST /api/updates — report status by name (creates the person if new)
-  // { name, status, message?, location?, reporter?, photo?: { base64, content_type } }
+  // { name, status, message?, location?, reporter?, source?, external_id?,
+  //   photo?: { base64, content_type } }
   // The photo is used ONLY for face matching; it is never displayed or shared.
+  // - source: one of 'web'|'whatsapp'|'api'|'aggregator'; defaults to 'api' if
+  //   omitted or not one of those values (e.g. an aggregator identifying itself).
+  // - external_id: the caller's own id for this update. When present, a repeat
+  //   POST with the same external_id updates this same update idempotently
+  //   instead of creating a duplicate — safe to retry or re-sync from upstream.
   router.post(
     '/updates',
     requireKey,
@@ -104,6 +111,11 @@ function apiRoutes(store, matcher) {
       if (!STATUSES.includes(status)) {
         return res.status(400).json({ error: `status debe ser uno de: ${STATUSES.join(', ')}` });
       }
+      const source = SOURCES.includes(req.body.source) ? req.body.source : 'api';
+      const externalId =
+        req.body.external_id != null && String(req.body.external_id).trim()
+          ? String(req.body.external_id).trim()
+          : undefined;
       const { person, created } = await store.findOrCreatePerson(name);
       const update = await store.addUpdate(person.id, {
         status,
@@ -111,15 +123,21 @@ function apiRoutes(store, matcher) {
         location,
         lat: typeof req.body.lat === 'number' ? req.body.lat : parseFloat(req.body.lat),
         lng: typeof req.body.lng === 'number' ? req.body.lng : parseFloat(req.body.lng),
-        source: 'api',
+        source,
         reporter,
-        contact
+        contact,
+        externalId
       });
-      await notifySubscribers(store, person, update);
+      // With external_id, the upsert may have landed on a different person
+      // than the one just looked up (e.g. the aggregator's name for this
+      // external_id drifted). Resolve who actually owns the timeline row
+      // before notifying, so alerts never go to the wrong subscribers.
+      const owner = update.person_id === person.id ? person : (await store.getPerson(update.person_id)) || person;
+      await notifySubscribers(store, owner, update);
       const photo = decodePhoto(req.body.photo);
       if (photo) {
         await processPhoto(store, matcher, {
-          personId: person.id,
+          personId: owner.id,
           kind: 'report',
           updateId: update.id,
           bytes: photo.bytes,
@@ -127,7 +145,7 @@ function apiRoutes(store, matcher) {
         });
       }
       res.status(201).json({
-        person_id: person.id,
+        person_id: owner.id,
         person_created: created,
         update,
         photo_stored: !!photo
@@ -229,8 +247,10 @@ function apiRoutes(store, matcher) {
 
   // POST/GET /api/reindex — index photos stored while matching was down and
   // notify anyone whose search now matches. Safe to run repeatedly.
+  // Triggers AWS Rekognition + subscriber notifications, so it requires the API key.
   router.all(
     '/reindex',
+    requireKey,
     wrap(async (req, res) => {
       const limit = Math.min(parseInt(req.query.limit || '100', 10) || 100, 500);
       res.json(await backfillUnindexedPhotos(store, matcher, limit));
@@ -297,8 +317,8 @@ function apiRoutes(store, matcher) {
     })
   );
 
-  // GET /api/diag — configuration and live self-test. Never exposes secrets.
-  // ?email=you@example.com sends a real test email and reports the result.
+  // GET /api/diag — configuration and live self-test. Never exposes secrets,
+  // never sends email (a GET must not have side effects — see POST /api/diag/test-email).
   router.get(
     '/diag',
     wrap(async (req, res) => {
@@ -351,17 +371,38 @@ function apiRoutes(store, matcher) {
         out.database.error = e.message;
       }
 
-      if (req.query.email) {
-        const { sendEmail } = require('../notify');
-        out.email.test = await sendEmail(
-          String(req.query.email),
-          'Prueba de configuración — aqui.online',
-          'Si recibes este correo, el envío desde aqui.online funciona correctamente.'
-        );
-        out.email.veredicto = emailVerdict(out.email);
-      }
-
       res.json(out);
+    })
+  );
+
+  // POST /api/diag/test-email — sends a real test email and reports the result.
+  // A side effect that spends SendGrid quota belongs behind the API key, not on a GET.
+  // { email }
+  router.post(
+    '/diag/test-email',
+    requireKey,
+    wrap(async (req, res) => {
+      const email = req.body && req.body.email;
+      if (!email || !String(email).trim()) {
+        return res.status(400).json({ error: 'Falta email' });
+      }
+      // Same key fingerprinting as GET /api/diag so emailVerdict can produce
+      // its actionable sentence on the send path too (never the secret itself).
+      const liveKey = (process.env.SENDGRID_API_KEY || env.SENDGRID_API_KEY || '').trim();
+      const info = {
+        sendgrid_key_present: !!liveKey,
+        sendgrid_key_prefix: liveKey.slice(0, 3),
+        sendgrid_key_looks_valid: /^SG\./.test(liveKey),
+        from: env.EMAIL_FROM
+      };
+      const { sendEmail } = require('../notify');
+      info.test = await sendEmail(
+        String(email).trim(),
+        'Prueba de configuración — aqui.online',
+        'Si recibes este correo, el envío desde aqui.online funciona correctamente.'
+      );
+      info.veredicto = emailVerdict(info);
+      res.json({ email: info });
     })
   );
 

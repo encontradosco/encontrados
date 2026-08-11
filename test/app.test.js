@@ -36,11 +36,18 @@ test('API: report, fuzzy search, person detail, subscription', async (t) => {
   const { results } = await search.json();
   assert.equal(results.length, 1);
   assert.equal(results[0].latest_update.status, 'safe');
+  // Privacy: the raw `reporter` never comes back in the public JSON, only a
+  // masked label. 'Hermana' is a name (not phone/email), so it passes
+  // through as-is here.
+  assert.equal(results[0].latest_update.reporter, undefined);
+  assert.equal(results[0].latest_update.reporter_label, 'Hermana');
 
   const detail = await fetch(`${base}/api/people/${results[0].id}`);
   const person = await detail.json();
   assert.equal(person.updates.length, 1);
   assert.equal(person.updates[0].location, 'Cali');
+  assert.equal(person.updates[0].reporter, undefined);
+  assert.equal(person.updates[0].reporter_label, 'Hermana');
 
   const sub = await fetch(`${base}/api/people/${results[0].id}/subscriptions`, {
     method: 'POST',
@@ -75,7 +82,7 @@ test('home lists missing people and offers both actions', async (t) => {
 
   const html = await (await fetch(base)).text();
   assert.match(html, /mira quién está buscando la persona que rescataste/i);
-  assert.match(html, /Mira quién la está buscando/);
+  assert.match(html, /href="\/rescate"/);
   assert.match(html, /Reportar desaparecido/);
 
   // a reported person shows up in the listing
@@ -142,6 +149,28 @@ test('families can no longer subscribe to alerts', async (t) => {
   assert.equal((await fetch(`${base}/buscar`)).status, 404);
 });
 
+// The old web form's reporter field is gone (the rescuer model asks for a
+// private `contact` instead), but updates created with a `reporter` — the
+// store API, the aggregator, old rows — still render on the person page.
+// A name must come out masked, never verbatim.
+test('web: a name reporter renders masked on the person page', async (t) => {
+  const { server, base, store } = await startApp();
+  t.after(() => server.close());
+
+  const { person } = await store.findOrCreatePerson('Pedro Pablo Ramírez');
+  await store.addUpdate(person.id, {
+    status: 'missing',
+    message: 'No contesta desde ayer',
+    location: 'Barrio Centro',
+    source: 'web',
+    reporter: 'María Gómez, Cruz Roja'
+  });
+
+  const html = await (await fetch(`${base}/person/${person.id}`)).text();
+  assert.match(html, /Reportado por: María G\./);
+  assert.ok(!html.includes('María Gómez, Cruz Roja'));
+});
+
 test('webhook: whatsapp inbound message is processed', async (t) => {
   const { server, base } = await startApp();
   t.after(() => server.close());
@@ -173,6 +202,26 @@ test('webhook: whatsapp inbound message is processed', async (t) => {
   assert.equal(results.length, 1);
   assert.equal(results[0].latest_update.status, 'safe');
   assert.equal(results[0].latest_update.source, 'whatsapp');
+
+  // Privacy: bot.js sets `reporter` to the sender's raw WhatsApp phone
+  // number (see src/bot.js). That number must never reach a public reader —
+  // not the raw field, not disguised inside reporter_label.
+  const phone = '573000000000';
+  assert.equal(results[0].latest_update.reporter, undefined);
+  assert.equal(results[0].latest_update.reporter_label, 'Reporte ciudadano');
+  assert.ok(!JSON.stringify(results[0]).includes(phone));
+
+  const detail = await fetch(`${base}/api/people/${results[0].id}`);
+  const person = await detail.json();
+  assert.equal(person.updates[0].reporter, undefined);
+  assert.equal(person.updates[0].reporter_label, 'Reporte ciudadano');
+  assert.ok(!JSON.stringify(person).includes(phone));
+
+  // Same story on the public HTML person page.
+  const page = await fetch(`${base}/person/${results[0].id}`);
+  const html = await page.text();
+  assert.match(html, /Reporte ciudadano/);
+  assert.ok(!html.includes(phone));
 });
 
 test('purge-test-data removes only the seeded test records', async (t) => {
@@ -226,39 +275,5 @@ test('the contact is remembered between reports via a cookie', async (t) => {
 
   const form = await fetch(`${base}/report`, { headers: { cookie: cookie.split(';')[0] } });
   assert.match(await form.text(), /Cruz Roja · 300 555 1234/);
-});
-
-test('purge-test-data removes only the seeded test records', async (t) => {
-  const { server, base } = await startApp();
-  t.after(() => server.close());
-  const store = (await (async () => null)()) || null;
-
-  const mk = (name) =>
-    fetch(`${base}/api/updates`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, status: 'safe' })
-    });
-  await mk('Verificacion Final');
-  await mk('Cadena Completa 9147');
-  await mk('Nicolas Contreras'); // a real report must survive
-
-  const res = await fetch(`${base}/api/maintenance/purge-test-data`, { method: 'POST' });
-  const body = await res.json();
-  assert.equal(res.status, 200);
-  assert.ok(body.removed_count >= 2, JSON.stringify(body));
-
-  const survivors = await (await fetch(`${base}/api/people?q=Nicolas Contreras`)).json();
-  assert.equal(survivors.results.length, 1, 'un reporte real fue borrado');
-
-  const gone = await (await fetch(`${base}/api/people?q=Verificacion Final`)).json();
-  assert.equal(gone.results.length, 0);
-});
-
-test('DELETE /api/people/:id is disabled without API_KEY', async (t) => {
-  const { server, base } = await startApp();
-  t.after(() => server.close());
-  const res = await fetch(`${base}/api/people/1`, { method: 'DELETE' });
-  assert.equal(res.status, 503);
 });
 

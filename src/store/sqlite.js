@@ -30,11 +30,13 @@ async function createSqliteAdapter(dbPath) {
       lat REAL,
       lng REAL,
       contact TEXT,
-      source TEXT NOT NULL CHECK (source IN ('web','whatsapp','api')),
+      source TEXT NOT NULL CHECK (source IN ('web','whatsapp','api','aggregator')),
       reporter TEXT,
+      external_id TEXT,
       created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
     );
     CREATE INDEX IF NOT EXISTS idx_updates_person ON updates(person_id, created_at DESC);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_updates_external_id ON updates(external_id) WHERE external_id IS NOT NULL;
 
     CREATE TABLE IF NOT EXISTS subscriptions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -72,6 +74,16 @@ async function createSqliteAdapter(dbPath) {
   try {
     db.exec('ALTER TABLE updates ADD COLUMN contact TEXT');
   } catch { /* already exists */ }
+  // Older dev databases: add external_id if missing. Note: SQLite can't widen
+  // an existing CHECK constraint via ALTER TABLE, so a pre-existing local
+  // ./data/aqui.db still rejects source='aggregator' until it's recreated
+  // (delete the file — it's dev-only and gets rebuilt on next start).
+  try {
+    db.exec('ALTER TABLE updates ADD COLUMN external_id TEXT');
+  } catch { /* already exists */ }
+  db.exec(
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_updates_external_id ON updates(external_id) WHERE external_id IS NOT NULL'
+  );
 
   const getPersonStmt = db.prepare('SELECT * FROM people WHERE id = ?');
 
@@ -93,10 +105,24 @@ async function createSqliteAdapter(dbPath) {
     async candidatePeople() {
       return db.prepare('SELECT * FROM people').all();
     },
-    async insertUpdate(personId, { status, message, location, lat, lng, source, reporter, contact }) {
+    // Same idempotent-upsert contract as the Postgres adapter: a repeated
+    // externalId updates the existing row's status/message/location/lat/lng/
+    // reporter/contact instead of inserting a duplicate. Without externalId,
+    // behavior is unchanged.
+    async insertUpdate(personId, { status, message, location, lat, lng, source, reporter, contact, externalId }) {
+      const extId = externalId || null;
       const info = db
         .prepare(
-          'INSERT INTO updates (person_id, status, message, location, lat, lng, source, reporter, contact) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+          `INSERT INTO updates (person_id, status, message, location, lat, lng, source, reporter, contact, external_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT (external_id) WHERE external_id IS NOT NULL DO UPDATE SET
+             status = excluded.status,
+             message = excluded.message,
+             location = excluded.location,
+             lat = excluded.lat,
+             lng = excluded.lng,
+             reporter = excluded.reporter,
+             contact = excluded.contact`
         )
         .run(
           personId,
@@ -107,8 +133,14 @@ async function createSqliteAdapter(dbPath) {
           Number.isFinite(lng) ? lng : null,
           source,
           reporter || null,
-          contact || null
+          contact || null,
+          extId
         );
+      // lastInsertRowid isn't reliable on the DO UPDATE path (no new row is
+      // inserted), so look up by external_id (guaranteed unique) when we have one.
+      if (extId) {
+        return db.prepare('SELECT * FROM updates WHERE external_id = ?').get(extId);
+      }
       return db.prepare('SELECT * FROM updates WHERE id = ?').get(info.lastInsertRowid);
     },
     async updatesForPerson(personId) {
