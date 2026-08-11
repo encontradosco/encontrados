@@ -333,5 +333,52 @@ test('reindex backfills thumbnails and geometry for photos stored earlier', asyn
 
   // Nothing left to do on a second pass.
   const again = await backfillPhotoDerivatives(store, fakeMatcher(), 100);
-  assert.equal(again.pending, 0);
+  assert.equal(again.processed, 0);
+});
+
+test('/fotos/actualizar brings photos up to date without an API key', async (t) => {
+  const { server, base, store } = await startApp({ enabled: false });
+  t.after(() => server.close());
+
+  await reportMissing(base, { name: 'Iván Salazar', contact: '300 555 4444', face: 'ivan' });
+  // Strip the derivatives, as if this photo predated thumbnails entirely.
+  await store.setPhotoThumbnail(1, null, null);
+  await store.setPhotoFaceDetail(1, null);
+
+  // No Authorization header anywhere: this is meant to be opened in a browser.
+  const first = await fetch(`${base}/fotos/actualizar`);
+  assert.equal(first.status, 200);
+  const html = await first.text();
+  assert.match(html, /Procesadas <strong>1<\/strong>/);
+
+  // Idempotent, and it stops asking for more: with matching down there is
+  // nothing left this run could improve, so it must not loop forever.
+  const second = await (await fetch(`${base}/fotos/actualizar`)).text();
+  assert.match(second, /Todas las fotos están al día/);
+  assert.match(second, /les falta ubicar el rostro/);
+
+  // And once Rekognition is back, that same photo does get reframed.
+  const { backfillPhotoDerivatives } = require('../src/facematch');
+  const result = await backfillPhotoDerivatives(store, fakeMatcher(), 100);
+  assert.equal(result.geometry, 1);
+  assert.deepEqual((await store.getPhoto(1)).face_detail.box, FAKE_GEOMETRY.box);
+});
+
+test('viewing the home page catches old photos up on its own', async (t) => {
+  const { server, base, store } = await startApp({ enabled: false });
+  t.after(() => server.close());
+
+  await reportMissing(base, { name: 'Rosa Gil', contact: '300 555 5555', face: 'rosa' });
+  // Drop the derivatives, as if this photo predated thumbnails entirely.
+  await store.setPhotoThumbnail(1, null, null);
+  await store.setPhotoFaceDetail(1, null);
+  assert.equal((await store.photosMissingDerivatives(10)).length, 1);
+
+  await fetch(base);
+  // The sweep runs after the response, so give it a moment to land.
+  for (let i = 0; i < 40 && (await store.photosMissingDerivatives(10)).length; i++) {
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  const photo = await store.getPhoto(1);
+  assert.ok(photo.thumb && photo.thumb.length, 'la miniatura debe haberse generado sola');
 });

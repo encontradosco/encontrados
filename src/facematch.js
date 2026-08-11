@@ -157,12 +157,22 @@ async function backfillPhotoDerivatives(store, matcher, limit = 100) {
   const pending = await store.photosMissingDerivatives(limit);
   let thumbs = 0;
   let geometries = 0;
+  let waiting = 0;
   let failed = 0;
 
   for (const photo of pending) {
+    const hasBox = !!(photo.face_detail && photo.face_detail.box);
+    const hasThumb = !!(photo.thumb && photo.thumb.length);
+    // Already thumbnailed, and only Rekognition could add what's missing.
+    // Redoing the centred crop would change nothing, so leave it for later —
+    // otherwise this photo looks "pending" forever while matching is down.
+    if (hasThumb && !hasBox && !matcher.enabled) {
+      waiting++;
+      continue;
+    }
     try {
       const bytes = Buffer.isBuffer(photo.content) ? photo.content : Buffer.from(photo.content);
-      let geometry = photo.face_detail && photo.face_detail.box ? photo.face_detail : null;
+      let geometry = hasBox ? photo.face_detail : null;
       if (!geometry && matcher.enabled) {
         geometry = await matcher.detectFace(bytes);
         if (geometry) geometries++;
@@ -179,13 +189,16 @@ async function backfillPhotoDerivatives(store, matcher, limit = 100) {
   }
 
   console.log(
-    `[facematch:derivatives] pendientes=${pending.length} miniaturas=${thumbs} geometrias=${geometries} fallidas=${failed}`
+    `[facematch:derivatives] pendientes=${pending.length} miniaturas=${thumbs} geometrias=${geometries} esperando=${waiting} fallidas=${failed}`
   );
   return {
     ok: true,
-    pending: pending.length,
+    // What this run could actually act on. Anything counted in `waiting` needs
+    // Rekognition back before it can move.
+    processed: pending.length - waiting,
     thumbnails: thumbs,
     geometry: geometries,
+    waiting,
     failed,
     face_matching: matcher.enabled
   };
