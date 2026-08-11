@@ -1,0 +1,38 @@
+# yaml-language-server: $schema=https://storage.googleapis.com/coderabbit_public_assets/schema.v2.json
+# CodeRabbit — revisión automática de PRs. Ver propuesta en el issue #92.
+# Gratis en repos públicos open source. Requiere que el dueño instale la app:
+# https://github.com/apps/coderabbitai
+language: es-CO
+tone_instructions: >-
+  Servicio de emergencias. Sé directo y conciso. Prioriza correctitud,
+  privacidad y las reglas de agent.md por encima de estilo.
+reviews:
+  profile: chill            # menos ruido; subir a "assertive" para más profundidad
+  high_level_summary: true
+  poem: false
+  auto_review:
+    enabled: true
+    drafts: false
+  path_instructions:
+    - path: "src/**/*.js"
+      instructions: >-
+        Todo dato que venga de afuera debe pasar por esc() antes de entrar al
+        HTML (incluye atributos: value=, href=, data-*, aria-label). Las rutas
+        async van envueltas en wrap(). Nunca devuelvas una fila cruda de
+        `updates` en una respuesta pública: pasa por publicUpdate(); `contact`
+        no sale nunca y `reporter` sale enmascarado.
+    - path: "src/store/*.js"
+      instructions: >-
+        No hay migraciones: una columna nueva se agrega en sqlite.js Y en
+        postgres.js (CREATE TABLE + ALTER). Verifica que cualquier cambio de
+        esquema o consulta quede idéntico en ambos motores. Toda query debe ir
+        parametrizada.
+    - path: "src/facematch.js"
+      instructions: >-
+        `matcher.enabled` puede mentir en frío: hay que await
+        matcher.ensureReady() antes de leerlo. Marca cualquier lectura de
+        estado del matcher sin ensureReady() previo.
+    - path: "src/routes/webhooks.js"
+      instructions: >-
+        El webhook de WhatsApp procesa escrituras: verifica la firma
+        X-Hub-Signature-256 antes de tocar datos.
