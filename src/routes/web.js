@@ -92,12 +92,12 @@ function webRoutes(store, matcher) {
         ? `<h2>Personas reportadas como desaparecidas (${missing.length})</h2>` +
           missing
             .map((p) => {
-              const photo = photos.get(p.id);
-              return `<article class="card">
-  ${facePlate(photo, p.full_name)}
-  ${photo && photo.face_detail ? '<p class="face-caption">Puntos de reconocimiento facial detectados sobre el rostro.</p>' : ''}
-  <h3><a href="/person/${p.id}">${esc(p.full_name)}</a></h3>
-  <p class="meta">Último reporte: ${timeTag(p.last_report)}</p>
+              return `<article class="card person">
+  <div class="person-info">
+    <h3><a href="/person/${p.id}">${esc(p.full_name)}</a></h3>
+    <p class="meta">Último reporte: ${timeTag(p.last_report)}</p>
+  </div>
+  ${facePlate(photos.get(p.id), p.full_name)}
 </article>`;
             })
             .join('')
@@ -111,7 +111,7 @@ function webRoutes(store, matcher) {
   <h1>Voluntarios, rescatistas, bomberos, policías y hospitales:</h1>
   <a class="big-btn report" href="/rescate">
     <span class="btn-title">🔍 Mira quién está buscando la persona que rescataste</span>
-    <span class="btn-sub">Subes una foto, la comparamos y la borramos al instante</span>
+    <span class="btn-sub">Subes una foto, la comparamos con IA y la borramos al instante</span>
   </a>
 </section>
 <section class="action-group">
@@ -425,14 +425,21 @@ ${LOCATION_SCRIPT}`,
         return res.status(404).send(layout('No encontrado', '<p class="error">Persona no encontrada.</p>'));
       }
       const updates = await store.getUpdates(person.id);
+      const photo = (await store.reportPhotoByPerson([person.id])).get(person.id);
+      // Only worth a banner when the newest report ISN'T the located one —
+      // otherwise it just repeats the card right below it.
       const lastLocated = updates.find((u) => u.location);
+      const locationIsBuried = lastLocated && lastLocated !== updates[0];
       res.send(
         layout(
           person.full_name,
           `
 ${req.query.reported ? '<p class="notice">✅ Reporte registrado. Cuando un rescatista tenga a esta persona, verá tus datos de contacto.</p>' : ''}
-<h1>${esc(person.full_name)}</h1>
-${lastLocated ? `<p class="notice">📍 Última ubicación reportada: <strong>${esc(lastLocated.location)}</strong> (${timeTag(lastLocated.created_at)})</p>` : ''}
+<div class="person-header">
+  <h1>${esc(person.full_name)}</h1>
+  ${facePlate(photo, person.full_name, { large: true })}
+</div>
+${locationIsBuried ? `<p class="notice">📍 Última ubicación reportada: <strong>${esc(lastLocated.location)}</strong> (${timeTag(lastLocated.created_at)})</p>` : ''}
 ${updates.length ? updates.map((u) => updateCard(u)).join('') : '<p class="subtle">Sin reportes todavía.</p>'}
 <p class="subtle">Los datos de contacto de quien reporta solo se muestran a un rescatista cuando el rostro coincide.</p>
 <p><a class="big-btn report" href="/rescate">🔍 ¿La tienes contigo? Mira quién la busca</a></p>`,

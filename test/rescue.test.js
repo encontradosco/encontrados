@@ -275,6 +275,35 @@ test('the overlay is remapped onto the thumbnail crop', async (t) => {
   assert.equal((html.match(/class="face-pt"/g) || []).length, 3);
 });
 
+test('the person page shows the face bigger, and no duplicated location', async (t) => {
+  const { server, base } = await startApp();
+  t.after(() => server.close());
+
+  await reportMissing(base, { name: 'Andrés Beltrán', contact: '300 555 2222', face: 'andres' });
+  const html = await (await fetch(`${base}/person/1`)).text();
+
+  assert.match(html, /class="face pending large" data-src="\/photo\/1\/thumb"/);
+  assert.match(html, /class="face-box"/);
+
+  // The only report IS the located one, so the card already says where they
+  // were seen — repeating it in a banner above adds nothing.
+  assert.equal((html.match(/Barrio San José/g) || []).length, 1);
+  assert.ok(!html.includes('Última ubicación reportada'));
+});
+
+test('the location banner comes back when the newest report lacks a location', async (t) => {
+  const { server, base, store } = await startApp();
+  t.after(() => server.close());
+
+  await reportMissing(base, { name: 'Andrés Beltrán', contact: '300 555 2222', face: 'andres' });
+  // A newer report with no location: now where they were last seen is buried.
+  await store.addUpdate(1, { status: 'missing', message: 'Seguimos buscando', source: 'web' });
+
+  const html = await (await fetch(`${base}/person/1`)).text();
+  assert.match(html, /Última ubicación reportada/);
+  assert.equal((html.match(/Barrio San José/g) || []).length, 2, 'banner + tarjeta original');
+});
+
 test('the thumbnail is a small square crop, far lighter than the full photo', async (t) => {
   const { server, base } = await startApp();
   t.after(() => server.close());

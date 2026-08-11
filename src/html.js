@@ -67,7 +67,7 @@ function toCropSpace(detail) {
 // The listing loads the face thumbnail, never the full photo, and only once
 // PHOTO_SCRIPT decides the visitor's connection can afford it. Without
 // JavaScript the <noscript> copy loads normally.
-function facePlate(photo, personName) {
+function facePlate(photo, personName, { large = false } = {}) {
   if (!photo || !photo.thumb_type) return '';
   const detail = photo.face_detail ? toCropSpace(photo.face_detail) : null;
   const alt = `Foto del reporte de ${personName}`;
@@ -84,19 +84,20 @@ function facePlate(photo, personName) {
           )}"></span>`
       )
       .join('');
-    const confidence =
-      detail.confidence != null ? `<span class="face-conf">${Math.round(detail.confidence)}%</span>` : '';
     overlay = `<div class="face-box" style="left:${pct(l)};top:${pct(t)};width:${pct(w)};height:${pct(
       h
-    )}">${confidence}</div>${points}`;
+    )}"></div>${points}`;
   }
 
   // The <img> is built by PHOTO_SCRIPT, not rendered here: an <img> that is
   // hidden with display:none never satisfies loading="lazy" in Chrome, so it
   // would sit there forever without fetching anything.
-  return `<div class="face pending" data-src="${src}" data-alt="${esc(alt)}">
-  <button type="button" class="face-load">📷 Ver foto</button>
-  <noscript><img class="face-noscript" src="${src}" alt="${esc(alt)}" width="240" height="240"></noscript>
+  // The same 240px file either way — at 80 or 160 CSS px that is 3x/1.5x
+  // density, so there is nothing to gain from a second stored size.
+  const px = large ? 160 : 80;
+  return `<div class="face pending${large ? ' large' : ''}" data-src="${src}" data-alt="${esc(alt)}">
+  <button type="button" class="face-load" aria-label="Ver la foto de ${esc(personName)}" title="Ver foto">📷</button>
+  <noscript><img class="face-noscript" src="${src}" alt="${esc(alt)}" width="${px}" height="${px}"></noscript>
   ${overlay}
 </div>`;
 }
@@ -127,8 +128,8 @@ const PHOTO_SCRIPT = `<script>
     face.classList.add('loading');
     var img = document.createElement('img');
     img.alt = face.getAttribute('data-alt') || '';
-    img.width = 240;
-    img.height = 240;
+    img.width = 80;
+    img.height = 80;
     img.loading = 'lazy';
     img.decoding = 'async';
     img.addEventListener('load', function () {
