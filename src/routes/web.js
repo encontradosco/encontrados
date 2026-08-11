@@ -2,7 +2,12 @@ const crypto = require('crypto');
 const express = require('express');
 const multer = require('multer');
 const { sendVerificationEmail } = require('../notify');
-const { processPhoto, identifyRescuedPerson, MAX_QUERY_PHOTOS } = require('../facematch');
+const {
+  processPhoto,
+  identifyRescuedPerson,
+  backfillPhotoDerivatives,
+  MAX_QUERY_PHOTOS
+} = require('../facematch');
 const { esc, layout, updateCard, timeTag, statusBadge, facePlate, LOCATION_SCRIPT } = require('../html');
 
 // Express 4 doesn't catch async errors on its own.
@@ -57,9 +62,39 @@ const RESCUE_PRIVACY = `<p class="privacy">🔒 <strong>Gracias a nuestra IA, po
 
 const REPORT_PRIVACY = `<p class="privacy">📢 Las fotos del reporte <strong>se publican</strong> en la lista de personas desaparecidas, con los puntos de reconocimiento facial marcados sobre el rostro. Es lo que permite que un rescatista reconozca a la persona que tiene al lado. Sube solo fotos que quieras hacer públicas.</p>`;
 
+// Photos stored before thumbnails existed catch up on their own, so nobody has
+// to run a maintenance command for the listing to start showing faces.
+//
+// Bounded and throttled: one small batch per minute per instance, kicked off
+// AFTER the page has been sent so it never delays anyone. It stops costing
+// anything once there is nothing pending — and on a serverless instance that
+// gets frozen mid-sweep, the work is idempotent and simply resumes next time.
+const SWEEP_INTERVAL_MS = 60000;
+const SWEEP_BATCH = 5;
+
+// State per app, not per module: a serverless instance builds exactly one app,
+// so the throttle behaves the same in production — and two apps in one process
+// (the test suite) don't throttle each other.
+function createSweeper(store, matcher) {
+  let lastSweep = 0;
+  let sweeping = false;
+  return function sweep() {
+    const now = Date.now();
+    if (sweeping || now - lastSweep < SWEEP_INTERVAL_MS) return;
+    lastSweep = now;
+    sweeping = true;
+    backfillPhotoDerivatives(store, matcher, SWEEP_BATCH)
+      .catch((e) => console.error('[fotos] barrido automático falló:', e.message))
+      .finally(() => {
+        sweeping = false;
+      });
+  };
+}
+
 function webRoutes(store, matcher) {
   const router = express.Router();
   router.use(express.urlencoded({ extended: true }));
+  const sweepPhotoDerivatives = createSweeper(store, matcher);
 
   // ---------------------------------------------------------------- home
   router.get(
@@ -76,11 +111,12 @@ function webRoutes(store, matcher) {
           missing
             .map((p) => {
               const photo = photos.get(p.id);
-              return `<article class="card">
+              return `<article class="card person">
+  <div class="person-info">
+    <h3><a href="/person/${p.id}">${esc(p.full_name)}</a></h3>
+    <p class="meta">${statusBadge(p.status)} Último reporte: ${timeTag(p.last_report)}</p>
+  </div>
   ${facePlate(photo, p.full_name)}
-  ${photo && photo.face_detail ? '<p class="face-caption">Puntos de reconocimiento facial detectados sobre el rostro.</p>' : ''}
-  <h3><a href="/person/${p.id}">${esc(p.full_name)}</a></h3>
-  <p>${statusBadge(p.status)} <span class="meta">Último reporte: ${timeTag(p.last_report)}</span></p>
 </article>`;
             })
             .join('')
@@ -100,7 +136,7 @@ function webRoutes(store, matcher) {
   <h1>Voluntarios, rescatistas, bomberos, policías y hospitales:</h1>
   <a class="big-btn report" href="/rescate">
     <span class="btn-title">🔍 Mira quién está buscando la persona que rescataste</span>
-    <span class="btn-sub">Subes una foto, la comparamos y la borramos al instante</span>
+    <span class="btn-sub">Subes una foto, la comparamos con IA y la borramos al instante</span>
   </a>
 </section>
 <section class="action-group">
@@ -123,6 +159,9 @@ ${list}
           }
         )
       );
+
+      // Page already sent: catching old photos up costs this visitor nothing.
+      sweepPhotoDerivatives();
     })
   );
 
@@ -182,18 +221,77 @@ ${resultsHtml}
   // Serves REPORT photos only. A rescuer's photo ('query') is never served:
   // its bytes were dropped at upload, so there is nothing here to return —
   // this route enforces that rather than relying on the row being empty.
+  async function sendPhoto(req, res, pick) {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return res.status(404).end();
+    const photo = await store.getPhoto(id);
+    if (!photo || photo.kind !== 'report') return res.status(404).end();
+    const { raw, contentType } = pick(photo);
+    const bytes = Buffer.isBuffer(raw) ? raw : Buffer.from(raw || '');
+    if (!bytes.length) return res.status(404).end();
+    res.set('Content-Type', contentType || 'image/jpeg');
+    // Photos never change once stored, and a re-request on a bad connection is
+    // exactly what this page cannot afford.
+    res.set('Cache-Control', 'public, max-age=86400');
+    res.send(bytes);
+  }
+
   router.get(
     '/photo/:id',
+    wrap((req, res) => sendPhoto(req, res, (p) => ({ raw: p.content, contentType: p.content_type })))
+  );
+
+  // The small face crop the public listing loads — a few KB instead of a few
+  // hundred. Falls back to nothing (404) rather than serving the full photo:
+  // a visitor on a weak connection must never get the big one by accident.
+  router.get(
+    '/photo/:id/thumb',
+    wrap((req, res) => sendPhoto(req, res, (p) => ({ raw: p.thumb, contentType: p.thumb_type })))
+  );
+
+  // The same crop at 480px, for the person page — one face shown at 240 CSS px
+  // wants to be sharp on a phone screen, where the listing's 80px copy would
+  // look like mush.
+  router.get(
+    '/photo/:id/face',
+    wrap((req, res) =>
+      sendPhoto(req, res, (p) => ({ raw: p.thumb_large || p.thumb, contentType: p.thumb_type }))
+    )
+  );
+
+  // Manual version of the sweep above, openable in a browser. Unlike
+  // /api/reindex this needs no API key, and it is safe without one: it never
+  // notifies anybody, never calls IndexFaces (so it cannot duplicate a face in
+  // the collection), and only touches photos that are still missing a
+  // thumbnail or their geometry — once they all have both, it does nothing and
+  // costs nothing, however many times it is called.
+  router.all(
+    '/fotos/actualizar',
     wrap(async (req, res) => {
-      const id = Number(req.params.id);
-      if (!Number.isInteger(id) || id <= 0) return res.status(404).end();
-      const photo = await store.getPhoto(id);
-      if (!photo || photo.kind !== 'report') return res.status(404).end();
-      const bytes = Buffer.isBuffer(photo.content) ? photo.content : Buffer.from(photo.content || '');
-      if (!bytes.length) return res.status(404).end();
-      res.set('Content-Type', photo.content_type || 'image/jpeg');
-      res.set('Cache-Control', 'public, max-age=3600');
-      res.send(bytes);
+      const limit = Math.min(parseInt(req.query.limit || '100', 10) || 100, 500);
+      const r = await backfillPhotoDerivatives(store, matcher, limit);
+      res.send(
+        layout(
+          'Actualizar fotos',
+          `<h1 class="compact">Actualizar fotos</h1>
+${
+  r.processed === 0
+    ? '<p>✅ <strong>Todas las fotos están al día.</strong> No quedaba nada por hacer.</p>'
+    : `<p>✅ Procesadas <strong>${r.processed}</strong> foto(s): ${r.thumbnails} miniatura(s) y ${r.geometry} rostro(s) detectado(s).${
+        r.failed ? ` ${r.failed} no se pudo(ieron) procesar.` : ''
+      }</p>
+<p><a class="big-btn report" href="/fotos/actualizar?limit=${limit}">Procesar las siguientes ${limit}</a></p>
+<p class="subtle">Repite hasta que diga que están todas al día. También ocurre solo, poco a poco, a medida que la gente visita el inicio.</p>`
+}
+${
+  r.waiting
+    ? `<p class="privacy">⚠️ ${r.waiting} foto(s) ya tienen miniatura con recorte centrado, pero les falta ubicar el rostro y el reconocimiento facial no está activo. Cuando vuelva, ejecuta esto otra vez y se reencuadran sobre la cara.</p>`
+    : ''
+}
+<p><a href="/">← Volver al inicio</a></p>`,
+          { path: '/fotos/actualizar' }
+        )
+      );
     })
   );
 
@@ -471,15 +569,24 @@ ${LOCATION_SCRIPT}`,
         return res.status(404).send(layout('No encontrado', '<p class="error">Persona no encontrada.</p>'));
       }
       const updates = await store.getUpdates(person.id);
+      const photo = (await store.reportPhotoByPerson([person.id])).get(person.id);
+      // Only worth a banner when the newest report ISN'T the located one —
+      // otherwise it just repeats the card right below it.
       const lastLocated = updates.find((u) => u.location);
+      const locationIsBuried = lastLocated && lastLocated !== updates[0];
       res.send(
         layout(
           person.full_name,
           `
 ${req.query.reported ? '<p class="notice">✅ Reporte registrado. Cuando un rescatista tenga a esta persona, verá tus datos de contacto.</p>' : ''}
-<h1>${esc(person.full_name)}</h1>
-${lastLocated ? `<p class="notice">📍 Última ubicación reportada: <strong>${esc(lastLocated.location)}</strong> (${timeTag(lastLocated.created_at)})</p>` : ''}
+<div class="person-body">
+  <h1>${esc(person.full_name)}</h1>
+  <div class="person-updates">
+${locationIsBuried ? `<p class="notice">📍 Última ubicación reportada: <strong>${esc(lastLocated.location)}</strong> (${timeTag(lastLocated.created_at)})</p>` : ''}
 ${updates.length ? updates.map((u) => updateCard(u)).join('') : '<p class="subtle">Sin reportes todavía.</p>'}
+  </div>
+  ${facePlate(photo, person.full_name, { large: true })}
+</div>
 <p class="subtle">Los datos de contacto de quien reporta solo se muestran a un rescatista cuando el rostro coincide.</p>
 <p><a class="big-btn report" href="/rescate">🔍 ¿La tienes contigo? Mira quién la busca</a></p>`,
           {

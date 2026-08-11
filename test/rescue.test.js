@@ -1,5 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert');
+const sharp = require('sharp');
 const { createSqliteAdapter } = require('../src/store/sqlite');
 const { createApp } = require('../src/server');
 const { fakeSendgrid } = require('./helpers');
@@ -42,7 +43,30 @@ function fakeMatcher() {
   };
 }
 
-const photoBytes = (label) => Buffer.from(`fake-image:${label}`);
+// Real JPEGs, because thumbnails are actually decoded and cropped. One flat
+// colour per label: distinct bytes, so the fake matcher still reads them as
+// distinct faces. 400x500 keeps the crop math below deterministic.
+const jpegCache = new Map();
+async function photoBytes(label) {
+  if (!jpegCache.has(label)) {
+    let h = 0;
+    for (const ch of label) h = (h * 31 + ch.charCodeAt(0)) % 16777216;
+    jpegCache.set(
+      label,
+      await sharp({
+        create: {
+          width: 400,
+          height: 500,
+          channels: 3,
+          background: { r: (h >> 16) & 255, g: (h >> 8) & 255, b: h & 255 }
+        }
+      })
+        .jpeg()
+        .toBuffer()
+    );
+  }
+  return jpegCache.get(label);
+}
 
 async function startApp(matcher) {
   const app = await createApp(await createSqliteAdapter(':memory:'), matcher || fakeMatcher());
@@ -57,7 +81,7 @@ async function reportMissing(base, { name, contact, face }) {
   fd.set('name', name);
   fd.set('location', 'Barrio San José');
   fd.set('contact', contact);
-  fd.append('photos', new File([photoBytes(face)], 'f.jpg', { type: 'image/jpeg' }));
+  fd.append('photos', new File([await photoBytes(face)], 'f.jpg', { type: 'image/jpeg' }));
   return fetch(`${base}/report`, { method: 'POST', body: fd, redirect: 'manual' });
 }
 
@@ -73,7 +97,7 @@ test('a rescuer sees who is looking for the person, with their contact', async (
   });
 
   const fd = new FormData();
-  fd.set('photo', new File([photoBytes('camila')], 'rescatada.jpg', { type: 'image/jpeg' }));
+  fd.set('photo', new File([await photoBytes('camila')], 'rescatada.jpg', { type: 'image/jpeg' }));
   const html = await (await fetch(`${base}/rescate`, { method: 'POST', body: fd })).text();
 
   assert.match(html, /Camila Rojas/);
@@ -91,7 +115,7 @@ test('a phone-only contact renders as a tap-to-call link', async (t) => {
   await reportMissing(base, { name: 'Laura Gómez', contact: '3001234567', face: 'laura' });
 
   const fd = new FormData();
-  fd.set('photo', new File([photoBytes('laura')], 'rescatada.jpg', { type: 'image/jpeg' }));
+  fd.set('photo', new File([await photoBytes('laura')], 'rescatada.jpg', { type: 'image/jpeg' }));
   const html = await (await fetch(`${base}/rescate`, { method: 'POST', body: fd })).text();
 
   assert.match(html, /<a href="tel:3001234567">3001234567<\/a>/);
@@ -105,7 +129,7 @@ test('an email-only contact renders as a mailto link', async (t) => {
   await reportMissing(base, { name: 'Mario Rojas', contact: 'familia@ejemplo.com', face: 'mario' });
 
   const fd = new FormData();
-  fd.set('photo', new File([photoBytes('mario')], 'rescatada.jpg', { type: 'image/jpeg' }));
+  fd.set('photo', new File([await photoBytes('mario')], 'rescatada.jpg', { type: 'image/jpeg' }));
   const html = await (await fetch(`${base}/rescate`, { method: 'POST', body: fd })).text();
 
   assert.match(html, /<a href="mailto:familia@ejemplo\.com">familia@ejemplo\.com<\/a>/);
@@ -117,7 +141,7 @@ test("the rescuer's photo is never stored, only its face signature", async (t) =
   t.after(() => server.close());
 
   const fd = new FormData();
-  fd.set('photo', new File([photoBytes('desconocido')], 'r.jpg', { type: 'image/jpeg' }));
+  fd.set('photo', new File([await photoBytes('desconocido')], 'r.jpg', { type: 'image/jpeg' }));
   await fetch(`${base}/rescate`, { method: 'POST', body: fd });
 
   const adapter = await createSqliteAdapter(':memory:');
@@ -136,7 +160,7 @@ test('no match tells the rescuer nobody is looking yet', async (t) => {
   const { server, base } = await startApp();
   t.after(() => server.close());
   const fd = new FormData();
-  fd.set('photo', new File([photoBytes('nadie')], 'r.jpg', { type: 'image/jpeg' }));
+  fd.set('photo', new File([await photoBytes('nadie')], 'r.jpg', { type: 'image/jpeg' }));
   const html = await (await fetch(`${base}/rescate`, { method: 'POST', body: fd })).text();
   assert.match(html, /Nadie ha reportado a esta persona/);
 });
@@ -152,7 +176,7 @@ test('a rescuer can subscribe and is alerted when someone reports that person', 
 
   // Rescuer uploads a photo and leaves an email
   const fd = new FormData();
-  fd.set('photo', new File([photoBytes('nn')], 'r.jpg', { type: 'image/jpeg' }));
+  fd.set('photo', new File([await photoBytes('nn')], 'r.jpg', { type: 'image/jpeg' }));
   fd.set('email', 'rescatista@ejemplo.com');
   await fetch(`${base}/rescate`, { method: 'POST', body: fd });
 
@@ -178,7 +202,7 @@ test('no match, no upfront email: the result offers an inline "notify me" form',
   const { server, base } = await startApp();
   t.after(() => server.close());
   const fd = new FormData();
-  fd.set('photo', new File([photoBytes('sin-correo')], 'r.jpg', { type: 'image/jpeg' }));
+  fd.set('photo', new File([await photoBytes('sin-correo')], 'r.jpg', { type: 'image/jpeg' }));
   const html = await (await fetch(`${base}/rescate`, { method: 'POST', body: fd })).text();
   assert.match(html, /action="\/rescate\/\d+\/subscribe"/, 'debe ofrecer el mini-form de aviso por correo');
   assert.match(html, /name="photoId"/);
@@ -188,7 +212,7 @@ test('no match, upfront email already given: no duplicate inline form is shown',
   const { server, base } = await startApp();
   t.after(() => server.close());
   const fd = new FormData();
-  fd.set('photo', new File([photoBytes('con-correo')], 'r.jpg', { type: 'image/jpeg' }));
+  fd.set('photo', new File([await photoBytes('con-correo')], 'r.jpg', { type: 'image/jpeg' }));
   fd.set('email', 'rescatista2@ejemplo.com');
   const html = await (await fetch(`${base}/rescate`, { method: 'POST', body: fd })).text();
   assert.doesNotMatch(html, /action="\/rescate\/\d+\/subscribe"/);
@@ -205,7 +229,7 @@ test('adding an email after the fact (no re-upload) still alerts on a later matc
 
   // Rescuer uploads a photo with NO email — face gets indexed, no subscription yet.
   const fd = new FormData();
-  fd.set('photo', new File([photoBytes('tardio')], 'r.jpg', { type: 'image/jpeg' }));
+  fd.set('photo', new File([await photoBytes('tardio')], 'r.jpg', { type: 'image/jpeg' }));
   const html = await (await fetch(`${base}/rescate`, { method: 'POST', body: fd })).text();
   const form = /action="(\/rescate\/\d+\/subscribe)"[\s\S]*?name="photoId" value="(\d+)"/.exec(html);
   assert.ok(form, 'el resultado debe traer la acción del mini-form y el photoId');
@@ -272,7 +296,7 @@ test("privacy: /photo/:id serves report photos but never a rescuer's", async (t)
   await reportMissing(base, { name: 'Lucía Ortega', contact: '300 555 1111', face: 'lucia' });
 
   const fd = new FormData();
-  fd.set('photo', new File([photoBytes('lucia')], 'rescatada.jpg', { type: 'image/jpeg' }));
+  fd.set('photo', new File([await photoBytes('lucia')], 'rescatada.jpg', { type: 'image/jpeg' }));
   fd.set('email', 'rescatista@ejemplo.com');
   await fetch(`${base}/rescate`, { method: 'POST', body: fd });
 
@@ -302,22 +326,120 @@ test("privacy: /photo/:id serves report photos but never a rescuer's", async (t)
   }
 });
 
-test('the missing list shows each report photo with its detection overlay', async (t) => {
+test('the missing list defers the thumbnail instead of loading the full photo', async (t) => {
   const { server, base } = await startApp();
   t.after(() => server.close());
 
   await reportMissing(base, { name: 'Andrés Beltrán', contact: '300 555 2222', face: 'andres' });
 
   const html = await (await fetch(base)).text();
-  assert.match(html, /<img src="\/photo\/1"/);
-  // Bounding box and landmarks, positioned as percentages of the photo.
-  assert.match(html, /class="face-box" style="left:25\.000%;top:10\.000%;width:50\.000%;height:60\.000%"/);
-  assert.match(html, /class="face-pt" style="left:40\.000%;top:30\.000%"/);
+  // No <img> is rendered at all: PHOTO_SCRIPT builds it, and only if the
+  // connection can afford it. Only the <noscript> copy fetches unconditionally.
+  assert.match(html, /class="face pending" data-src="\/photo\/1\/thumb"/);
+  assert.ok(!/<img[^>]*\ssrc="\/photo\/1"/.test(html), 'la lista nunca carga la foto completa');
+  assert.match(html, /<noscript><img class="face-noscript" src="\/photo\/1\/thumb"/);
+  assert.match(html, /class="face-load"/);
+});
+
+test('thumbnails only load when the connection can afford them', () => {
+  const { thumbnailsAreAffordable } = require('../src/html');
+
+  // Fast enough: load.
+  assert.equal(thumbnailsAreAffordable({ effectiveType: '4g', downlink: 10 }), true);
+  assert.equal(thumbnailsAreAffordable({ effectiveType: '3g', downlink: 1.2 }), true);
+  // Too slow: don't.
+  assert.equal(thumbnailsAreAffordable({ effectiveType: '3g', downlink: 0.2 }), false);
+  assert.equal(thumbnailsAreAffordable({ effectiveType: '2g', downlink: 0.1 }), false);
+  assert.equal(thumbnailsAreAffordable({ effectiveType: 'slow-2g', downlink: 0.05 }), false);
+  // Data saver wins over any speed.
+  assert.equal(thumbnailsAreAffordable({ effectiveType: '4g', downlink: 10, saveData: true }), false);
+  // Browsers without the Network Information API (Safari, Firefox) still get
+  // photos — refusing everyone we can't measure would be worse.
+  assert.equal(thumbnailsAreAffordable(undefined), true);
+  assert.equal(thumbnailsAreAffordable({}), true);
+});
+
+test('the connection rule shipped to the browser is the one tested here', async (t) => {
+  const { server, base } = await startApp();
+  t.after(() => server.close());
+  const { thumbnailsAreAffordable } = require('../src/html');
+  const html = await (await fetch(base)).text();
+  assert.ok(html.includes(thumbnailsAreAffordable.toString()), 'el script debe llevar la misma función');
+});
+
+test('the overlay is remapped onto the thumbnail crop', async (t) => {
+  const { server, base } = await startApp();
+  t.after(() => server.close());
+
+  await reportMissing(base, { name: 'Andrés Beltrán', contact: '300 555 2222', face: 'andres' });
+
+  const html = await (await fetch(base)).text();
+  // The photo is 400x500 and the face box is {l:.25,t:.1,w:.5,h:.6}, so the
+  // crop is the 400x400 square at the top: crop = {l:0,t:0,w:1,h:0.8}.
+  // The box maps to t = 0.1/0.8 = 0.125 and h = 0.6/0.8 = 0.75; left/width are
+  // unchanged because the crop spans the full width.
+  assert.match(html, /class="face-box" style="left:25\.000%;top:12\.500%;width:50\.000%;height:75\.000%"/);
+  // eyeLeft (0.4, 0.3) -> y = 0.3/0.8 = 0.375
+  assert.match(html, /class="face-pt" style="left:40\.000%;top:37\.500%"/);
   assert.match(html, /title="ojo izquierdo"/);
   assert.equal((html.match(/class="face-pt"/g) || []).length, 3);
 });
 
-test('a photo without detection geometry still renders, without an overlay', async (t) => {
+test('the person page shows the face bigger, and no duplicated location', async (t) => {
+  const { server, base } = await startApp();
+  t.after(() => server.close());
+
+  await reportMissing(base, { name: 'Andrés Beltrán', contact: '300 555 2222', face: 'andres' });
+  const html = await (await fetch(`${base}/person/1`)).text();
+
+  // The bigger page pulls the bigger crop, not the listing's 80px one.
+  assert.match(html, /class="face pending large" data-src="\/photo\/1\/face"/);
+  assert.match(html, /class="face-box"/);
+
+  const big = Buffer.from(await (await fetch(`${base}/photo/1/face`)).arrayBuffer());
+  const small = Buffer.from(await (await fetch(`${base}/photo/1/thumb`)).arrayBuffer());
+  assert.equal((await sharp(big).metadata()).width, 400, 'no se reescala más allá del original');
+  assert.equal((await sharp(small).metadata()).width, 240);
+  assert.ok(big.length > small.length);
+
+  // The only report IS the located one, so the card already says where they
+  // were seen — repeating it in a banner above adds nothing.
+  assert.equal((html.match(/Barrio San José/g) || []).length, 1);
+  assert.ok(!html.includes('Última ubicación reportada'));
+});
+
+test('the location banner comes back when the newest report lacks a location', async (t) => {
+  const { server, base, store } = await startApp();
+  t.after(() => server.close());
+
+  await reportMissing(base, { name: 'Andrés Beltrán', contact: '300 555 2222', face: 'andres' });
+  // A newer report with no location: now where they were last seen is buried.
+  await store.addUpdate(1, { status: 'missing', message: 'Seguimos buscando', source: 'web' });
+
+  const html = await (await fetch(`${base}/person/1`)).text();
+  assert.match(html, /Última ubicación reportada/);
+  assert.equal((html.match(/Barrio San José/g) || []).length, 2, 'banner + tarjeta original');
+});
+
+test('the thumbnail is a small square crop, far lighter than the full photo', async (t) => {
+  const { server, base } = await startApp();
+  t.after(() => server.close());
+
+  await reportMissing(base, { name: 'Andrés Beltrán', contact: '300 555 2222', face: 'andres' });
+
+  const thumb = await fetch(`${base}/photo/1/thumb`);
+  assert.equal(thumb.status, 200);
+  assert.equal(thumb.headers.get('content-type'), 'image/jpeg');
+  const bytes = Buffer.from(await thumb.arrayBuffer());
+  const meta = await sharp(bytes).metadata();
+  assert.equal(meta.width, 240);
+  assert.equal(meta.height, 240);
+
+  const full = Buffer.from(await (await fetch(`${base}/photo/1`)).arrayBuffer());
+  assert.ok(bytes.length < full.length, 'la miniatura debe pesar menos que la foto completa');
+});
+
+test('a photo without detection geometry still gets a centred thumbnail', async (t) => {
   const matcher = fakeMatcher();
   matcher.indexFace = async () => ({ faceId: 'face-x', geometry: null });
   const { server, base } = await startApp(matcher);
@@ -326,7 +448,83 @@ test('a photo without detection geometry still renders, without an overlay', asy
   await reportMissing(base, { name: 'Sara Nieto', contact: '300 555 3333', face: 'sara' });
 
   const html = await (await fetch(base)).text();
-  assert.match(html, /<img src="\/photo\/1"/);
+  assert.match(html, /data-src="\/photo\/1\/thumb"/);
   assert.ok(!html.includes('face-pt'));
   assert.ok(!html.includes('face-box'));
+  assert.equal((await fetch(`${base}/photo/1/thumb`)).status, 200);
+});
+
+test('reindex backfills thumbnails and geometry for photos stored earlier', async (t) => {
+  // Face matching down at upload time: the photo is stored unindexed, and gets
+  // a centred thumbnail so the listing still has something to show.
+  const { server, base, store } = await startApp({ enabled: false });
+  t.after(() => server.close());
+
+  await reportMissing(base, { name: 'Iván Salazar', contact: '300 555 4444', face: 'ivan' });
+  let photo = await store.getPhoto(1);
+  assert.equal(photo.face_id, null);
+  assert.ok(photo.thumb && photo.thumb.length, 'debe haber miniatura aunque no haya reconocimiento');
+  assert.ok(!photo.face_detail.box, 'todavía no se sabe dónde está el rostro');
+
+  // Rekognition comes back: reindex fills in the geometry and reframes the crop.
+  const { backfillPhotoDerivatives } = require('../src/facematch');
+  const result = await backfillPhotoDerivatives(store, fakeMatcher(), 100);
+  assert.equal(result.thumbnails, 1);
+  assert.equal(result.geometry, 1);
+
+  photo = await store.getPhoto(1);
+  assert.deepEqual(photo.face_detail.box, FAKE_GEOMETRY.box);
+  assert.ok(photo.face_detail.crop, 'la miniatura debe registrar su recorte');
+  assert.match((await (await fetch(base)).text()), /class="face-box"/);
+
+  // Nothing left to do on a second pass.
+  const again = await backfillPhotoDerivatives(store, fakeMatcher(), 100);
+  assert.equal(again.processed, 0);
+});
+
+test('/fotos/actualizar brings photos up to date without an API key', async (t) => {
+  const { server, base, store } = await startApp({ enabled: false });
+  t.after(() => server.close());
+
+  await reportMissing(base, { name: 'Iván Salazar', contact: '300 555 4444', face: 'ivan' });
+  // Strip the derivatives, as if this photo predated thumbnails entirely.
+  await store.setPhotoThumbnails(1, { small: null, large: null, contentType: null });
+  await store.setPhotoFaceDetail(1, null);
+
+  // No Authorization header anywhere: this is meant to be opened in a browser.
+  const first = await fetch(`${base}/fotos/actualizar`);
+  assert.equal(first.status, 200);
+  const html = await first.text();
+  assert.match(html, /Procesadas <strong>1<\/strong>/);
+
+  // Idempotent, and it stops asking for more: with matching down there is
+  // nothing left this run could improve, so it must not loop forever.
+  const second = await (await fetch(`${base}/fotos/actualizar`)).text();
+  assert.match(second, /Todas las fotos están al día/);
+  assert.match(second, /les falta ubicar el rostro/);
+
+  // And once Rekognition is back, that same photo does get reframed.
+  const { backfillPhotoDerivatives } = require('../src/facematch');
+  const result = await backfillPhotoDerivatives(store, fakeMatcher(), 100);
+  assert.equal(result.geometry, 1);
+  assert.deepEqual((await store.getPhoto(1)).face_detail.box, FAKE_GEOMETRY.box);
+});
+
+test('viewing the home page catches old photos up on its own', async (t) => {
+  const { server, base, store } = await startApp({ enabled: false });
+  t.after(() => server.close());
+
+  await reportMissing(base, { name: 'Rosa Gil', contact: '300 555 5555', face: 'rosa' });
+  // Drop the derivatives, as if this photo predated thumbnails entirely.
+  await store.setPhotoThumbnails(1, { small: null, large: null, contentType: null });
+  await store.setPhotoFaceDetail(1, null);
+  assert.equal((await store.photosMissingDerivatives(10)).length, 1);
+
+  await fetch(base);
+  // The sweep runs after the response, so give it a moment to land.
+  for (let i = 0; i < 40 && (await store.photosMissingDerivatives(10)).length; i++) {
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  const photo = await store.getPhoto(1);
+  assert.ok(photo.thumb && photo.thumb.length, 'la miniatura debe haberse generado sola');
 });

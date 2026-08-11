@@ -156,54 +156,120 @@ h1.compact .subtle { font-family: var(--font-sans); font-weight: 400; font-size:
 /* Report photo with the face-detection geometry drawn over it. Every marker is
    positioned in percentages of this box, which is exactly how Rekognition
    reports its coordinates — so the overlay stays aligned at any size. */
+/* Name on the left, face on the right. */
+.card.person {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+}
+.person-info { flex: 1; min-width: 0; }
+.person-info h3,
+.person-info p { margin: 0; }
+
+/* Person page: name and reports on the left, a bigger version of the same face
+   spanning both on the right — so it starts level with the title. */
+.person-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 240px;
+  grid-template-areas:
+    'title photo'
+    'reports photo';
+  align-items: start;
+  column-gap: 1rem;
+}
+.person-body > h1 { grid-area: title; margin: 0.4rem 0 0.7rem; }
+.person-updates { grid-area: reports; min-width: 0; }
+.person-updates .card:first-child { margin-top: 0; }
+.person-body .face {
+  grid-area: photo;
+  align-self: start;
+  width: 240px;
+}
+
+/* No room for both side by side on a phone: title, then face, then reports. */
+@media (max-width: 620px) {
+  .person-body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      'title'
+      'photo'
+      'reports';
+  }
+  .person-body .face { width: 100%; max-width: 240px; margin-bottom: 0.8rem; }
+}
+
 .face {
   position: relative;
-  display: block;
-  margin: 0 0 0.6rem;
-  border-radius: 10px;
+  flex: 0 0 80px;
+  width: 80px;
+  aspect-ratio: 1 / 1; /* holds its shape before the thumbnail arrives */
+  border-radius: 8px;
   overflow: hidden;
-  background: #0d1b2a;
+  background: #eceadf;
   line-height: 0;
 }
+.face.large { border-radius: 10px; }
 .face img {
   display: block;
   width: 100%;
-  height: auto;
+  height: 100%;
+  object-fit: cover;
 }
+/* The overlay only makes sense once the thumbnail under it has loaded. */
+.face.pending .face-box,
+.face.pending .face-pt {
+  display: none;
+}
+.face-load {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 1.4rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.face-load:hover { background: rgba(43, 108, 176, 0.12); }
+.face:not(.pending) .face-load,
+.face.loading .face-load {
+  display: none;
+}
+.face.loading::after {
+  content: '…';
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font-size: 1.2rem;
+}
+/* Detection markers, in the site's own blue. The white halo is what keeps them
+   legible over a dark photo at this size. */
 .face-box {
   position: absolute;
-  border: 2px solid #47d16c;
-  border-radius: 3px;
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
+  border: 1px solid var(--accent);
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.75);
   pointer-events: none;
-}
-.face-conf {
-  position: absolute;
-  top: -1.15rem;
-  left: -2px;
-  background: #47d16c;
-  color: #06210f;
-  font-size: 0.66rem;
-  font-weight: 700;
-  line-height: 1.15;
-  padding: 0.05rem 0.3rem;
-  border-radius: 3px;
 }
 .face-pt {
   position: absolute;
+  width: 3px;
+  height: 3px;
+  margin: -1.5px 0 0 -1.5px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.8);
+  pointer-events: none;
+}
+.face.large .face-box { border-width: 2px; }
+.face.large .face-pt {
   width: 5px;
   height: 5px;
   margin: -2.5px 0 0 -2.5px;
-  border-radius: 50%;
-  background: #ffd166;
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
-  pointer-events: none;
-}
-.face-caption {
-  color: var(--muted);
-  font-size: 0.72rem;
-  line-height: 1.3;
-  margin: -0.3rem 0 0.4rem;
 }
 
 .badge {

@@ -5,7 +5,7 @@ const { STATUSES, SOURCES } = require('../people');
 const {
   processPhoto,
   backfillUnindexedPhotos,
-  backfillFaceDetail,
+  backfillPhotoDerivatives,
   MAX_QUERY_PHOTOS
 } = require('../facematch');
 const { publicUpdate } = require('../privacy');
@@ -254,16 +254,16 @@ function apiRoutes(store, matcher) {
   // notify anyone whose search now matches. Safe to run repeatedly.
   // Triggers AWS Rekognition + subscriber notifications, so it requires the API key.
   //
-  // Also fills in the detection geometry of report photos indexed before it was
-  // captured, so the public overlay appears on them too.
+  // Also brings already-stored report photos up to date: the detection geometry
+  // the public overlay draws, and the face thumbnail the listing loads.
   router.all(
     '/reindex',
     requireKey,
     wrap(async (req, res) => {
       const limit = Math.min(parseInt(req.query.limit || '100', 10) || 100, 500);
       const indexed = await backfillUnindexedPhotos(store, matcher, limit);
-      const geometry = await backfillFaceDetail(store, matcher, limit);
-      res.json({ ...indexed, geometry });
+      const derivatives = await backfillPhotoDerivatives(store, matcher, limit);
+      res.json({ ...indexed, derivatives });
     })
   );
 

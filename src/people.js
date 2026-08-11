@@ -172,8 +172,12 @@ function createStore(adapter) {
     return byPerson;
   }
 
-  async function photosMissingFaceDetail(limit = 100) {
-    return adapter.photosMissingFaceDetail(limit);
+  async function setPhotoThumbnails(photoId, sizes) {
+    return adapter.setPhotoThumbnails(photoId, sizes);
+  }
+
+  async function photosMissingDerivatives(limit = 100) {
+    return (await adapter.photosMissingDerivatives(limit)).map(withParsedDetail);
   }
 
   async function clearPhotoContent(photoId) {
@@ -224,13 +228,14 @@ function createStore(adapter) {
     setPhotoFaceId,
     setPhotoSubscriptionId,
     setPhotoFaceDetail,
+    setPhotoThumbnails,
     getPhoto,
     reportPhotoByPerson,
     clearPhotoContent,
     photosByFaceIds,
     countQueryPhotos,
     photosMissingFaceId,
-    photosMissingFaceDetail,
+    photosMissingDerivatives,
     counts,
     deletePerson,
     close: () => adapter.close()
