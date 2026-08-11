@@ -455,6 +455,23 @@ pre {
 }
 .share-note { font-size: 0.78rem; margin: -0.2rem 0 0; }
 
+/* Las casillas que solo pide el registro de terceros. Ocultas hasta que se
+   marca la casilla: el formulario no crece para quien no va a usarlas. Es CSS
+   puro, sin JavaScript — si el navegador no entiende `:has()` se quedan
+   ocultas y queda el formulario de siempre, que se envía igual porque todas
+   son opcionales. */
+.ctb-fields { display: none; }
+.share-check:has(input:checked) ~ .ctb-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  border-left: 3px solid var(--accent);
+  padding: 0.15rem 0 0.15rem 0.75rem;
+  margin-top: 0.15rem;
+}
+.ctb-why { margin: 0; }
+.contact-note { font-size: 0.78rem; margin: -0.2rem 0 0; }
+
 /* Honeypot on the ideas/bug forms. Not `display:none` — some bots skip fields
    hidden that way, and some password managers try to fill them. Off-screen and
    out of the tab order keeps it invisible to people and tempting to bots. */
