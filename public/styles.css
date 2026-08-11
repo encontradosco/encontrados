@@ -351,7 +351,14 @@ button:disabled { opacity: 0.55; cursor: progress; }
   color: var(--ink-soft);
   margin: 0;
 }
+/* One quiet line under the listing heading — it credits the sources without
+   competing with the list of people, which is what the page is for. */
 .sources-note { color: var(--muted); font-size: 0.78rem; margin: -0.4rem 0 0.8rem; }
+
+/* Possible-duplicate warning: a stack of "this may be the same person" cards,
+   each led by the face, because the photo is what a reader actually judges. */
+.card.dup .face { max-width: 220px; margin: 0 auto 0.6rem; }
+.dup-q { font-weight: 600; margin: 0.7rem 0 0.5rem; }
 label { font-weight: 500; font-size: 0.9rem; }
 label span { display: block; margin-bottom: 0.2rem; }
 .subtle { color: var(--muted); font-size: 0.88rem; }

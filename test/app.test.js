@@ -83,7 +83,7 @@ test('home lists missing people and offers both actions', async (t) => {
   const html = await (await fetch(base)).text();
   assert.match(html, /mira quién está buscando la persona que rescataste/i);
   assert.match(html, /href="\/rescate"/);
-  assert.match(html, /Reporta desaparecido/);
+  assert.match(html, /📢 Reporta desaparecido/);
   // The sources line lives small under the listing, present even when empty.
   assert.match(html, /Fuentes de información de desaparecidos/);
 
@@ -97,8 +97,12 @@ test('home lists missing people and offers both actions', async (t) => {
   assert.equal(report.status, 303);
 
   const home = await (await fetch(base)).text();
-  assert.match(home, /Personas reportadas como desaparecidas/);
+  assert.match(home, /Reportes de desaparecidos más recientes/);
   assert.match(home, /Pedro Pablo Ramírez/);
+  // The sources line sits under the listing heading, small, not as a section
+  // of its own competing with it.
+  assert.match(home, /Fuentes de información de desaparecidos: Encontrados\.co, <a [^>]*>Colombia Te Busca<\/a>/);
+  assert.doesNotMatch(home, /<h2>Fuentes de información<\/h2>/);
 });
 
 // A second party reporting the same person is never rejected: the report is

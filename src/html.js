@@ -353,6 +353,11 @@ function updateCard(u, personName) {
 </article>`;
 }
 
+// Type-ahead for the "where were they" field. There is deliberately NO
+// "share my location" button: the reporter is almost never standing where the
+// missing person was last seen, so their GPS answered a different question
+// than the one being asked — and the browser permission prompt cost a form
+// abandon to get there.
 const LOCATION_SCRIPT = `<script>
 (function () {
   var loc = document.getElementById('location');
