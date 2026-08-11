@@ -8,13 +8,17 @@ const { findDuplicateCandidates } = require('../src/duplicates');
 
 // A matcher that reports every photo as the same face, so the face path can be
 // exercised without AWS. `searchByImage` answers with whatever face ids have
-// been indexed so far — exactly the shape Rekognition returns.
-function fakeMatcher() {
+// been indexed so far — exactly the shape Rekognition returns. `blindTo` lets a
+// test make specific photo bytes return nothing, the way a group shot with no
+// usable face does in practice.
+function fakeMatcher({ blindTo = [] } = {}) {
   let next = 1;
   const indexed = [];
+  const searched = [];
   return {
     enabled: true,
     status: 'fake',
+    searched,
     async indexFace() {
       const faceId = `face-${next++}`;
       indexed.push(faceId);
@@ -26,7 +30,10 @@ function fakeMatcher() {
     async thumbnails() {
       return {};
     },
-    async searchByImage() {
+    async searchByImage(bytes) {
+      const body = Buffer.from(bytes).toString();
+      searched.push(body);
+      if (blindTo.includes(body)) return [];
       return indexed.map((faceId) => ({ faceId, similarity: 97 }));
     }
   };
@@ -40,14 +47,19 @@ async function startApp(matcher = nullMatcher) {
   return { server, base: `http://127.0.0.1:${server.address().port}`, store: app.locals.store };
 }
 
-function reportForm({ name, location = 'Barrio Centro', contact = '300 123 4567' }) {
+function reportForm({ name, location = 'Barrio Centro', contact = '300 123 4567', photos = ['foto'] }) {
   const fd = new FormData();
   fd.set('name', name);
   fd.set('location', location);
   fd.set('contact', contact);
-  fd.append('photos', new File([Buffer.from('foto')], 'f.jpg', { type: 'image/jpeg' }));
+  for (const [i, body] of photos.entries()) {
+    fd.append('photos', new File([Buffer.from(body)], `f${i}.jpg`, { type: 'image/jpeg' }));
+  }
   return fd;
 }
+
+const post = (base, body) =>
+  fetch(`${base}/report`, { method: 'POST', body, redirect: 'manual' });
 
 // ---------------------------------------------------------------- detection
 
@@ -71,7 +83,7 @@ test('a face match on another person surfaces as a duplicate candidate', async (
   // Someone reports the same face under a completely different name.
   const found = await findDuplicateCandidates(store, matcher, {
     name: 'Persona Sin Identificar',
-    photoBytes: Buffer.from('otra foto')
+    photos: [Buffer.from('otra foto')]
   });
 
   assert.equal(found.length, 1);
@@ -80,13 +92,39 @@ test('a face match on another person surfaces as a duplicate candidate', async (
   assert.equal(found[0].similarity, 97);
 });
 
+// Regression: only files[0] used to be searched, so a family whose first photo
+// is an unusable group shot got no face signal at all.
+test('every uploaded photo is searched, not just the first', async (t) => {
+  const store = createStore(await createSqliteAdapter(':memory:'));
+  t.after(() => store.close());
+  const matcher = fakeMatcher({ blindTo: ['grupal'] });
+
+  const { person } = await store.findOrCreatePerson('Juan Carlos Pérez');
+  const photo = await store.addPhoto({
+    personId: person.id,
+    kind: 'report',
+    content: Buffer.from('foto'),
+    contentType: 'image/jpeg'
+  });
+  const { faceId } = await matcher.indexFace();
+  await store.setPhotoFaceId(photo.id, faceId);
+
+  const found = await findDuplicateCandidates(store, matcher, {
+    name: 'Persona Sin Identificar',
+    photos: [Buffer.from('grupal'), Buffer.from('retrato')]
+  });
+
+  assert.deepEqual(matcher.searched, ['grupal', 'retrato'], 'ambas fotos deben buscarse');
+  assert.equal(found.length, 1, 'el retrato #2 debe encontrar el duplicado');
+});
+
 test("a rescuer's face is never reported as a duplicate report", async (t) => {
   const store = createStore(await createSqliteAdapter(':memory:'));
   t.after(() => store.close());
   const matcher = fakeMatcher();
 
   // 'query' = a rescuer holding this person. That is a MATCH, not a duplicate
-  // report, and it must never show up on the reconciliation screen.
+  // report, and it must never show up on the warning.
   const { person } = await store.findOrCreatePerson('Persona Rescatada abc123');
   const photo = await store.addPhoto({
     personId: person.id,
@@ -99,172 +137,204 @@ test("a rescuer's face is never reported as a duplicate report", async (t) => {
 
   const found = await findDuplicateCandidates(store, matcher, {
     name: 'Alguien Más',
-    photoBytes: Buffer.from('foto')
+    photos: [Buffer.from('foto')]
   });
   assert.deepEqual(found, []);
 });
 
-test('a face-matching provider that is down never breaks detection', async (t) => {
+// The web caller runs detection BEFORE the report is written, so anything that
+// escapes this function discards a report — the one outcome an emergency
+// service must never produce.
+test('detection never throws, whatever fails underneath', async (t) => {
   const store = createStore(await createSqliteAdapter(':memory:'));
   t.after(() => store.close());
-  const broken = {
+
+  const brokenMatcher = {
     enabled: true,
     async searchByImage() {
       throw new Error('Rekognition caído');
     }
   };
-  // No throw, no candidates — reporting keeps working.
-  const found = await findDuplicateCandidates(store, broken, {
-    name: 'Nadie Registrado Aún',
-    photoBytes: Buffer.from('foto')
+  assert.deepEqual(
+    await findDuplicateCandidates(store, brokenMatcher, {
+      name: 'Nadie Registrado Aún',
+      photos: [Buffer.from('foto')]
+    }),
+    []
+  );
+
+  // And when the DATABASE is the thing that fails.
+  const brokenStore = {
+    async searchPeople() {
+      throw new Error('conexión perdida');
+    },
+    async photosByFaceIds() {
+      throw new Error('conexión perdida');
+    }
+  };
+  assert.deepEqual(
+    await findDuplicateCandidates(brokenStore, nullMatcher, {
+      name: 'Nadie',
+      photos: [Buffer.from('foto')]
+    }),
+    []
+  );
+});
+
+test('a report is still saved when duplicate detection is broken', async (t) => {
+  const { server, base, store } = await startApp({
+    enabled: true,
+    async searchByImage() {
+      throw new Error('Rekognition caído');
+    },
+    async indexFace() {
+      return { faceId: null, geometry: null };
+    },
+    async detectFace() {
+      return null;
+    },
+    async thumbnails() {
+      return {};
+    }
   });
-  assert.deepEqual(found, []);
+  t.after(() => server.close());
+
+  const res = await post(base, reportForm({ name: 'Ana Lucía Bermúdez' }));
+  assert.equal(res.status, 303, 'el reporte no puede perderse porque falle la detección');
+  assert.equal((await store.searchPeople('Ana Lucía Bermúdez')).length, 1);
 });
 
 // ------------------------------------------------------------- the web flow
 
-test('a duplicate is never rejected: the report is saved before anything is asked', async (t) => {
-  const { server, base, store } = await startApp(fakeMatcher());
+test('a duplicate is never rejected, and the answer is always a redirect', async (t) => {
+  const { server, base } = await startApp(fakeMatcher());
   t.after(() => server.close());
 
-  await fetch(`${base}/report`, { method: 'POST', body: reportForm({ name: 'Juan Carlos Pérez' }) });
-  const second = await fetch(`${base}/report`, {
-    method: 'POST',
-    body: reportForm({ name: 'Ana Sofía Molina', contact: '311 999 8888' })
-  });
+  await post(base, reportForm({ name: 'Juan Carlos Pérez' }));
+  const second = await post(base, reportForm({ name: 'Ana Sofía Molina', contact: '311 999 8888' }));
 
-  // 200 with the reconciliation screen, NOT a redirect and NOT an error.
-  assert.equal(second.status, 200);
-  const html = await second.text();
-  assert.match(html, /Reporte registrado/);
-  assert.match(html, /Puede que esta persona ya estuviera reportada/);
-  assert.match(html, /La foto coincide en un <strong>97%<\/strong>/);
+  // 303, never a page rendered onto the POST: this handler stores photos and
+  // pays for a face index per photo, so a reload of its response would
+  // manufacture the very duplicate being warned about.
+  assert.equal(second.status, 303);
+  const location = second.headers.get('location');
+  assert.match(location, /^\/person\/\d+\?reported=1&dup=\d+$/, location);
 
   // Both reports exist. Nothing was discarded to avoid a duplicate.
   const home = await (await fetch(base)).text();
   assert.match(home, /Juan Carlos Pérez/);
   assert.match(home, /Ana Sofía Molina/);
+
+  // Following the redirect shows the warning and links the other report.
+  const page = await (await fetch(base + location)).text();
+  assert.match(page, /Puede que esta persona ya estuviera reportada/);
+  assert.match(page, /Juan Carlos Pérez/);
+  assert.match(page, /podría ser de la misma persona/);
 });
 
 test('a report filed under an existing name is appended, and the reporter is told', async (t) => {
   const { server, base } = await startApp();
   t.after(() => server.close());
 
-  await fetch(`${base}/report`, { method: 'POST', body: reportForm({ name: 'Pedro Pablo Ramírez' }) });
-  const second = await fetch(`${base}/report`, {
-    method: 'POST',
-    body: reportForm({ name: 'Pedro Pablo Ramírez', contact: 'otra@familia.com' })
-  });
-
-  assert.equal(second.status, 200);
-  const html = await second.text();
-  assert.match(html, /Ya había un reporte con este mismo nombre/);
-  // Both answers are offered, and neither is a dead end.
-  assert.match(html, /Sí, es la misma/);
-  assert.match(html, /No, es otra persona/);
-  assert.match(html, /action="\/report\/separar"/);
-});
-
-test('"es otra persona" splits the report onto its own record', async (t) => {
-  const { server, base, store } = await startApp();
-  t.after(() => server.close());
-
-  await fetch(`${base}/report`, { method: 'POST', body: reportForm({ name: 'Pedro Pablo Ramírez' }) });
-  const second = await fetch(`${base}/report`, {
-    method: 'POST',
-    body: reportForm({ name: 'Pedro Pablo Ramírez', contact: 'otra@familia.com' })
-  });
-  const cookie = second.headers
-    .getSetCookie()
-    .find((c) => c.startsWith('encontrados_reporter='))
-    .split(';')[0];
-  const updateId = /name="updateId" value="(\d+)"/.exec(await second.text())[1];
-
-  assert.equal((await store.searchPeople('Pedro Pablo Ramírez', { limit: 5 })).length, 1);
-
-  const split = await fetch(`${base}/report/separar`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded', cookie },
-    body: new URLSearchParams({ updateId }),
-    redirect: 'manual'
-  });
-  assert.equal(split.status, 303);
-
-  // Two people now, each holding one report — the namesakes are untangled.
-  const people = await store.searchPeople('Pedro Pablo Ramírez', { limit: 5 });
-  assert.equal(people.length, 2);
-  for (const p of people) {
-    assert.equal((await store.getUpdates(p.id)).length, 1);
-  }
-});
-
-test('"es la misma persona" merges the two records without losing a report', async (t) => {
-  const { server, base, store } = await startApp(fakeMatcher());
-  t.after(() => server.close());
-
-  await fetch(`${base}/report`, {
-    method: 'POST',
-    body: reportForm({ name: 'Juan Carlos Pérez', contact: 'papa@ejemplo.com' })
-  });
-  const second = await fetch(`${base}/report`, {
-    method: 'POST',
-    body: reportForm({ name: 'Ana Sofía Molina', contact: 'hermana@ejemplo.com' })
-  });
-  const cookie = second.headers
-    .getSetCookie()
-    .find((c) => c.startsWith('encontrados_reporter='))
-    .split(';')[0];
-  const html = await second.text();
-  const updateId = /name="updateId" value="(\d+)"/.exec(html)[1];
-  const to = /name="to" value="(\d+)"/.exec(html)[1];
-
-  const merged = await fetch(`${base}/report/unir`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded', cookie },
-    body: new URLSearchParams({ updateId, to }),
-    redirect: 'manual'
-  });
-  assert.equal(merged.status, 303);
-  assert.equal(merged.headers.get('location'), `/person/${to}?unido=1`);
-
-  // One record, BOTH reports on it — so a rescuer sees both families' contacts.
-  const updates = await store.getUpdates(to);
-  assert.equal(updates.length, 2);
-  assert.deepEqual(
-    updates.map((u) => u.contact).sort(),
-    ['hermana@ejemplo.com', 'papa@ejemplo.com']
+  const first = await post(base, reportForm({ name: 'Pedro Pablo Ramírez' }));
+  const second = await post(
+    base,
+    reportForm({ name: 'Pedro Pablo Ramírez', contact: 'otra@familia.com' })
   );
-  assert.equal(await store.getPerson((await store.searchPeople('Ana Sofía Molina'))[0]?.id), undefined);
+
+  // Same record, so the same redirect target — flagged as a name collision.
+  assert.equal(second.headers.get('location').split('?')[0], first.headers.get('location').split('?')[0]);
+  assert.match(second.headers.get('location'), /mismo_nombre=1/);
+
+  const page = await (await fetch(base + second.headers.get('location'))).text();
+  assert.match(page, /Ya había un reporte con este mismo nombre/);
+  // The dangerous case is namesakes, and the page must say what to do about it.
+  assert.match(page, /dos personas distintas con el mismo nombre/);
+  assert.match(page, /a@torrenegra\.com/);
 });
 
-test('merging and splitting are refused to anyone but the reporter', async (t) => {
+// Regression: `reportPhotoByPerson` orders derivative-bearing photos first, so
+// the photo the reporter JUST uploaded could win and be shown back to them as
+// "the report that already existed" — guaranteeing a wrong answer.
+test('the pre-existing photo is the one offered for comparison, not the new one', async (t) => {
   const { server, base, store } = await startApp();
   t.after(() => server.close());
 
-  await fetch(`${base}/report`, { method: 'POST', body: reportForm({ name: 'Pedro Pablo Ramírez' }) });
-  const second = await fetch(`${base}/report`, {
-    method: 'POST',
-    body: reportForm({ name: 'Pedro Pablo Ramírez', contact: 'otra@familia.com' })
-  });
-  const updateId = /name="updateId" value="(\d+)"/.exec(await second.text())[1];
+  await post(base, reportForm({ name: 'Pedro Pablo Ramírez', photos: ['vieja'] }));
+  const person = (await store.searchPeople('Pedro Pablo Ramírez'))[0];
+  const priorPhoto = (await store.reportPhotoByPerson([person.id])).get(person.id);
 
-  // No cookie at all, and a cookie belonging to somebody else's report.
-  for (const headers of [
-    { 'Content-Type': 'application/x-www-form-urlencoded' },
-    { 'Content-Type': 'application/x-www-form-urlencoded', cookie: 'encontrados_reporter=impostor@ejemplo.com' }
-  ]) {
-    for (const path of ['/report/separar', '/report/unir']) {
-      const res = await fetch(`${base}${path}`, {
-        method: 'POST',
-        headers,
-        body: new URLSearchParams({ updateId, to: '1' })
-      });
-      assert.equal(res.status, 403, `${path} no debería aceptar a un tercero`);
-    }
+  const second = await post(
+    base,
+    reportForm({ name: 'Pedro Pablo Ramírez', contact: 'otra@familia.com', photos: ['nueva'] })
+  );
+  const offered = Number(/foto_previa=(\d+)/.exec(second.headers.get('location'))[1]);
+
+  assert.equal(offered, priorPhoto.id, 'debe ofrecer la foto que ya estaba, no la recién subida');
+  const stored = await store.getPhoto(offered);
+  assert.equal(Buffer.from(stored.content).toString(), 'vieja');
+});
+
+test('the duplicate warning never prints a match score taken from the URL', async (t) => {
+  const { server, base, store } = await startApp();
+  t.after(() => server.close());
+
+  await post(base, reportForm({ name: 'Juan Carlos Pérez' }));
+  await post(base, reportForm({ name: 'Ana Sofía Molina' }));
+  const [juan] = await store.searchPeople('Juan Carlos Pérez');
+  const [ana] = await store.searchPeople('Ana Sofía Molina');
+
+  // Anyone can edit these ids, so a crafted link must not be able to assert an
+  // identity match the server never made.
+  const page = await (await fetch(`${base}/person/${ana.id}?dup=${juan.id}`)).text();
+  assert.match(page, /Juan Carlos Pérez/);
+  assert.match(page, /podría ser de la misma persona/, 'el aviso dice solo "mira este otro reporte"');
+  // No claim of a measured match — the server made none for this request.
+  assert.doesNotMatch(page, /coincide en un/);
+  assert.doesNotMatch(page, /de coincidencia/);
+});
+
+test('a candidate whose photo cannot be rendered is not asked to be compared', async (t) => {
+  const { server, base, store } = await startApp();
+  t.after(() => server.close());
+
+  // A report stored without a thumbnail: `facePlate` renders nothing for it.
+  await post(base, reportForm({ name: 'Juan Carlos Pérez' }));
+  await post(base, reportForm({ name: 'Ana Sofía Molina' }));
+  const [juan] = await store.searchPeople('Juan Carlos Pérez');
+  const [ana] = await store.searchPeople('Ana Sofía Molina');
+
+  const page = await (await fetch(`${base}/person/${ana.id}?dup=${juan.id}`)).text();
+  assert.match(page, /no tiene foto para comparar/);
+  assert.doesNotMatch(page, /Compara las fotos/, 'no se pide comparar una foto que no se dibuja');
+});
+
+// The merge/split routes were removed: they mutated public records behind a
+// cookie whose value the site itself hands to any stranger who re-uploads a
+// public report photo (/rescate prints `contact` on a face match). Detection
+// warns; reconciling is done out of band until it has a real authorization.
+test('there are no endpoints that mutate or delete a person record', async (t) => {
+  const { server, base, store } = await startApp();
+  t.after(() => server.close());
+
+  await post(base, reportForm({ name: 'Pedro Pablo Ramírez' }));
+  const before = (await store.searchPeople('Pedro Pablo Ramírez')).length;
+
+  for (const path of ['/report/unir', '/report/separar', '/report/merge', '/report/split']) {
+    const res = await fetch(`${base}${path}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        cookie: 'encontrados_reporter=300 123 4567'
+      },
+      body: new URLSearchParams({ updateId: '1', to: '2' })
+    });
+    assert.equal(res.status, 404, `${path} no debería existir`);
   }
 
-  // Nothing moved.
-  assert.equal((await store.searchPeople('Pedro Pablo Ramírez', { limit: 5 })).length, 1);
+  assert.equal((await store.searchPeople('Pedro Pablo Ramírez')).length, before);
+  assert.equal(typeof store.mergePeople, 'undefined');
+  assert.equal(typeof store.splitUpdateToNewPerson, 'undefined');
 });
 
 // ---------------------------------------------------------------------- API
@@ -273,19 +343,19 @@ test('the API warns about duplicates and still writes the report', async (t) => 
   const { server, base } = await startApp();
   t.after(() => server.close());
 
-  const post = (body) =>
+  const call = (body) =>
     fetch(`${base}/api/updates`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
     });
 
-  const first = await (await post({ name: 'Juan Carlos Pérez', status: 'missing' })).json();
+  const first = await (await call({ name: 'Juan Carlos Pérez', status: 'missing' })).json();
   assert.equal(first.person_created, true);
   assert.equal(first.duplicate.merged_into_existing_person, false);
   assert.equal(first.duplicate.warning, null);
 
-  const again = await post({ name: 'Juan Carlos Pérez', status: 'missing', location: 'Chocó' });
+  const again = await call({ name: 'Juan Carlos Pérez', status: 'missing', location: 'Chocó' });
   assert.equal(again.status, 201, 'un duplicado nunca se rechaza');
   const body = await again.json();
   assert.equal(body.person_created, false);

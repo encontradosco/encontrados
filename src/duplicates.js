@@ -29,69 +29,81 @@ const MAX_CANDIDATES = 4;
 
 // Returns [{ person, photo, update, reason: 'face'|'name', similarity }],
 // strongest first. Empty when nothing looks like a duplicate.
+//
+// NOTHING in here is allowed to throw. The web caller runs this BEFORE the
+// report is written, so an exception escaping this function would 500 the
+// request and discard the report — photos, name, location and contact — which
+// is the one outcome an emergency service must never produce. Every failure
+// degrades to "no candidates found" and a log line.
 async function findDuplicateCandidates(
   store,
   matcher,
-  { name, photoBytes, excludePersonId = null, limit = MAX_CANDIDATES } = {}
+  { name, photos: photoBuffers = [], excludePersonId = null, limit = MAX_CANDIDATES } = {}
 ) {
-  const byPerson = new Map();
-  const isExcluded = (id) => excludePersonId != null && String(id) === String(excludePersonId);
+  try {
+    const byPerson = new Map();
+    const isExcluded = (id) => excludePersonId != null && String(id) === String(excludePersonId);
 
-  if (matcher && matcher.enabled && photoBytes && photoBytes.length) {
-    try {
-      const hits = await matcher.searchByImage(photoBytes);
-      if (hits.length) {
-        const similarityByFace = new Map(hits.map((h) => [h.faceId, h.similarity]));
-        for (const photo of await store.photosByFaceIds([...similarityByFace.keys()])) {
-          // A rescuer's face ('query') means someone is HOLDING this person —
-          // that is a match, not a duplicate report. Only reports count here.
-          if (photo.kind !== 'report') continue;
-          if (isExcluded(photo.person_id)) continue;
-          const similarity = similarityByFace.get(photo.face_id) || 0;
-          const seen = byPerson.get(photo.person_id);
-          if (!seen || similarity > seen.similarity) {
-            byPerson.set(photo.person_id, { personId: photo.person_id, reason: 'face', similarity });
+    // Every uploaded photo is searched, not just the first: a family often
+    // leads with a group shot where no face is usable, and the portrait that
+    // would have matched an existing report sits at #2.
+    const usable = (photoBuffers || []).filter((b) => b && b.length);
+    if (matcher && matcher.enabled && usable.length) {
+      for (const bytes of usable) {
+        try {
+          const hits = await matcher.searchByImage(bytes);
+          if (!hits.length) continue;
+          const similarityByFace = new Map(hits.map((h) => [h.faceId, h.similarity]));
+          for (const photo of await store.photosByFaceIds([...similarityByFace.keys()])) {
+            // A rescuer's face ('query') means someone is HOLDING this person —
+            // that is a match, not a duplicate report. Only reports count here.
+            if (photo.kind !== 'report') continue;
+            if (isExcluded(photo.person_id)) continue;
+            const similarity = similarityByFace.get(photo.face_id) || 0;
+            const seen = byPerson.get(photo.person_id);
+            if (!seen || similarity > seen.similarity) {
+              byPerson.set(photo.person_id, { personId: photo.person_id, reason: 'face', similarity });
+            }
           }
+        } catch (e) {
+          // Rekognition being down must never break reporting.
+          console.error('[duplicados] la búsqueda facial falló:', e.message);
         }
       }
-    } catch (e) {
-      // Rekognition being down must never break reporting.
-      console.error('[duplicados] la búsqueda facial falló:', e.message);
     }
-  }
 
-  try {
     for (const p of await store.searchPeople(name || '', { limit: 5, minScore: NAME_HINT_SCORE })) {
       if (isExcluded(p.id)) continue;
       // A face verdict already exists for this person and says more than a name.
       if (byPerson.has(p.id)) continue;
       byPerson.set(p.id, { personId: p.id, reason: 'name', similarity: p.score * 100 });
     }
+
+    if (!byPerson.size) return [];
+
+    // Face first, then by strength: the photo is what a human can actually judge.
+    const ranked = [...byPerson.values()]
+      .sort((a, b) => (a.reason === b.reason ? b.similarity - a.similarity : a.reason === 'face' ? -1 : 1))
+      .slice(0, limit);
+
+    const photos = await store.reportPhotoByPerson(ranked.map((c) => c.personId));
+    const out = [];
+    for (const c of ranked) {
+      const person = await store.getPerson(c.personId);
+      if (!person) continue;
+      out.push({
+        person,
+        photo: photos.get(c.personId) || null,
+        update: await store.getLatestUpdate(c.personId),
+        reason: c.reason,
+        similarity: Math.round(c.similarity)
+      });
+    }
+    return out;
   } catch (e) {
-    console.error('[duplicados] la búsqueda por nombre falló:', e.message);
+    console.error('[duplicados] la detección falló por completo:', e.message);
+    return [];
   }
-
-  if (!byPerson.size) return [];
-
-  // Face first, then by strength: the photo is what a human can actually judge.
-  const ranked = [...byPerson.values()]
-    .sort((a, b) => (a.reason === b.reason ? b.similarity - a.similarity : a.reason === 'face' ? -1 : 1))
-    .slice(0, limit);
-
-  const photos = await store.reportPhotoByPerson(ranked.map((c) => c.personId));
-  const out = [];
-  for (const c of ranked) {
-    const person = await store.getPerson(c.personId);
-    if (!person) continue;
-    out.push({
-      person,
-      photo: photos.get(c.personId) || null,
-      update: await store.getLatestUpdate(c.personId),
-      reason: c.reason,
-      similarity: Math.round(c.similarity)
-    });
-  }
-  return out;
 }
 
 // One sentence in Spanish describing what the caller should know, or null when

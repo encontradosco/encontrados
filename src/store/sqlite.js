@@ -170,9 +170,6 @@ async function createSqliteAdapter(dbPath) {
         .prepare('SELECT * FROM updates WHERE person_id = ? ORDER BY created_at DESC, id DESC LIMIT 1')
         .get(personId);
     },
-    async getUpdate(id) {
-      return db.prepare('SELECT * FROM updates WHERE id = ?').get(id);
-    },
     // Everyone currently reported missing, most recent report first.
     async missingPeople(limit) {
       return db
@@ -310,34 +307,6 @@ async function createSqliteAdapter(dbPath) {
       if (!person) return null;
       db.prepare('DELETE FROM people WHERE id = ?').run(id);
       return person;
-    },
-    // Two records turned out to be the same human: fold `fromId` into `toId`.
-    // Nothing is discarded — every report, photo and alert is repointed first,
-    // and only the emptied person row is deleted.
-    async movePersonRecords(fromId, toId) {
-      db.transaction(() => {
-        db.prepare('UPDATE updates SET person_id = ? WHERE person_id = ?').run(toId, fromId);
-        db.prepare('UPDATE photos SET person_id = ? WHERE person_id = ?').run(toId, fromId);
-        // subscriptions has UNIQUE(person_id, channel, address): an address the
-        // target already watches would collide, so it stays behind and is
-        // removed by the cascade below — the target already alerts that person.
-        db.prepare(
-          `UPDATE subscriptions SET person_id = ? WHERE person_id = ?
-             AND NOT EXISTS (
-               SELECT 1 FROM subscriptions t
-               WHERE t.person_id = ? AND t.channel = subscriptions.channel AND t.address = subscriptions.address
-             )`
-        ).run(toId, fromId, toId);
-        db.prepare('DELETE FROM people WHERE id = ?').run(fromId);
-      })();
-    },
-    // The opposite move: pull ONE report (and its photos) off a person and onto
-    // another. Undoes a name collision that filed two different humans as one.
-    async moveUpdateToPerson(updateId, toPersonId) {
-      db.transaction(() => {
-        db.prepare('UPDATE photos SET person_id = ? WHERE update_id = ?').run(toPersonId, updateId);
-        db.prepare('UPDATE updates SET person_id = ? WHERE id = ?').run(toPersonId, updateId);
-      })();
     },
     async counts() {
       const n = (sql) => db.prepare(sql).get().n;

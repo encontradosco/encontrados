@@ -147,7 +147,7 @@ function apiRoutes(store, matcher) {
       // undone, so a caller re-syncing in bulk cannot lose a report to this.
       const candidates = await findDuplicateCandidates(store, matcher, {
         name,
-        photoBytes: photo ? photo.bytes : null,
+        photos: photo ? [photo.bytes] : [],
         excludePersonId: owner.id
       });
 
