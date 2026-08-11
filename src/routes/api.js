@@ -396,7 +396,13 @@ function apiRoutes(store, matcher) {
           raw_key_had_whitespace:
             !!process.env.SENDGRID_API_KEY &&
             process.env.SENDGRID_API_KEY !== process.env.SENDGRID_API_KEY.trim(),
-          from: env.EMAIL_FROM
+          from: env.EMAIL_FROM,
+          // Presence only, never the address. Two features route through this
+          // mailbox — the rescuer's aviso and "report this on Colombia Te Busca
+          // too" — and both fail QUIETLY without it: the visitor still gets a
+          // success page, the report is still saved, and nobody is told the
+          // relay went nowhere. From outside there is no other way to notice.
+          aviso_email_present: !!(process.env.AVISO_EMAIL || env.AVISO_EMAIL || '').trim()
         },
         faces: {
           aws_key_present: !!process.env.AWS_ACCESS_KEY_ID,

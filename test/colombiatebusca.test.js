@@ -115,6 +115,26 @@ test('a report still goes through when AVISO_EMAIL is not configured', async (t)
   assert.equal(res.status, 303);
 });
 
+// The failure above is silent by design — the family must never be shown an
+// error about our own configuration — so it needs a way to be seen from
+// outside. Presence only: the mailbox itself stays out of a public endpoint.
+test('/api/diag reports whether the relay mailbox is configured', async (t) => {
+  const { server, base } = await startApp();
+  t.after(() => {
+    delete process.env.AVISO_EMAIL;
+    server.close();
+  });
+
+  delete process.env.AVISO_EMAIL;
+  const off = await (await fetch(`${base}/api/diag`)).json();
+  assert.equal(off.email.aviso_email_present, false);
+
+  process.env.AVISO_EMAIL = 'avisos@example.com';
+  const on = await (await fetch(`${base}/api/diag`)).json();
+  assert.equal(on.email.aviso_email_present, true);
+  assert.doesNotMatch(JSON.stringify(on), /avisos@example\.com/, 'la dirección no se publica');
+});
+
 test('every page ends with the two asks, contributors above the ColombiaTeBusca team', async (t) => {
   const { server, base } = await startApp();
   t.after(() => server.close());
