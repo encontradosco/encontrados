@@ -104,7 +104,6 @@ async function processPhoto(store, matcher, { personId, kind, updateId, subscrip
   // cold serverless invocation the flag reads false even though Rekognition is
   // perfectly available, and the photo below is stored without indexing — no
   // face geometry for the public overlay, no match for whoever is searching.
-  // Every other entry point already does this; this one was the exception.
   if (typeof matcher.ensureReady === 'function') await matcher.ensureReady();
 
   if (!matcher.enabled) {
@@ -216,6 +215,11 @@ async function backfillPhotoDerivatives(store, matcher, limit = 100) {
 // The photo is NEVER stored — it is compared, its face signature is indexed so
 // future reports can reach this rescuer, and the bytes are dropped immediately.
 async function identifyRescuedPerson(store, matcher, { bytes, contentType, personId, subscriptionId }) {
+  // Same cold-start trap as processPhoto: `enabled` is a getter over the
+  // lazily-built real matcher and reads false on a fresh serverless invocation
+  // — which would tell the very first rescuer to reach this instance that the
+  // service is down while Rekognition sits there available.
+  if (typeof matcher.ensureReady === 'function') await matcher.ensureReady();
   if (!matcher.enabled) {
     return { available: false, matches: [] };
   }
