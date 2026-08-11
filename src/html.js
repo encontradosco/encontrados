@@ -263,12 +263,13 @@ function layout(title, body, meta = {}) {
 <meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="${esc(fullTitle)}">
 <meta name="twitter:description" content="${esc(description)}">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%9D%A4%EF%B8%8F%E2%80%8D%F0%9F%A9%B9%3C/text%3E%3C/svg%3E">
 <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
 <div class="tricolor"><span class="y"></span><span class="b"></span><span class="r"></span></div>
 <header>
-  <a class="brand" href="/">📍 encontrados.co</a>
+  <a class="brand" href="/">❤️‍🩹 encontrados.co</a>
   <nav>
     <a href="/rescate">Soy rescatista</a>
     <a href="/report" class="cta">Reportar desaparecido</a>
