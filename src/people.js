@@ -64,6 +64,44 @@ function createStore(adapter) {
     );
   }
 
+  // ------------------------------------------------ duplicate reconciliation
+  // findOrCreatePerson merges on the NAME alone (>= 0.85). That is right most
+  // of the time and wrong in two ways this domain cannot ignore: two families
+  // reporting one person under different spellings end up as two records, and
+  // two different people who share a name end up as one. Both are corrected
+  // here, by a human's answer to "is this the same person?" — never by a score.
+
+  async function getUpdate(id) {
+    return isoRow(await adapter.getUpdate(id));
+  }
+
+  // Same human, two records: fold `fromId` into `toId`. Everything moves; only
+  // the emptied person row disappears.
+  async function mergePeople(fromId, toId) {
+    const from = await getPerson(fromId);
+    const to = await getPerson(toId);
+    if (!from || !to || from.id === to.id) return null;
+    await adapter.movePersonRecords(from.id, to.id);
+    return { from, to };
+  }
+
+  // Different humans, one record: give this report a person row of its own.
+  // The new row deliberately carries the SAME name — two people really can
+  // share one. They stay distinct because reports are attached by id from here
+  // on; a future report of that name still lands on whichever row matches
+  // first, which is the same name-only ambiguity that exists without a split.
+  async function splitUpdateToNewPerson(updateId, fullName) {
+    const update = await getUpdate(updateId);
+    if (!update) return null;
+    const person = await adapter.insertPerson(
+      titleCaseName(fullName),
+      normalize(fullName),
+      phoneticKey(fullName)
+    );
+    await adapter.moveUpdateToPerson(update.id, person.id);
+    return isoRow(person);
+  }
+
   // Re-case names stored before titleCaseName existed (or typed straight into
   // the API). Only the display name changes: normalized_name and phonetic_name
   // are case-insensitive, so nothing about matching moves.
@@ -226,6 +264,9 @@ function createStore(adapter) {
     recasePersonNames,
     addUpdate,
     getUpdates,
+    getUpdate,
+    mergePeople,
+    splitUpdateToNewPerson,
     getLatestUpdate,
     getRecentUpdates,
     getMissingPeople,

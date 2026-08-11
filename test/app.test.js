@@ -83,7 +83,7 @@ test('home lists missing people and offers both actions', async (t) => {
   const html = await (await fetch(base)).text();
   assert.match(html, /mira quién está buscando la persona que rescataste/i);
   assert.match(html, /href="\/rescate"/);
-  assert.match(html, /Reportar desaparecido/);
+  assert.match(html, /📢 Reporta desaparecido/);
 
   // a reported person shows up in the listing
   const fd = new FormData();
@@ -95,8 +95,12 @@ test('home lists missing people and offers both actions', async (t) => {
   assert.equal(report.status, 303);
 
   const home = await (await fetch(base)).text();
-  assert.match(home, /Personas reportadas como desaparecidas/);
+  assert.match(home, /Reportes de desaparecidos más recientes/);
   assert.match(home, /Pedro Pablo Ramírez/);
+  // The sources line sits under the listing heading, small, not as a section
+  // of its own competing with it.
+  assert.match(home, /Fuentes de información de desaparecidos: Encontrados\.co, Colombia Te Busca/);
+  assert.doesNotMatch(home, /<h2>Fuentes de información<\/h2>/);
 });
 
 test('reporting requires photos, name, place and contact', async (t) => {

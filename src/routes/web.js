@@ -9,6 +9,7 @@ const {
   MAX_QUERY_PHOTOS
 } = require('../facematch');
 const { esc, layout, updateCard, timeTag, facePlate, LOCATION_SCRIPT } = require('../html');
+const { findDuplicateCandidates } = require('../duplicates');
 
 // Express 4 doesn't catch async errors on its own.
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
@@ -52,23 +53,80 @@ function remember(res, name, value) {
 
 const RESCUE_PRIVACY = `<p class="privacy">🔒 <strong>La foto no se guarda.</strong> Se compara al instante contra las fotos de las personas reportadas como desaparecidas y se borra de inmediato: no queda almacenada en ningún servidor. Solo conservamos su <em>firma facial</em> (un código que no permite reconstruir la imagen) para poder avisarte si alguien empieza a buscar a esta persona.</p>`;
 
-// Home-page block: which sources feed this list, and how to contribute more.
-// Kept honest — only Colombia Te Busca is actually integrated today; the rest
-// are listed as "coming soon" so nobody assumes data is already flowing from
-// a source that isn't wired up yet.
-const SOURCES_SECTION = `
-<section class="sources">
-  <h2>Fuentes de información</h2>
-  <p class="subtle">Consolidamos reportes de estas fuentes:</p>
-  <ul class="subtle sources-list">
-    <li>✅ <strong>Activa hoy:</strong> <a href="https://colombiatebusca.com" target="_blank" rel="noopener">Colombia Te Busca</a></li>
-    <li>🔜 <strong>En integración / próximamente:</strong> medios verificados (El Espectador, El Tiempo, El País, Semana, Cambio) y canales oficiales (Medicina Legal, UNGRD, Defensa Civil)</li>
-  </ul>
-  <p class="subtle">Seguimos añadiendo más fuentes.</p>
-</section>
-<section class="notice sources-cta">
-  <p>¿Tienes más datos, o quieres acceso al API para reportar? Avísanos: <a href="https://github.com/torrenegra/encontrados/issues" target="_blank" rel="noopener">abre un issue en GitHub</a> · escríbele a Alex (<a href="https://x.com/torrenegra" target="_blank" rel="noopener">@torrenegra</a>) · o a Nic (<a href="https://x.com/ni500" target="_blank" rel="noopener">@ni500</a>).</p>
-</section>`;
+// Where this list comes from — one small line under the listing heading, not a
+// section of its own competing with it. Kept honest: only the first two
+// actually feed the list today, so nothing here implies data is already
+// flowing from a source that isn't wired up yet.
+const SOURCES_NOTE = `<p class="subtle sources-note">Fuentes de información de desaparecidos: Encontrados.co, Colombia Te Busca. Próximamente: El Espectador, El Tiempo, El País, Semana, Cambio, Medicina Legal, UNGRD, Defensa Civil</p>`;
+
+// Shown after a report that looks like it may already exist. This is a
+// RECONCILIATION screen, not a rejection: by the time it renders the report is
+// already saved and public. The only thing being asked is the one thing a
+// similarity score cannot decide — whether two records are the same human —
+// and the reporter can walk away without answering at all.
+function duplicateReview({ person, update, mergedIntoExisting, existingPhoto, candidates }) {
+  // The question only makes sense next to a face. A record filed through the
+  // API can have no photo at all, so say what is actually being compared
+  // instead of pointing at a picture that isn't there.
+  const question = (photo) =>
+    photo
+      ? '<p class="dup-q">¿Es la misma persona que reportaste?</p>'
+      : '<p class="dup-q">Ese reporte no tiene foto para comparar. ¿Sabes si es la misma persona?</p>';
+
+  // The record we landed on because the NAMES matched. It may be the same
+  // person (good — the reports are already together) or a namesake, which is
+  // the dangerous case: a rescuer would be shown the wrong family's contact.
+  const sameNameCard = mergedIntoExisting
+    ? `<article class="card dup">
+  ${facePlate(existingPhoto, person.full_name)}
+  <h3><a href="/person/${person.id}">${esc(person.full_name)}</a></h3>
+  <p>🔤 Ya había un reporte con este mismo nombre, así que sumamos el tuyo a ese registro.</p>
+  ${question(existingPhoto)}
+  <div class="dup-actions">
+    <a class="dup-btn" href="/person/${person.id}">✅ Sí, es la misma</a>
+    <form method="post" action="/report/separar">
+      <input type="hidden" name="updateId" value="${esc(update.id)}">
+      <button type="submit" class="dup-btn secondary">🙅 No, es otra persona</button>
+    </form>
+  </div>
+</article>`
+    : '';
+
+  // A face (or a near-miss name) matched a report filed under another name, so
+  // one person currently has two records. Here "no" means leave things as they
+  // are, which needs no button — only the merge is an action.
+  const otherCards = candidates
+    .map(
+      (c) => `<article class="card dup">
+  ${facePlate(c.photo, c.person.full_name)}
+  <h3><a href="/person/${c.person.id}">${esc(c.person.full_name)}</a></h3>
+  <p>${
+    c.reason === 'face'
+      ? `👤 La foto coincide en un <strong>${c.similarity}%</strong> con este reporte.`
+      : '🔤 El nombre se parece mucho al de este reporte.'
+  }</p>
+  ${c.update && c.update.location ? `<p class="loc">📍 ${esc(c.update.location)}</p>` : ''}
+  ${question(c.photo)}
+  <div class="dup-actions">
+    <form method="post" action="/report/unir">
+      <input type="hidden" name="updateId" value="${esc(update.id)}">
+      <input type="hidden" name="to" value="${esc(c.person.id)}">
+      <button type="submit" class="dup-btn">✅ Sí — unir los dos reportes</button>
+    </form>
+  </div>
+</article>`
+    )
+    .join('');
+
+  return `<h1 class="compact">✅ Reporte registrado</h1>
+<p class="notice">Ya está publicado. No tienes que volver a subirlo.</p>
+<div class="warning">
+  <p>⚠️ <strong>Puede que esta persona ya estuviera reportada.</strong> Si es la misma, unimos los reportes para que quien la rescate vea todos los contactos y no se quede una familia sin la llamada.</p>
+</div>
+${sameNameCard}
+${otherCards}
+<p class="subtle dup-skip"><a href="/person/${person.id}">Prefiero decidir después — ver mi reporte</a></p>`;
+}
 
 const REPORT_PRIVACY = `<p class="privacy">📢 Las fotos del reporte <strong>se publican</strong> en la lista de personas desaparecidas, con los puntos de reconocimiento facial marcados sobre el rostro. Es lo que permite que un rescatista reconozca a la persona que tiene al lado. Sube solo fotos que quieras hacer públicas.</p>`;
 
@@ -121,7 +179,7 @@ function webRoutes(store, matcher) {
       const missing = await store.getMissingPeople(50);
       const photos = await store.reportPhotoByPerson(missing.map((p) => p.id));
       const list = missing.length
-        ? `<h2>Personas reportadas como desaparecidas (${missing.length})</h2>` +
+        ? `<h2>Reportes de desaparecidos más recientes</h2>${SOURCES_NOTE}` +
           missing
             .map((p) => {
               return `<article class="card person">
@@ -133,7 +191,7 @@ function webRoutes(store, matcher) {
 </article>`;
             })
             .join('')
-        : '<p class="subtle">Todavía no hay personas reportadas como desaparecidas.</p>';
+        : `<p class="subtle">Todavía no hay personas reportadas como desaparecidas.</p>${SOURCES_NOTE}`;
 
       res.send(
         layout(
@@ -149,10 +207,9 @@ function webRoutes(store, matcher) {
 <section class="action-group">
   <h2>¿Buscas un ser querido?</h2>
   <a class="big-btn search" href="/report">
-    <span class="btn-title">📢 Reportar desaparecido</span>
+    <span class="btn-title">📢 Reporta desaparecido</span>
   </a>
 </section>
-${SOURCES_SECTION}
 ${list}
 `,
           {
@@ -398,8 +455,6 @@ ${body}
     <input name="location" id="location" list="location-options" autocomplete="off" placeholder="Dónde crees que estaba *" aria-label="Ubicación" required>
     <datalist id="location-options"></datalist>
   </span>
-  <button type="button" id="geo-btn" class="secondary">📍 Compartir mi ubicación actual</button>
-  <input type="hidden" name="lat" id="lat"><input type="hidden" name="lng" id="lng">
   <input name="contact" required value="${esc(readCookie(req, REPORTER_COOKIE))}" placeholder="Tu teléfono o correo para que te contacten *" aria-label="Teléfono o correo de contacto">
   <textarea name="message" rows="2" placeholder="Otros datos que ayuden a reconocerla (opcional)" aria-label="Datos adicionales"></textarea>
   <button>Reportar desaparecido</button>
@@ -443,13 +498,20 @@ ${LOCATION_SCRIPT}`,
           );
       }
 
-      const { person } = await store.findOrCreatePerson(name);
+      // Look for an existing report of this same person BEFORE anything is
+      // stored: once our own photo is in the face collection it would match
+      // itself. Advisory only — whatever this returns, the report below is
+      // saved. A duplicate is never a reason to turn a family away.
+      const priorCandidates = await findDuplicateCandidates(store, matcher, {
+        name,
+        photoBytes: files[0].buffer
+      });
+
+      const { person, created } = await store.findOrCreatePerson(name);
       const update = await store.addUpdate(person.id, {
         status: 'missing',
         message,
         location,
-        lat: parseFloat(req.body.lat),
-        lng: parseFloat(req.body.lng),
         source: 'web',
         contact
       });
@@ -467,7 +529,90 @@ ${LOCATION_SCRIPT}`,
         });
       }
 
+      // Two different ways this report can be a duplicate:
+      //   created === false → the NAME matched, so it was appended to a record
+      //     that may or may not be the same human;
+      //   candidates        → a FACE matched a report filed under another name,
+      //     which is now a second record for one person.
+      const candidates = priorCandidates.filter((c) => String(c.person.id) !== String(person.id));
+      if (!created || candidates.length) {
+        // The photo shown for the record we landed on is the OLDEST one, which
+        // is the pre-existing report rather than the one just uploaded — that
+        // is the face the reporter needs to compare against.
+        const existingPhoto = created
+          ? null
+          : (await store.reportPhotoByPerson([person.id])).get(person.id) || null;
+        return res.send(
+          layout(
+            'Reporte registrado',
+            duplicateReview({
+              person,
+              update,
+              mergedIntoExisting: !created,
+              existingPhoto,
+              candidates
+            }),
+            { fullTitle: 'Reporte registrado — encontrados.co' }
+          )
+        );
+      }
+
       res.redirect(303, `/person/${person.id}?reported=1`);
+    })
+  );
+
+  // ------------------------------------------------- duplicate reconciliation
+  // These two routes MUTATE public records, so they must prove the caller is
+  // the person who filed the report being moved. The proof available is the
+  // reporter cookie: `contact` is private — it is never rendered on any public
+  // page, only shown to a rescuer after a face match — so holding it is
+  // evidence of having filed that report. This is not a login and is not meant
+  // to be one; it bounds the reconciliation screen to its own author instead of
+  // leaving a public "merge any two people" endpoint open.
+  function ownsUpdate(req, update) {
+    const cookie = readCookie(req, REPORTER_COOKIE).trim();
+    return !!cookie && !!update && String(update.contact || '').trim() === cookie;
+  }
+
+  const NOT_YOURS = layout(
+    'No autorizado',
+    `<h1 class="compact">Solo quien hizo el reporte puede unirlo o separarlo</h1>
+<p class="error">Este enlace solo funciona desde el mismo teléfono o computador con el que se hizo el reporte.</p>
+<p class="subtle">Si necesitas corregir un reporte, escríbenos a <a href="mailto:a@torrenegra.com">a@torrenegra.com</a>.</p>
+<p><a href="/">Ir al inicio</a></p>`
+  );
+
+  // "Sí, es la misma persona": fold this report's record into the existing one.
+  router.post(
+    '/report/unir',
+    wrap(async (req, res) => {
+      const update = await store.getUpdate(req.body.updateId);
+      if (!ownsUpdate(req, update)) return res.status(403).send(NOT_YOURS);
+      const target = await store.getPerson(req.body.to);
+      if (!target) {
+        return res.status(404).send(layout('No encontrado', '<p class="error">Ese reporte ya no existe.</p>'));
+      }
+      // Already the same record (a double submit, or a merge that raced this
+      // one): nothing to do, and nothing to fail about.
+      if (String(update.person_id) !== String(target.id)) {
+        await store.mergePeople(update.person_id, target.id);
+      }
+      res.redirect(303, `/person/${target.id}?unido=1`);
+    })
+  );
+
+  // "No, es otra persona con el mismo nombre": give this report its own record.
+  router.post(
+    '/report/separar',
+    wrap(async (req, res) => {
+      const update = await store.getUpdate(req.body.updateId);
+      if (!ownsUpdate(req, update)) return res.status(403).send(NOT_YOURS);
+      const current = await store.getPerson(update.person_id);
+      if (!current) {
+        return res.status(404).send(layout('No encontrado', '<p class="error">Ese reporte ya no existe.</p>'));
+      }
+      const person = await store.splitUpdateToNewPerson(update.id, current.full_name);
+      res.redirect(303, `/person/${person.id}?separado=1`);
     })
   );
 
@@ -490,6 +635,8 @@ ${LOCATION_SCRIPT}`,
           person.full_name,
           `
 ${req.query.reported ? '<p class="notice">✅ Reporte registrado. Cuando un rescatista tenga a esta persona, verá tus datos de contacto.</p>' : ''}
+${req.query.unido ? '<p class="notice">✅ Reportes unidos. Quien rescate a esta persona verá todos los contactos de quienes la buscan.</p>' : ''}
+${req.query.separado ? '<p class="notice">✅ Listo: tu reporte quedó como una persona aparte, con su propio registro.</p>' : ''}
 <div class="person-body">
   <h1>${esc(person.full_name)}</h1>
   <div class="person-updates">
@@ -651,6 +798,28 @@ ${updates.length ? updates.map((u) => updateCard(u)).join('') : '<p class="subtl
   <li><code>contact</code>: teléfono o correo de quien debe ser avisado. Solo se muestra a un rescatista cuando hay coincidencia facial.</li>
   <li><code>photo</code>: opcional pero decisiva — es lo que permite el reconocimiento facial.</li>
 </ul>
+
+<h2>Duplicados</h2>
+<p>La respuesta <code>201</code> incluye siempre un bloque <code>duplicate</code>. <strong>Es un aviso, nunca un rechazo</strong>: el reporte queda guardado pase lo que pase.</p>
+<pre>{
+  "person_id": 42,
+  "person_created": false,
+  "duplicate": {
+    "merged_into_existing_person": true,
+    "candidates": [
+      { "person_id": 17, "full_name": "Juan Carlos Pérez",
+        "reason": "face", "similarity": 97,
+        "url": "https://encontrados.co/person/17" }
+    ],
+    "warning": "Ya existía una persona con este nombre: …"
+  }
+}</pre>
+<ul>
+  <li><code>merged_into_existing_person</code>: el nombre coincidió con alguien ya registrado, así que el reporte se sumó a su historial en vez de crear una persona nueva.</li>
+  <li><code>candidates</code>: otros reportes que parecen ser la misma persona. <code>reason: "face"</code> es una coincidencia facial (<code>similarity</code> = % de coincidencia); <code>reason: "name"</code> es un nombre parecido, mucho más débil.</li>
+  <li><code>warning</code>: la misma información en una frase, o <code>null</code> si no hay nada que advertir.</li>
+</ul>
+<p class="subtle">Si reportas en lote, usa <code>external_id</code> para que un reenvío del mismo registro actualice el reporte en vez de duplicarlo.</p>
 
 <h2>Consultar</h2>
 <pre>curl 'https://encontrados.co/api/people?q=jaun%20peres'

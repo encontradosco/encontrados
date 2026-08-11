@@ -353,36 +353,13 @@ function updateCard(u, personName) {
 </article>`;
 }
 
+// Type-ahead for the "where were they" field. There is deliberately NO
+// "share my location" button: the reporter is almost never standing where the
+// missing person was last seen, so their GPS answered a different question
+// than the one being asked — and the browser permission prompt cost a form
+// abandon to get there.
 const LOCATION_SCRIPT = `<script>
 (function () {
-  var btn = document.getElementById('geo-btn');
-  if (btn) btn.addEventListener('click', function () {
-    if (!navigator.geolocation) { btn.textContent = 'GPS no disponible en este navegador'; return; }
-    btn.textContent = '📍 Obteniendo ubicación…';
-    navigator.geolocation.getCurrentPosition(function (pos) {
-      document.getElementById('lat').value = pos.coords.latitude.toFixed(6);
-      document.getElementById('lng').value = pos.coords.longitude.toFixed(6);
-      btn.textContent = '✅ Ubicación compartida';
-      // Fill the (required) location field with the raw GPS coordinates
-      // right away, before hiding it below. The reverse-geocode call is
-      // only allowed to IMPROVE this text if it succeeds — it must never be
-      // the sole source: with bad signal it can fail or time out, and an
-      // empty required field makes the server reject the whole report
-      // (photos, name, contact included).
-      var loc = document.getElementById('location');
-      if (loc) loc.value = 'Ubicación GPS compartida (' + pos.coords.latitude.toFixed(6) + ', ' + pos.coords.longitude.toFixed(6) + ')';
-      // GPS is more precise than a typed address: hide the address field.
-      var field = document.getElementById('location-field');
-      if (field) field.style.display = 'none';
-      fetch('https://nominatim.openstreetmap.org/reverse?format=json&lat=' + pos.coords.latitude + '&lon=' + pos.coords.longitude)
-        .then(function (r) { return r.json(); })
-        .then(function (d) {
-          if (d.display_name && loc) loc.value = d.display_name.split(',').slice(0, 4).join(',');
-          if (loc && loc.value) btn.textContent = '✅ ' + loc.value;
-        }).catch(function () {});
-    }, function () { btn.textContent = 'No se pudo obtener la ubicación'; });
-  });
-
   var loc = document.getElementById('location');
   var list = document.getElementById('location-options');
   var timer;

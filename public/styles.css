@@ -351,12 +351,40 @@ button:disabled { opacity: 0.55; cursor: progress; }
   color: var(--ink-soft);
   margin: 0;
 }
-.sources { margin: 1.2rem 0; }
-.sources h2 { margin-top: 0; }
-.sources-list { margin: 0.4rem 0; padding-left: 1.1rem; }
-.sources-list li { margin: 0.25rem 0; }
-.sources-cta { margin: 0.8rem 0 1.6rem; }
-.sources-cta p { margin: 0; }
+/* One quiet line under the listing heading — it credits the sources without
+   competing with the list of people, which is what the page is for. */
+.sources-note {
+  margin: -0.4rem 0 1.1rem;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+/* Duplicate reconciliation: a stack of "is this the same person?" cards, each
+   led by the face, because the photo is what the reporter actually judges. */
+.card.dup .face { max-width: 220px; margin: 0 auto 0.6rem; }
+.dup-q { font-weight: 600; margin: 0.7rem 0 0.5rem; }
+/* Both answers carry the same visual weight: this is a real either/or, and
+   nudging toward one of them is how records end up merged by momentum. */
+.dup-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.dup-actions form { flex: 1 1 12rem; margin: 0; }
+/* An <a> that must read as the twin of the <button> next to it. */
+a.dup-btn {
+  display: block;
+  flex: 1 1 12rem;
+  box-sizing: border-box;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  background: var(--accent);
+  color: #fff;
+  font-family: var(--font-sans);
+  font-weight: 600;
+  text-align: center;
+  text-decoration: none;
+}
+a.dup-btn:hover { background: var(--accent-dark); border-color: var(--accent-dark); }
+button.dup-btn { width: 100%; box-sizing: border-box; }
+.dup-skip { margin-top: 1.2rem; }
 label { font-weight: 500; font-size: 0.9rem; }
 label span { display: block; margin-bottom: 0.2rem; }
 .subtle { color: var(--muted); font-size: 0.88rem; }

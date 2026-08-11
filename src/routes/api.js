@@ -9,6 +9,7 @@ const {
   MAX_QUERY_PHOTOS
 } = require('../facematch');
 const { publicUpdate } = require('../privacy');
+const { findDuplicateCandidates, duplicateWarning } = require('../duplicates');
 
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
@@ -140,6 +141,16 @@ function apiRoutes(store, matcher) {
       const owner = update.person_id === person.id ? person : (await store.getPerson(update.person_id)) || person;
       await notifySubscribers(store, owner, update);
       const photo = decodePhoto(req.body.photo);
+
+      // Duplicate check BEFORE the photo is indexed: afterwards it would match
+      // itself. Advisory only — the write above already happened and is never
+      // undone, so a caller re-syncing in bulk cannot lose a report to this.
+      const candidates = await findDuplicateCandidates(store, matcher, {
+        name,
+        photoBytes: photo ? photo.bytes : null,
+        excludePersonId: owner.id
+      });
+
       if (photo) {
         await processPhoto(store, matcher, {
           personId: owner.id,
@@ -153,7 +164,21 @@ function apiRoutes(store, matcher) {
         person_id: owner.id,
         person_created: created,
         update,
-        photo_stored: !!photo
+        photo_stored: !!photo,
+        // What the caller needs to reconcile on their side. `person_created:
+        // false` already meant "appended to an existing record"; this spells
+        // that out and adds the face-based collisions a name never sees.
+        duplicate: {
+          merged_into_existing_person: !created,
+          candidates: candidates.map((c) => ({
+            person_id: c.person.id,
+            full_name: c.person.full_name,
+            reason: c.reason,
+            similarity: c.similarity,
+            url: `${env.BASE_URL}/person/${c.person.id}`
+          })),
+          warning: duplicateWarning({ mergedIntoExisting: !created, candidates })
+        }
       });
     })
   );

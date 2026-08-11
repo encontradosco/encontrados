@@ -187,6 +187,9 @@ async function createPostgresAdapter(connectionString) {
         [personId]
       );
     },
+    async getUpdate(id) {
+      return one('SELECT * FROM updates WHERE id = $1', [id]);
+    },
     // Everyone currently reported missing, most recent report first.
     async missingPeople(limit) {
       return all(
@@ -314,6 +317,51 @@ async function createPostgresAdapter(connectionString) {
     },
     async deletePerson(id) {
       return one('DELETE FROM people WHERE id = $1 RETURNING *', [id]);
+    },
+    // Two records turned out to be the same human: fold `fromId` into `toId`.
+    // Nothing is discarded — every report, photo and alert is repointed first,
+    // and only the emptied person row is deleted.
+    async movePersonRecords(fromId, toId) {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query('UPDATE updates SET person_id = $1 WHERE person_id = $2', [toId, fromId]);
+        await client.query('UPDATE photos SET person_id = $1 WHERE person_id = $2', [toId, fromId]);
+        // subscriptions has UNIQUE(person_id, channel, address): an address the
+        // target already watches would collide, so it stays behind and is
+        // removed by the cascade below — the target already alerts that person.
+        await client.query(
+          `UPDATE subscriptions s SET person_id = $1 WHERE s.person_id = $2
+             AND NOT EXISTS (
+               SELECT 1 FROM subscriptions t
+               WHERE t.person_id = $1 AND t.channel = s.channel AND t.address = s.address
+             )`,
+          [toId, fromId]
+        );
+        await client.query('DELETE FROM people WHERE id = $1', [fromId]);
+        await client.query('COMMIT');
+      } catch (e) {
+        await client.query('ROLLBACK');
+        throw e;
+      } finally {
+        client.release();
+      }
+    },
+    // The opposite move: pull ONE report (and its photos) off a person and onto
+    // another. Undoes a name collision that filed two different humans as one.
+    async moveUpdateToPerson(updateId, toPersonId) {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query('UPDATE photos SET person_id = $1 WHERE update_id = $2', [toPersonId, updateId]);
+        await client.query('UPDATE updates SET person_id = $1 WHERE id = $2', [toPersonId, updateId]);
+        await client.query('COMMIT');
+      } catch (e) {
+        await client.query('ROLLBACK');
+        throw e;
+      } finally {
+        client.release();
+      }
     },
     async counts() {
       const r = await one(`SELECT
