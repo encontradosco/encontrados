@@ -49,6 +49,8 @@ header {
 header a { color: var(--ink); text-decoration: none; font-size: 0.95rem; }
 header nav {
   display: flex;
+  flex-wrap: wrap; /* on a 320px phone the two buttons stack instead of overflowing */
+  justify-content: flex-end;
   gap: 0.5rem;
   margin-left: auto; /* right-aligned beside the brand, and when wrapped too */
 }
