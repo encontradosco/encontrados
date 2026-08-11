@@ -425,14 +425,21 @@ ${LOCATION_SCRIPT}`,
         return res.status(404).send(layout('No encontrado', '<p class="error">Persona no encontrada.</p>'));
       }
       const updates = await store.getUpdates(person.id);
+      const photo = (await store.reportPhotoByPerson([person.id])).get(person.id);
+      // Only worth a banner when the newest report ISN'T the located one —
+      // otherwise it just repeats the card right below it.
       const lastLocated = updates.find((u) => u.location);
+      const locationIsBuried = lastLocated && lastLocated !== updates[0];
       res.send(
         layout(
           person.full_name,
           `
 ${req.query.reported ? '<p class="notice">✅ Reporte registrado. Cuando un rescatista tenga a esta persona, verá tus datos de contacto.</p>' : ''}
-<h1>${esc(person.full_name)}</h1>
-${lastLocated ? `<p class="notice">📍 Última ubicación reportada: <strong>${esc(lastLocated.location)}</strong> (${timeTag(lastLocated.created_at)})</p>` : ''}
+<div class="person-header">
+  <h1>${esc(person.full_name)}</h1>
+  ${facePlate(photo, person.full_name, { large: true })}
+</div>
+${locationIsBuried ? `<p class="notice">📍 Última ubicación reportada: <strong>${esc(lastLocated.location)}</strong> (${timeTag(lastLocated.created_at)})</p>` : ''}
 ${updates.length ? updates.map((u) => updateCard(u)).join('') : '<p class="subtle">Sin reportes todavía.</p>'}
 <p class="subtle">Los datos de contacto de quien reporta solo se muestran a un rescatista cuando el rostro coincide.</p>
 <p><a class="big-btn report" href="/rescate">🔍 ¿La tienes contigo? Mira quién la busca</a></p>`,
