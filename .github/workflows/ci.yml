@@ -1,0 +1,42 @@
+# Runs the test suite on every pull request and on main.
+#
+# This repo ships to production on merge, so until now the only thing standing
+# between a broken change and a live emergency service was whoever happened to
+# run `npm test` locally. This is that check, made unskippable.
+#
+# Deliberately minimal: one job, the Node version the app declares, npm ci for
+# a reproducible install, and the suite. No linting, no coverage gates, no
+# matrix — nothing that could turn into a reason to bypass it.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A new push supersedes the run in flight for the same branch.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: npm test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Matches "engines": { "node": ">=18" } in package.json, on the
+          # current LTS. better-sqlite3 and sharp both ship prebuilds for it.
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm test
