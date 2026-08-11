@@ -25,7 +25,7 @@ const defaultBaseUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL
 module.exports = {
   PORT: parseInt(process.env.PORT || '3000', 10),
   BASE_URL: process.env.BASE_URL || defaultBaseUrl,
-  DB_PATH: process.env.DB_PATH || path.join(__dirname, '..', 'data', 'aqui.db'),
+  DB_PATH: process.env.DB_PATH || path.join(__dirname, '..', 'data', 'encontrados.db'),
   API_KEY: process.env.API_KEY || '',
 
   // Trim: a stray newline from copy-paste makes SendGrid return 401.
@@ -34,5 +34,5 @@ module.exports = {
 
   WHATSAPP_TOKEN: process.env.WHATSAPP_TOKEN || '',
   WHATSAPP_PHONE_NUMBER_ID: process.env.WHATSAPP_PHONE_NUMBER_ID || '',
-  WHATSAPP_VERIFY_TOKEN: process.env.WHATSAPP_VERIFY_TOKEN || 'aqui-verify'
+  WHATSAPP_VERIFY_TOKEN: process.env.WHATSAPP_VERIFY_TOKEN || 'encontrados-verify'
 };

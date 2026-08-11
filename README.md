@@ -5,7 +5,9 @@ Conecta a quien **rescata** a una persona con quien la **busca** — tras el ter
 1. **Rescatista** (voluntario, bombero, policía, hospital): sube la foto de la persona que tiene consigo. Se compara por reconocimiento facial contra los reportes de desaparecidos y se le muestra **quién la busca y cómo contactarlo**. La foto **se borra de inmediato**: solo queda su firma facial, para poder avisarle si alguien la busca más tarde. Puede registrar un aviso por correo.
 2. **Familia**: reporta a una persona desaparecida con 1–3 fotos, nombre, el lugar donde cree que estaba y su teléfono o correo de contacto. No registra alertas ni ve resultados de búsqueda.
 
-El contacto de quien reporta **solo** se revela a un rescatista cuando el rostro coincide; nunca aparece en páginas públicas. Ninguna ruta del sitio sirve bytes de fotos.
+El contacto de quien reporta **solo** se revela a un rescatista cuando el rostro coincide; nunca aparece en páginas públicas.
+
+Las fotos siguen dos reglas opuestas según quién las suba. La de un **rescatista** no se guarda ni se muestra jamás: se compara, se indexa su firma facial y los bytes se borran. La de un **reporte de desaparecido** sí se guarda y sí se publica —recortada al rostro, con los puntos de detección facial dibujados encima— porque de eso se trata: que un rescatista reconozca a la persona que tiene al lado. La lista carga solo la miniatura, y ni siquiera esa si la conexión es mala.
 
 Diseño ultraliviano a propósito: HTML renderizado en el servidor, un CSS pequeño, sin frameworks — funciona en teléfonos viejos y conexiones débiles.
 
@@ -13,7 +15,7 @@ Diseño ultraliviano a propósito: HTML renderizado en el servidor, un CSS peque
 
 ```bash
 npm install
-npm run dev     # SQLite en ./data/aqui.db, http://localhost:3000
+npm run dev     # SQLite en ./data/encontrados.db, http://localhost:3000
 npm test
 ```
 

@@ -87,7 +87,7 @@ async function createSqliteAdapter(dbPath) {
   }
   // Older dev databases: add external_id if missing. Note: SQLite can't widen
   // an existing CHECK constraint via ALTER TABLE, so a pre-existing local
-  // ./data/aqui.db still rejects source='aggregator' until it's recreated
+  // ./data/encontrados.db still rejects source='aggregator' until it's recreated
   // (delete the file — it's dev-only and gets rebuilt on next start).
   try {
     db.exec('ALTER TABLE updates ADD COLUMN external_id TEXT');

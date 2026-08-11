@@ -20,18 +20,24 @@ const upload = multer({
 });
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const REPORTER_COOKIE = 'aqui_reporter';
-const EMAIL_COOKIE = 'aqui_email';
+const REPORTER_COOKIE = 'encontrados_reporter';
+const EMAIL_COOKIE = 'encontrados_email';
+// Renamed with the brand. Anyone who used the site before still has the old
+// cookie, so read it as a fallback rather than making them type it again.
+const LEGACY_COOKIE = { encontrados_reporter: 'aqui_reporter', encontrados_email: 'aqui_email' };
 
 function readCookie(req, name) {
   const raw = req.headers.cookie || '';
-  const hit = raw.split(';').map((c) => c.trim()).find((c) => c.startsWith(name + '='));
-  if (!hit) return '';
-  try {
-    return decodeURIComponent(hit.slice(name.length + 1)).slice(0, 120);
-  } catch {
-    return '';
-  }
+  const read = (key) => {
+    const hit = raw.split(';').map((c) => c.trim()).find((c) => c.startsWith(key + '='));
+    if (!hit) return '';
+    try {
+      return decodeURIComponent(hit.slice(key.length + 1)).slice(0, 120);
+    } catch {
+      return '';
+    }
+  };
+  return read(name) || read(LEGACY_COOKIE[name] || name);
 }
 
 // Remember who is reporting so a volunteer filing many reports types it once.
