@@ -445,10 +445,10 @@ ${LOCATION_SCRIPT}`,
           person.full_name,
           `
 ${req.query.reported ? '<p class="notice">✅ Reporte registrado. Cuando un rescatista tenga a esta persona, verá tus datos de contacto.</p>' : ''}
-<h1>${esc(person.full_name)}</h1>
-${locationIsBuried ? `<p class="notice">📍 Última ubicación reportada: <strong>${esc(lastLocated.location)}</strong> (${timeTag(lastLocated.created_at)})</p>` : ''}
 <div class="person-body">
+  <h1>${esc(person.full_name)}</h1>
   <div class="person-updates">
+${locationIsBuried ? `<p class="notice">📍 Última ubicación reportada: <strong>${esc(lastLocated.location)}</strong> (${timeTag(lastLocated.created_at)})</p>` : ''}
 ${updates.length ? updates.map((u) => updateCard(u)).join('') : '<p class="subtle">Sin reportes todavía.</p>'}
   </div>
   ${facePlate(photo, person.full_name, { large: true })}
