@@ -275,6 +275,16 @@ async function createPostgresAdapter(connectionString) {
     async getPhoto(id) {
       return one('SELECT * FROM photos WHERE id = $1', [id]);
     },
+    // Just enough to render a face plate. Deliberately NOT getPhoto: that one
+    // does SELECT *, dragging the full image and both thumbnails out of the
+    // database to read two columns.
+    async reportPhotoMeta(id) {
+      return one(
+        `SELECT id, person_id, kind, content_type, face_id, face_detail, thumb_type
+         FROM photos WHERE id = $1 AND kind = 'report'`,
+        [id]
+      );
+    },
     // One photo per person for the public listing: the earliest report photo
     // that still has bytes and, preferably, a thumbnail to show.
     async reportPhotosForPeople(personIds) {
