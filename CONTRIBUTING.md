@@ -41,6 +41,38 @@ npm test         # node --test, sin red y sin servicios externos
 - ¿Encontraste algo por tu cuenta? Abre un issue antes de escribir el código si
   el cambio es grande. Si es chico, manda el PR directo.
 
+## Qué tipo de cambio es el tuyo
+
+De esto depende si mandas el PR de una o si conviene abrir un issue primero. No
+es burocracia: es que algunos cambios se revisan mirando el diff y otros hay que
+decidirlos antes de que alguien gaste una tarde escribiéndolos.
+
+| | Qué es | Qué hacer |
+|---|---|---|
+| **Bug** | La app no hace lo que dice que hace | **PR directo.** Incluye cómo reproducirlo |
+| **Mejora** | Hace lo que dice, pero podría hacerlo mejor: copy, accesibilidad, rendimiento, un refactor acotado | **PR directo** si es acotado. **Issue primero** si toca varios archivos o cambia una decisión de diseño existente |
+| **Feature o cambio de comportamiento** | Algo nuevo que un usuario ve o hace, o que cambia un flujo que ya existe | **Issue primero, siempre** |
+
+**Tres cosas mandan a issue aunque parezcan chicas**, porque su costo no se ve en
+el diff:
+
+1. **Lo que ve o hace un usuario** — un texto, un flujo, a dónde lleva un botón.
+   Es un servicio de emergencia: una pantalla confusa le cuesta tiempo a alguien
+   que está buscando a un familiar.
+2. **El esquema de la base** — la de producción es compartida y migrarla tiene
+   consecuencias que no se prueban en un preview.
+3. **Privacidad** — fotos, contacto de quien reporta, retención o borrado. Las
+   reglas están en el README y no son preferencias de estilo.
+
+### Si mandas un PR que necesitaba issue
+
+No se cierra ni se descarta. **Se pasa a draft**, se abre (o se pide) el issue, y
+se conversa ahí. Cuando la decisión esté tomada, el mismo PR vuelve a *ready* y
+sigue su camino. El trabajo no se pierde: lo que falta es el acuerdo, no el
+código.
+
+Si preferís evitarte ese rodeo, abre el issue antes. Una frase basta.
+
 ## Cómo se manda un cambio
 
 **PRs pequeños, sobre `main`.** `main` es producción: Vercel despliega cada merge.
@@ -94,9 +126,23 @@ tu cambio toca cualquiera de las dos, dilo explícitamente en el PR.
 
 ## La revisión
 
-Revisan los mantenedores. Buscamos tres cosas, en este orden: que resuelva un
-problema real, que no rompa a nadie más, y que sea lo más pequeño que puede ser
-para lograrlo. Vas a recibir preguntas — son sobre el código, no sobre ti.
+Revisan los mantenedores core: [@torrenegra](https://github.com/torrenegra),
+[@ni500](https://github.com/ni500) y [@cris-pappcorn](https://github.com/cris-pappcorn)
+— este último es un agente de IA, y lo decimos de frente porque vas a
+interactuar con él. Buscamos tres cosas, en este orden: que resuelva un problema
+real, que no rompa a nadie más, y que sea lo más pequeño que puede ser para
+lograrlo. Vas a recibir preguntas — son sobre el código, no sobre ti.
+
+`main` está protegida: todo entra por PR, con los tests en verde y la aprobación
+de uno de los tres.
+
+**Quién mergea.** Cris mergea lo rutinario — bugs, copy, refactors, docs — para
+que la revisión no se quede esperando a que un humano tenga un rato. **Se
+detiene, y pasa la decisión a una persona, en los tres casos de arriba:** lo que
+cambia comportamiento de cara al usuario, el esquema, o privacidad. El motivo es
+que en este repo **`main` es producción**: mergear *es* desplegar, y esas tres
+categorías son las que pueden hacerle daño a alguien que está buscando a un
+familiar. Es una frontera por consecuencia, no por jerarquía.
 
 Si un PR se queda quieto más de un par de días, coméntalo. No es desinterés: es
 un proyecto de emergencia y la atención se mueve.
