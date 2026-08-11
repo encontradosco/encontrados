@@ -166,21 +166,36 @@ h1.compact .subtle { font-family: var(--font-sans); font-weight: 400; font-size:
 .person-info h3,
 .person-info p { margin: 0; }
 
-/* Person page: the reports on the left, a bigger version of the same face
-   alongside them on the right. */
+/* Person page: name and reports on the left, a bigger version of the same face
+   spanning both on the right — so it starts level with the title. */
 .person-body {
-  display: flex;
-  align-items: flex-start;
-  gap: 1rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 240px;
+  grid-template-areas:
+    'title photo'
+    'reports photo';
+  align-items: start;
+  column-gap: 1rem;
 }
-.person-updates { flex: 1; min-width: 0; }
+.person-body > h1 { grid-area: title; margin: 0.4rem 0 0.7rem; }
+.person-updates { grid-area: reports; min-width: 0; }
 .person-updates .card:first-child { margin-top: 0; }
-.person-body .face { flex: 0 0 240px; width: 240px; }
+.person-body .face {
+  grid-area: photo;
+  align-self: start;
+  width: 240px;
+}
 
-/* No room for both side by side on a phone: the face goes on top. */
+/* No room for both side by side on a phone: title, then face, then reports. */
 @media (max-width: 620px) {
-  .person-body { flex-direction: column-reverse; align-items: stretch; }
-  .person-body .face { flex: 0 0 auto; width: 100%; max-width: 240px; }
+  .person-body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      'title'
+      'photo'
+      'reports';
+  }
+  .person-body .face { width: 100%; max-width: 240px; margin-bottom: 0.8rem; }
 }
 
 .face {
