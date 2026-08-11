@@ -69,6 +69,19 @@ ayuda a nadie.
 - Producción: Vercel (función serverless única + Postgres/Neon). Dev/tests: SQLite.
 - Remitente de correo fijo: `a@torrenegra.com` (SendGrid).
 - Suscripciones por correo requieren verificación; toda alerta lleva enlace de baja.
+- **Modo relevo (`NOTIFY_MODE`, por omisión `relay`).** Ningún aviso a un
+  tercero sale solo: se manda a `AVISO_EMAIL` para que una persona verifique al
+  destinatario y lo enrute. La razón es dura: entregarle el contacto de una
+  familia a un desconocido que dice haber rescatado a alguien es un vector de
+  extorsión, y el aviso de coincidencia facial lleva ese contacto en el cuerpo.
+  Se releva `notifySubscribers()` (`src/notify.js`, correo y WhatsApp) y
+  `notifyFaceMatch()` (`src/facematch.js`). **La verificación de correo no se
+  releva**: va al dueño de la dirección confirmando lo que él mismo pidió, no
+  protege a nadie y sin ella no hay suscripción verificada. El relevo es
+  explícito en la capa de notificación, **no dentro de `sendEmail()`**: un
+  interceptor global se llevaría también la verificación y cualquier correo que
+  se agregue después, y el bug sería invisible. `NOTIFY_MODE=direct` devuelve el
+  envío directo; `GET /api/diag` dice en qué modo está.
 - El matching difuso de nombres vive en `src/names.js` + `people.js`; los umbrales
   (0.85 merge / 0.55 búsqueda) están calibrados — no los cambies sin pruebas.
 
@@ -210,7 +223,8 @@ presencia y huella, nunca el valor).
 | `API_KEY` | Los `POST` del API quedan **abiertos** y `DELETE /api/people/:id` responde 503. Las lecturas son públicas siempre, con o sin llave. |
 | `SENDGRID_API_KEY` | No sale ningún correo: ni verificación de suscripción, ni alertas, ni avisos. Se le hace `trim()` porque un salto de línea pegado sin querer devuelve 401. |
 | `EMAIL_FROM` | `a@torrenegra.com`. Tiene que ser un remitente verificado en SendGrid o SendGrid responde 403. |
-| `AVISO_EMAIL` | El aviso del rescatista y el relevo a Colombia Te Busca no se mandan. Falla en silencio: quien reportó ve su página de éxito igual. |
+| `AVISO_EMAIL` | El aviso del rescatista y el relevo a Colombia Te Busca no se mandan. Falla en silencio: quien reportó ve su página de éxito igual. Y con `NOTIFY_MODE=relay` (el modo por omisión) tampoco sale ningún aviso a terceros: quedan en el log como `[notify:relevo] PERDIDO`. |
+| `NOTIFY_MODE` | `relay`. Los avisos a terceros se retienen y se relevan a `AVISO_EMAIL`; `direct` los manda derecho al destinatario. Cualquier otro valor cae a `relay`: el interruptor falla cerrado. |
 | `GITHUB_TOKEN` | `/ideas` y `/bug` siguen funcionando pero caen a correo a `AVISO_EMAIL`. El síntoma es un tracker vacío, que se parece mucho a que nadie escribió. |
 | `GITHUB_REPO` | `torrenegra/encontrados`. |
 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | Sin reconocimiento facial: las fotos se guardan pero no se indexan ni coinciden. Las miniaturas igual se generan, centradas. `POST /api/reindex` las recoge después. |
@@ -231,9 +245,11 @@ alguien, sí:
 
 - `GET /api/diag` — **sin llave.** Configuración y autodiagnóstico en vivo:
   motor de base de datos y si responde, conteos, estado del matcher, fotos
-  pendientes de indexar, y presencia de cada credencial. Nunca muestra un
-  secreto: de la llave de SendGrid enseña largo y prefijo. Es lo primero que
-  hay que mirar cuando algo "no está pasando" en producción.
+  pendientes de indexar, presencia de cada credencial y el bloque
+  `notifications` (modo de entrega, si hay buzón de relevo, y la combinación
+  fatal `relay_without_mailbox`). Nunca muestra un secreto: de la llave de
+  SendGrid enseña largo y prefijo, y del buzón solo si está puesto. Es lo
+  primero que hay que mirar cuando algo "no está pasando" en producción.
 - `GET /api/diag/sendgrid?email=…` — **sin llave.** Le pregunta a SendGrid por
   supresiones (rebotes, bloqueos, spam), remitentes verificados y autenticación
   del dominio. Un 202 al enviar solo significa "aceptado"; acá están las

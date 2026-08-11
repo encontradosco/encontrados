@@ -1,6 +1,12 @@
 const express = require('express');
 const env = require('../env');
-const { notifySubscribers, sendVerificationEmail } = require('../notify');
+const {
+  notifySubscribers,
+  sendVerificationEmail,
+  notifyMode,
+  relayEnabled,
+  avisoEmail
+} = require('../notify');
 const { STATUSES, SOURCES } = require('../people');
 const {
   processPhoto,
@@ -398,12 +404,25 @@ function apiRoutes(store, matcher) {
             !!process.env.SENDGRID_API_KEY &&
             process.env.SENDGRID_API_KEY !== process.env.SENDGRID_API_KEY.trim(),
           from: env.EMAIL_FROM,
-          // Presence only, never the address. Two features route through this
-          // mailbox — the rescuer's aviso and "report this on Colombia Te Busca
-          // too" — and both fail QUIETLY without it: the visitor still gets a
+          // Presence only, never the address. Three things route through this
+          // mailbox — the rescuer's aviso, "report this on Colombia Te Busca
+          // too", and every relayed notification (see `notifications` below) —
+          // and all of them fail QUIETLY without it: the visitor still gets a
           // success page, the report is still saved, and nobody is told the
           // relay went nowhere. From outside there is no other way to notice.
-          aviso_email_present: !!(process.env.AVISO_EMAIL || env.AVISO_EMAIL || '').trim()
+          aviso_email_present: !!avisoEmail()
+        },
+        // Los avisos que van a un TERCERO (actualización a quien sigue a una
+        // persona, coincidencia facial con un rescatista). En modo relevo
+        // ninguno se entrega: todos aterrizan en AVISO_EMAIL para que una
+        // persona los verifique y los enrute. Se expone acá para poder ver
+        // desde afuera en qué modo está, sin leer los logs ni el código.
+        notifications: {
+          mode: notifyMode(),
+          relay_mailbox_present: !!avisoEmail(),
+          // Relevo activo y sin buzón: no sale nada, para nadie, y el único
+          // rastro es una línea "[notify:relevo] PERDIDO" en los logs.
+          relay_without_mailbox: relayEnabled() && !avisoEmail()
         },
         faces: {
           aws_key_present: !!process.env.AWS_ACCESS_KEY_ID,
