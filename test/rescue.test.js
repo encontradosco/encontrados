@@ -400,6 +400,55 @@ test('/fotos/actualizar brings photos up to date without an API key', async (t) 
   assert.deepEqual((await store.getPhoto(1)).face_detail.box, FAKE_GEOMETRY.box);
 });
 
+test('existing names get re-capitalized, without touching how they match', async (t) => {
+  const { server, base, store } = await startApp({ enabled: false });
+  t.after(() => server.close());
+
+  // New rows are cased on insert, so write the old shape in directly — that is
+  // exactly what the rows created before titleCaseName existed look like.
+  const { person } = await store.findOrCreatePerson('Emmanuel Paul Prieto Travieso');
+  await store.addUpdate(person.id, { status: 'missing', source: 'api' });
+  await store.updatePersonName(person.id, 'EMMANUEL PAUL PRIETO TRAVIESO');
+  await store.findOrCreatePerson('Otra Persona');
+
+  const before = await store.getPerson(person.id);
+  assert.equal(before.full_name, 'EMMANUEL PAUL PRIETO TRAVIESO');
+  const matchesBefore = await store.searchPeople('emmanuel prieto');
+  assert.ok(matchesBefore.length);
+
+  const result = await store.recasePersonNames(500);
+  assert.ok(result.checked >= 2);
+
+  // Idempotent: a second pass finds nothing left to fix.
+  assert.equal((await store.recasePersonNames(500)).fixed.length, 0);
+
+  const after = await store.getPerson(person.id);
+  assert.equal(after.full_name, 'Emmanuel Paul Prieto Travieso');
+
+  // Search still finds them exactly as before: only the display name moved.
+  const matchesAfter = await store.searchPeople('emmanuel prieto');
+  assert.deepEqual(matchesAfter.map((m) => m.id), matchesBefore.map((m) => m.id));
+
+  assert.match(await (await fetch(base)).text(), /Emmanuel Paul Prieto Travieso/);
+});
+
+test('/mantenimiento re-capitalizes names without an API key', async (t) => {
+  const { server, base, store } = await startApp({ enabled: false });
+  t.after(() => server.close());
+
+  const { person } = await store.findOrCreatePerson('Carolina Gutierrez Vasquez');
+  await store.addUpdate(person.id, { status: 'missing', source: 'api' });
+  await store.updatePersonName(person.id, 'CAROLINA GUTIERREZ VASQUEZ');
+
+  const html = await (await fetch(`${base}/mantenimiento`)).text();
+  assert.match(html, /Recapitalizados/);
+  assert.match(html, /Carolina Gutierrez Vasquez/);
+  assert.equal((await store.getPerson(person.id)).full_name, 'Carolina Gutierrez Vasquez');
+
+  // The old URL still works, so a bookmarked link doesn't break.
+  assert.equal((await fetch(`${base}/fotos/actualizar`)).status, 200);
+});
+
 test('viewing the home page catches old photos up on its own', async (t) => {
   const { server, base, store } = await startApp({ enabled: false });
   t.after(() => server.close());

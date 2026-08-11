@@ -120,6 +120,12 @@ async function createPostgresAdapter(connectionString) {
     async getPerson(id) {
       return one('SELECT * FROM people WHERE id = $1', [id]);
     },
+    async allPeople(limit) {
+      return all('SELECT id, full_name FROM people ORDER BY id LIMIT $1', [limit]);
+    },
+    async updatePersonName(id, fullName) {
+      await pool.query('UPDATE people SET full_name = $1 WHERE id = $2', [fullName, id]);
+    },
     async exactByNormalized(normalized) {
       return one('SELECT * FROM people WHERE normalized_name = $1 LIMIT 1', [normalized]);
     },

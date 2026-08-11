@@ -64,6 +64,26 @@ function createStore(adapter) {
     );
   }
 
+  // Re-case names stored before titleCaseName existed (or typed straight into
+  // the API). Only the display name changes: normalized_name and phonetic_name
+  // are case-insensitive, so nothing about matching moves.
+  async function updatePersonName(id, fullName) {
+    return adapter.updatePersonName(id, fullName);
+  }
+
+  async function recasePersonNames(limit = 500) {
+    const people = await adapter.allPeople(limit);
+    const fixed = [];
+    for (const p of people) {
+      const cased = titleCaseName(p.full_name);
+      if (cased && cased !== p.full_name) {
+        await adapter.updatePersonName(p.id, cased);
+        fixed.push({ id: p.id, from: p.full_name, to: cased });
+      }
+    }
+    return { checked: people.length, fixed };
+  }
+
   // Everyone reported missing — the home page listing.
   async function getMissingPeople(limit = 50) {
     return (await adapter.missingPeople(limit)).map(isoRow);
@@ -202,6 +222,8 @@ function createStore(adapter) {
     getPerson,
     searchPeople,
     findOrCreatePerson,
+    updatePersonName,
+    recasePersonNames,
     addUpdate,
     getUpdates,
     getLatestUpdate,
