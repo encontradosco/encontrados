@@ -61,6 +61,19 @@ ayuda a nadie.
   por omisión. Marcarla manda el reporte completo a `AVISO_EMAIL` (mismo buzón
   que los avisos de rescatista) para que un operador llene su formulario a mano:
   no tienen API. El correo es «best effort»: si falla, el reporte ya está vivo.
+  Marcarla también despliega —con CSS, sin JavaScript— las casillas que su
+  formulario exige y el nuestro no pedía: nombre de quien reporta, departamento,
+  municipio y lugar. **Todas opcionales**, y nada se rellena por nosotros: el
+  correo de relevo enumera las seis casillas aunque estén vacías, con el nombre
+  del campo entre paréntesis, para que el operador vea de un vistazo qué falta.
+  Solo el nombre de quien reporta se guarda (en `reporter`, que sale público
+  reducido por `maskReporter()`); el desglose de ubicación no tiene columna
+  porque su único consumidor es ese correo.
+- El contacto de quien reporta se pide en DOS casillas, teléfono y correo, con
+  la misma obligación de siempre: al menos una. Se juntan en la columna
+  `contact` (`composeContact()` en `src/routes/web.js`), que sigue siendo texto
+  libre y que nada parsea — es lo que se le muestra a un rescatista tras una
+  coincidencia. `POST /report` sigue aceptando el campo `contact` a secas.
 - `/ideas` y `/bug`: los dos enlaces del pie. Lo que se envía se abre como issue
   en GitHub (`GITHUB_TOKEN`); sin token cae a correo a `AVISO_EMAIL` para
   abrirlo a mano — nunca se pierde. Los formularios avisan que **es público**

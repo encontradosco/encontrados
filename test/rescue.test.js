@@ -558,6 +558,13 @@ test('a match without family contact offers the aviso form and stores the aviso'
   assert.doesNotMatch(html, /Sin datos de contacto/);
   assert.match(html, /action="\/rescate\/aviso"/, 'debe ofrecer el formulario de aviso, no un callejón sin salida');
 
+  // La pregunta del lugar se estaba leyendo al revés — llegaban respuestas con
+  // dónde está QUIEN AVISA. Tiene que quedar explícito de quién se pregunta, y
+  // con un ejemplo del detalle que sirve.
+  assert.match(html, /¿Dónde está ahora esa persona\?/);
+  assert.match(html, /no dónde estás tú/);
+  assert.match(html, /Hospital San Jorge/, 'un ejemplo dice más que la etiqueta');
+
   // The rescuer leaves their number and where the person is.
   const res = await fetch(`${base}/rescate/aviso`, {
     method: 'POST',

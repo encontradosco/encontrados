@@ -76,6 +76,34 @@ function remember(res, name, value) {
   );
 }
 
+// El formulario de reporte pedía un solo campo, "tu teléfono O correo", y ahora
+// pide los dos por separado (ver POST /report). La cookie de quien reporta
+// existe desde antes y puede traer cualquiera de los dos, así que se decide por
+// la forma del valor en vez de tirarlo: quien ya reportó una vez no vuelve a
+// escribir su contacto. `encontrados_email` es la misma cookie que prellena el
+// correo en /rescate — es el correo de este navegador, no el de un flujo.
+function rememberedContact(req) {
+  const legacy = readCookie(req, REPORTER_COOKIE);
+  const email = readCookie(req, EMAIL_COOKIE);
+  const legacyIsEmail = EMAIL_RE.test(legacy);
+  return {
+    phone: legacyIsEmail ? '' : legacy,
+    email: email || (legacyIsEmail ? legacy : '')
+  };
+}
+
+// `updates.contact` sigue siendo UN campo de texto libre: es lo que se le
+// muestra a un rescatista tras una coincidencia facial y lo que viaja en el
+// aviso de `notifyFaceMatch`, y nada en el código lo parsea. Por eso el desdoble
+// del formulario no cambia la columna — el teléfono y el correo se juntan acá y
+// bajan por el mismo camino de siempre. `contact` a secas se sigue aceptando en
+// el cuerpo del POST: es lo que manda cualquier cliente que conociera el
+// formulario anterior.
+function composeContact({ phone, email, contact }) {
+  const joined = [phone, email].map((v) => String(v || '').trim()).filter(Boolean).join(' · ');
+  return joined || String(contact || '').trim();
+}
+
 // `avisoEmail()` — el buzón de operación al que se le manda un aviso — vive en
 // `src/notify.js`: es el mismo buzón que recibe los avisos relevados, y una
 // segunda copia de la misma lectura se desincroniza sola. Se lee LIVE de
@@ -90,10 +118,31 @@ function remember(res, name, value) {
 // prometer tiempos que no controlamos.
 const REVIEWED_NOTE = 'Cada aviso lo revisa antes una persona del equipo, así que puede tomar un momento.';
 
+// El formulario de Colombia Te Busca pide cada dato en su propia casilla, y
+// quien lo llena a mano no puede adivinar el que falta. Así que el correo de
+// relevo enumera SIEMPRE las seis casillas —aunque estén vacías— con el
+// nombre del campo del formulario entre paréntesis: una lista completa le dice
+// al operador en un vistazo qué puede llenar ya y qué hay que preguntarle a la
+// familia. Nada se rellena por nosotros: un dato inventado en un registro de
+// desaparecidos es peor que un dato ausente.
+const NO_DATA = '(sin dato — la familia no lo llenó)';
+function relayChecklist(relay) {
+  const line = (label, value) => `${label}: ${value && value.trim() ? value.trim() : NO_DATA}`;
+  return [
+    'Casillas del formulario de Colombia Te Busca:',
+    line('Nombre de quien reporta (reporter_name)', relay.reporterName),
+    line('Teléfono de quien reporta (reporter_phone)', relay.phone),
+    line('Correo de quien reporta (reporter_email)', relay.email),
+    line('Departamento', relay.department),
+    line('Municipio', relay.municipality),
+    line('Lugar', relay.place)
+  ].join('\n');
+}
+
 // Emails the operators everything they need to file this report on Colombia Te
 // Busca by hand. Never throws: the report is already saved and public by the
 // time this runs, and a mail failure must not turn a filed report into a 500.
-async function relayToColombiaTeBusca({ person, update, photos, contact, location, message }) {
+async function relayToColombiaTeBusca({ person, update, photos, contact, location, message, relay }) {
   const to = avisoEmail();
   if (!to) {
     console.warn('[report:colombiatebusca] AVISO_EMAIL sin configurar — la solicitud no se envió');
@@ -112,6 +161,8 @@ async function relayToColombiaTeBusca({ person, update, photos, contact, locatio
         `Contacto de quien reporta: ${contact}`,
         message && message.trim() ? `Otros datos: ${message.trim()}` : null,
         `Fecha del reporte: ${update.created_at || 'ahora'}`,
+        '',
+        relayChecklist(relay || {}),
         '',
         photos.length
           ? `Foto(s) del reporte:\n${photos.map((p) => `${env.BASE_URL}/photo/${p.id}`).join('\n')}`
@@ -153,12 +204,21 @@ function matchContactBlock(m) {
       m.update.source === 'rescate' ? 'Contacto del rescatista que la tiene' : 'Contacta a quien la busca';
     return `<p>📞 <strong>${label}:</strong> ${esc(m.update.contact)}</p>`;
   }
+  // El campo del lugar se estaba entendiendo al revés: llegan respuestas con
+  // la ciudad de QUIEN AVISA, o con el nombre de una persona. La
+  // pregunta se hace explícita —el sitio donde está la persona rescatada,
+  // ahora mismo— y se acompaña de un ejemplo del nivel de detalle que sirve.
+  // Sin validación que rechace: un rescatista parado al lado de alguien no
+  // puede quedarse mirando un formulario que no lo deja enviar, y una
+  // respuesta imprecisa que un operador puede repreguntar vale más que un
+  // aviso que nunca se mandó.
   return `<div class="aviso">
-  <p><strong>La están buscando, pero el reporte no trae un contacto directo.</strong> Déjanos tu número y dónde puede ser localizada: nosotros nos encargamos de hacerle llegar el aviso a quien la busca.</p>
+  <p><strong>La están buscando, pero el reporte no trae un contacto directo.</strong> Déjanos tu número y dónde está ahora esa persona: nosotros nos encargamos de hacerle llegar el aviso a quien la busca.</p>
   <form class="stack compact" method="post" action="/rescate/aviso">
     <input type="hidden" name="person_id" value="${m.person.id}">
-    <input name="phone" required maxlength="60" placeholder="Tu teléfono (WhatsApp si tienes) *" aria-label="Teléfono del rescatista">
-    <input name="location" required maxlength="160" placeholder="Dónde puede ser localizada la persona *" aria-label="Dónde puede ser localizada la persona">
+    <input name="phone" required maxlength="60" inputmode="tel" placeholder="Tu teléfono (WhatsApp si tienes) *" aria-label="Teléfono del rescatista">
+    <input name="location" required maxlength="160" placeholder="¿Dónde está ahora esa persona? *" aria-label="Dónde se encuentra ahora la persona rescatada">
+    <p class="subtle">El sitio donde está <strong>la persona que rescataste</strong>, no dónde estás tú. Ejemplo: «Hospital San Jorge, Pereira — urgencias» o «Albergue del coliseo, Quibdó».</p>
     <button class="big-btn report" type="submit">Avisar a quien la busca</button>
   </form>
 </div>`;
@@ -274,11 +334,40 @@ ${otherCards}`;
 // rescuer after a facial match and never on a public page. Publishing the same
 // report on a third-party registry is a different promise, and a family cannot
 // consent to it by not noticing a pre-ticked box.
+//
+// Marcarla despliega los campos que SU formulario exige y el nuestro no pedía
+// —quién reporta, y la ubicación partida en departamento / municipio / lugar—.
+// Van ahí y no arriba a propósito: son los únicos datos de este formulario que
+// no le sirven a encontrados.co, solo al registro de terceros, y alargar el
+// formulario para todo el mundo con casillas que a la mayoría no le aplican es
+// exactamente la fricción que no puede tener alguien reportando a un familiar
+// desaparecido. Todos opcionales: sin ninguno, el reporte se manda igual.
+//
+// El despliegue es CSS puro (`.share-check:has(input:checked) ~ .ctb-fields`,
+// el mismo `:has()` con el que ya se resalta la casilla), sin JavaScript. Si el
+// navegador no lo entiende, las casillas se quedan ocultas y queda exactamente
+// el formulario de hoy: ningún camino nuevo puede impedir que un reporte salga.
+const DEPARTAMENTOS = [
+  'Amazonas', 'Antioquia', 'Arauca', 'Atlántico', 'Bogotá D.C.', 'Bolívar', 'Boyacá', 'Caldas',
+  'Caquetá', 'Casanare', 'Cauca', 'Cesar', 'Chocó', 'Córdoba', 'Cundinamarca', 'Guainía',
+  'Guaviare', 'Huila', 'La Guajira', 'Magdalena', 'Meta', 'Nariño', 'Norte de Santander',
+  'Putumayo', 'Quindío', 'Risaralda', 'San Andrés y Providencia', 'Santander', 'Sucre',
+  'Tolima', 'Valle del Cauca', 'Vaupés', 'Vichada'
+];
+
 const CTB_CHECKBOX = `<label class="share-check">
     <input type="checkbox" name="colombiatebusca" value="1">
     Reportar también en ColombiaTeBusca.com
   </label>
-  <p class="subtle share-note">Le haremos llegar tu reporte a su equipo para que también quede publicado en su registro público de desaparecidos.</p>`;
+  <p class="subtle share-note">Le haremos llegar tu reporte a su equipo para que también quede publicado en su registro público de desaparecidos.</p>
+  <div class="ctb-fields">
+    <p class="subtle ctb-why">Su registro pide estos datos en casillas separadas. <strong>Todos son opcionales</strong>: lo que dejes en blanco no impide que enviemos tu reporte.</p>
+    <input name="reporter_name" maxlength="120" placeholder="Tu nombre (quien reporta)" aria-label="Nombre de quien reporta">
+    <input name="department" maxlength="60" list="department-options" autocomplete="off" placeholder="Departamento" aria-label="Departamento">
+    <datalist id="department-options">${DEPARTAMENTOS.map((d) => `<option value="${esc(d)}">`).join('')}</datalist>
+    <input name="municipality" maxlength="80" placeholder="Municipio" aria-label="Municipio">
+    <input name="place" maxlength="160" placeholder="Lugar (barrio, dirección o punto de referencia)" aria-label="Lugar">
+  </div>`;
 
 const REPORT_PRIVACY = `<p class="privacy">📢 Las fotos del reporte <strong>se publican</strong> en la lista de personas desaparecidas, con los puntos de reconocimiento facial marcados sobre el rostro. Es lo que permite que un rescatista reconozca a la persona que tiene al lado. Sube solo fotos que quieras hacer públicas.</p>`;
 
@@ -707,7 +796,7 @@ ${body}
           layout(
             'Aviso incompleto',
             `<h1 class="compact">Falta información</h1>
-<div class="error"><p>Necesitamos tu teléfono y el lugar donde puede ser localizada la persona.</p></div>
+<div class="error"><p>Necesitamos tu teléfono y dónde está ahora la persona que rescataste.</p></div>
 <p><a class="big-btn report" href="/rescate">Volver a intentar</a></p>`
           )
         );
@@ -734,6 +823,10 @@ ${body}
               'Un rescatista informa dónde puede ser localizada una persona reportada como desaparecida.',
               `Persona: ${person.full_name} (${env.BASE_URL}/person/${person.id})`,
               `Teléfono del rescatista: ${phone}`,
+              // La etiqueta de esta línea la leen herramientas que procesan
+              // este buzón. Es un nombre de campo, no copy: cambiarlo rompe su
+              // parseo en silencio. La pregunta que se le hace al rescatista sí
+              // se reformuló, arriba en el formulario.
               `Dónde puede ser localizada: ${location}`,
               '',
               'Siguiente paso: verificar y hacer llegar el aviso a la fuente del reporte (Colombia Te Busca: llenar su formulario de información en nombre del rescatista).'
@@ -758,6 +851,7 @@ ${body}
 
   // ------------------------------------------------- report a missing person
   router.get('/report', (req, res) => {
+    const remembered = rememberedContact(req);
     res.send(
       layout(
         'Reporta desaparecido',
@@ -773,7 +867,9 @@ ${body}
     <input name="location" id="location" list="location-options" autocomplete="off" placeholder="Dónde crees que estaba *" aria-label="Ubicación" required>
     <datalist id="location-options"></datalist>
   </span>
-  <input name="contact" required value="${esc(readCookie(req, REPORTER_COOKIE))}" placeholder="Tu teléfono o correo para que te contacten *" aria-label="Teléfono o correo de contacto">
+  <input name="contact_phone" inputmode="tel" maxlength="120" value="${esc(remembered.phone)}" placeholder="Tu teléfono para que te contacten" aria-label="Teléfono de contacto">
+  <input name="contact_email" inputmode="email" maxlength="120" value="${esc(remembered.email)}" placeholder="Tu correo" aria-label="Correo de contacto">
+  <p class="subtle contact-note">Con uno basta. Si dejas los dos, tu reporte también puede publicarse en otros registros de desaparecidos, que piden teléfono y correo.</p>
   <textarea name="message" rows="2" placeholder="Otros datos que ayuden a reconocerla (opcional)" aria-label="Datos adicionales"></textarea>
   ${CTB_CHECKBOX}
   <button>Reporta desaparecido</button>
@@ -804,9 +900,14 @@ ${LOCATION_SCRIPT}`,
     '/report',
     upload.array('photos', 8),
     wrap(async (req, res) => {
-      const { name, location, contact, message } = req.body;
+      const { name, location, message } = req.body;
+      const phone = String(req.body.contact_phone || '').trim();
+      const email = String(req.body.contact_email || '').trim();
+      // Sigue habiendo UNA sola obligación de contacto, ahora repartida en dos
+      // casillas: con cualquiera de las dos el reporte pasa, igual que antes.
+      const contact = composeContact({ phone, email, contact: req.body.contact });
       const files = (req.files || []).slice(0, MAX_QUERY_PHOTOS);
-      if (!name || !name.trim() || !location || !location.trim() || !contact || !contact.trim() || !files.length) {
+      if (!name || !name.trim() || !location || !location.trim() || !contact || !files.length) {
         return res
           .status(400)
           .send(
@@ -817,6 +918,18 @@ ${LOCATION_SCRIPT}`,
           );
       }
 
+      // Los campos que solo existen para el relevo a Colombia Te Busca. Todos
+      // opcionales y todos tal cual los escribió la familia: si vienen vacíos,
+      // vacíos se relevan (ver relayChecklist).
+      const relay = {
+        reporterName: String(req.body.reporter_name || '').trim().slice(0, 120),
+        phone,
+        email,
+        department: String(req.body.department || '').trim().slice(0, 60),
+        municipality: String(req.body.municipality || '').trim().slice(0, 80),
+        place: String(req.body.place || '').trim().slice(0, 160)
+      };
+
       const { person, created } = await store.findOrCreatePerson(name);
 
       // Read the record's existing photo BEFORE this report's own photos are
@@ -825,14 +938,23 @@ ${LOCATION_SCRIPT}`,
       // pre-existing face is the whole point of the comparison.
       const priorPhoto = created ? null : (await store.reportPhotoByPerson([person.id])).get(person.id);
 
+      // El nombre de quien reporta va a `reporter`, la columna que ya existía
+      // para esto y que `maskReporter()` publica reducida a "María G." — no se
+      // guarda ninguna columna nueva. Los tres campos de ubicación desglosada,
+      // en cambio, no tienen columna: su único consumidor es el formulario de
+      // Colombia Te Busca, la ubicación que la app usa ya está en `location`, y
+      // agregar columnas a los dos adaptadores para un dato que solo viaja en un
+      // correo no se paga.
       const update = await store.addUpdate(person.id, {
         status: 'missing',
         message,
         location,
         source: 'web',
-        contact
+        contact,
+        reporter: relay.reporterName || null
       });
-      remember(res, REPORTER_COOKIE, contact);
+      remember(res, REPORTER_COOKIE, phone || contact);
+      remember(res, EMAIL_COOKIE, email);
 
       // Each photo is indexed so a rescuer holding this person can find the
       // report; a match also alerts any rescuer already waiting for news.
@@ -857,7 +979,7 @@ ${LOCATION_SCRIPT}`,
       // Best effort, and last on purpose: the report is already stored and
       // public by now, so a SendGrid outage costs the relay, never the report.
       if (req.body.colombiatebusca) {
-        await relayToColombiaTeBusca({ person, update, photos, contact, location, message });
+        await relayToColombiaTeBusca({ person, update, photos, contact, location, message, relay });
       }
 
       // Duplicate detection runs LAST, once the report is durable. Everything
