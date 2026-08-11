@@ -102,10 +102,18 @@ async function createPostgresAdapter(connectionString) {
   // Widen the source CHECK for DBs created before 'aggregator' (and later
   // 'rescate', a rescuer's aviso via POST /rescate/aviso) existed.
   // Cheap on this table's scale; matches the ADD COLUMN IF NOT EXISTS pattern above.
-  await pool.query('ALTER TABLE updates DROP CONSTRAINT IF EXISTS updates_source_check');
+  //
+  // DROP y ADD van en un SOLO `ALTER TABLE`: Postgres corre el statement en una
+  // transacción implícita y toma el lock de la tabla una vez, así que dos
+  // instancias arrancando a la vez se serializan. Separados en dos statements
+  // se intercalan (A dropea, B dropea, A agrega, B agrega → 42710) y el
+  // arranque muere. Postgres procesa el DROP antes que el ADD dentro del mismo
+  // ALTER, así que el orden está garantizado.
   await pool.query(`
-    ALTER TABLE updates ADD CONSTRAINT updates_source_check
-      CHECK (source IN ('web','whatsapp','api','aggregator','rescate'))
+    ALTER TABLE updates
+      DROP CONSTRAINT IF EXISTS updates_source_check,
+      ADD  CONSTRAINT updates_source_check
+        CHECK (source IN ('web','whatsapp','api','aggregator','rescate'))
   `);
 
   const one = async (sql, params) => (await pool.query(sql, params)).rows[0];
