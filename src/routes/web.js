@@ -103,19 +103,32 @@ ${list}
   // Serves REPORT photos only. A rescuer's photo ('query') is never served:
   // its bytes were dropped at upload, so there is nothing here to return —
   // this route enforces that rather than relying on the row being empty.
+  async function sendPhoto(req, res, pick) {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return res.status(404).end();
+    const photo = await store.getPhoto(id);
+    if (!photo || photo.kind !== 'report') return res.status(404).end();
+    const { raw, contentType } = pick(photo);
+    const bytes = Buffer.isBuffer(raw) ? raw : Buffer.from(raw || '');
+    if (!bytes.length) return res.status(404).end();
+    res.set('Content-Type', contentType || 'image/jpeg');
+    // Photos never change once stored, and a re-request on a bad connection is
+    // exactly what this page cannot afford.
+    res.set('Cache-Control', 'public, max-age=86400');
+    res.send(bytes);
+  }
+
   router.get(
     '/photo/:id',
-    wrap(async (req, res) => {
-      const id = Number(req.params.id);
-      if (!Number.isInteger(id) || id <= 0) return res.status(404).end();
-      const photo = await store.getPhoto(id);
-      if (!photo || photo.kind !== 'report') return res.status(404).end();
-      const bytes = Buffer.isBuffer(photo.content) ? photo.content : Buffer.from(photo.content || '');
-      if (!bytes.length) return res.status(404).end();
-      res.set('Content-Type', photo.content_type || 'image/jpeg');
-      res.set('Cache-Control', 'public, max-age=3600');
-      res.send(bytes);
-    })
+    wrap((req, res) => sendPhoto(req, res, (p) => ({ raw: p.content, contentType: p.content_type })))
+  );
+
+  // The small face crop the public listing loads — a few KB instead of a few
+  // hundred. Falls back to nothing (404) rather than serving the full photo:
+  // a visitor on a weak connection must never get the big one by accident.
+  router.get(
+    '/photo/:id/thumb',
+    wrap((req, res) => sendPhoto(req, res, (p) => ({ raw: p.thumb, contentType: p.thumb_type })))
   );
 
   // ------------------------------------------------------------- rescuer

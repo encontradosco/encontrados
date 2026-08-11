@@ -11,6 +11,7 @@
 
 const env = require('./env');
 const { sendEmail, sendWhatsApp } = require('./notify');
+const { storeThumbnail } = require('./thumbs');
 
 const MAX_QUERY_PHOTOS = 3;
 
@@ -56,8 +57,9 @@ async function matchStoredPhoto(store, matcher, photo, bytes) {
   console.log(`[facematch] photo ${id} (${kind}) → ${matches.length} raw match(es)`);
   const { faceId, geometry } = await matcher.indexFace(bytes, id);
   if (faceId) await store.setPhotoFaceId(id, faceId);
-  // Report photos are shown publicly with this geometry drawn over them.
-  if (geometry) await store.setPhotoFaceDetail(id, geometry);
+  // Report photos are shown publicly: they get the geometry to draw and the
+  // face thumbnail the listing loads instead of the full image.
+  if (kind === 'report') await storeThumbnail(store, id, bytes, geometry);
   if (!matches.length) return 0;
 
   const bySimilarity = new Map(matches.map((m) => [m.faceId, m.similarity]));
@@ -101,6 +103,9 @@ async function processPhoto(store, matcher, { personId, kind, updateId, subscrip
     console.warn(
       `[facematch] matcher disabled — photo ${photo.id} stored WITHOUT indexing (will be picked up by /api/reindex)`
     );
+    // The listing still needs something light to show, so build the thumbnail
+    // anyway — centred, since nothing told us where the face is.
+    if (kind === 'report') await storeThumbnail(store, photo.id, bytes, null);
     return photo;
   }
   try {
@@ -139,34 +144,51 @@ async function backfillUnindexedPhotos(store, matcher, limit = 100) {
   return { ok: true, pending: pending.length, processed: indexed, notifications: notified, failed: noFace };
 }
 
-// Fill in the detection geometry for report photos indexed before it was
-// captured. Uses DetectFaces, not IndexFaces: these photos are already in the
-// collection and re-indexing them would register a duplicate face.
-async function backfillFaceDetail(store, matcher, limit = 100) {
+// Bring already-stored report photos up to date: the detection geometry the
+// public overlay needs, and the face thumbnail the listing loads. Idempotent
+// and safe to run repeatedly — it only looks at photos still missing one.
+//
+// Geometry comes from DetectFaces, not IndexFaces: these photos are already in
+// the collection, and re-indexing them would register a duplicate face.
+// Thumbnails don't need Rekognition at all, so they are still generated (as a
+// centred crop) when face matching is unavailable.
+async function backfillPhotoDerivatives(store, matcher, limit = 100) {
   if (typeof matcher.ensureReady === 'function') await matcher.ensureReady();
-  if (!matcher.enabled) {
-    return { ok: false, error: 'El reconocimiento facial no está activo.', processed: 0 };
-  }
-  const pending = await store.photosMissingFaceDetail(limit);
-  let processed = 0;
-  let noFace = 0;
+  const pending = await store.photosMissingDerivatives(limit);
+  let thumbs = 0;
+  let geometries = 0;
+  let failed = 0;
+
   for (const photo of pending) {
     try {
       const bytes = Buffer.isBuffer(photo.content) ? photo.content : Buffer.from(photo.content);
-      const geometry = await matcher.detectFace(bytes);
-      if (geometry) {
-        await store.setPhotoFaceDetail(photo.id, geometry);
-        processed++;
+      let geometry = photo.face_detail && photo.face_detail.box ? photo.face_detail : null;
+      if (!geometry && matcher.enabled) {
+        geometry = await matcher.detectFace(bytes);
+        if (geometry) geometries++;
+      }
+      if (await storeThumbnail(store, photo.id, bytes, geometry)) {
+        thumbs++;
       } else {
-        noFace++;
+        failed++;
       }
     } catch (e) {
-      console.error(`[facematch:geometry] photo ${photo.id} failed:`, e.message);
-      noFace++;
+      console.error(`[facematch:derivatives] photo ${photo.id} failed:`, e.message);
+      failed++;
     }
   }
-  console.log(`[facematch:geometry] pendientes=${pending.length} procesadas=${processed} sin_rostro=${noFace}`);
-  return { ok: true, pending: pending.length, processed, failed: noFace };
+
+  console.log(
+    `[facematch:derivatives] pendientes=${pending.length} miniaturas=${thumbs} geometrias=${geometries} fallidas=${failed}`
+  );
+  return {
+    ok: true,
+    pending: pending.length,
+    thumbnails: thumbs,
+    geometry: geometries,
+    failed,
+    face_matching: matcher.enabled
+  };
 }
 
 // The rescuer flow: identify who is looking for the person in front of you.
@@ -222,6 +244,6 @@ module.exports = {
   processPhoto,
   identifyRescuedPerson,
   backfillUnindexedPhotos,
-  backfillFaceDetail,
+  backfillPhotoDerivatives,
   MAX_QUERY_PHOTOS
 };
