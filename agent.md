@@ -239,7 +239,7 @@ presencia y huella, nunca el valor).
 | `AVISO_EMAIL` | El aviso del rescatista y el relevo a Colombia Te Busca no se mandan. Falla en silencio: quien reportó ve su página de éxito igual. Y con `NOTIFY_MODE=relay` (el modo por omisión) tampoco sale ningún aviso a terceros: quedan en el log como `[notify:relevo] PERDIDO`. |
 | `NOTIFY_MODE` | `relay`. Los avisos a terceros se retienen y se relevan a `AVISO_EMAIL`; `direct` los manda derecho al destinatario. Cualquier otro valor cae a `relay`: el interruptor falla cerrado. |
 | `GITHUB_TOKEN` | `/ideas` y `/bug` siguen funcionando pero caen a correo a `AVISO_EMAIL`. El síntoma es un tracker vacío, que se parece mucho a que nadie escribió. |
-| `GITHUB_REPO` | `torrenegra/encontrados`. |
+| `GITHUB_REPO` | `encontradosco/encontrados`. |
 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | Sin reconocimiento facial: las fotos se guardan pero no se indexan ni coinciden. Las miniaturas igual se generan, centradas. `POST /api/reindex` las recoge después. |
 | `AWS_REGION` | `us-east-1`. |
 | `FACE_COLLECTION_ID` | `aqui-faces` — el nombre anterior al cambio de marca, a propósito. **No lo renombres**: apuntaría a una colección nueva y vacía y rompería el matching de todos los que ya están indexados. |

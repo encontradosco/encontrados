@@ -34,9 +34,9 @@ npm test         # node --test, sin red y sin servicios externos
 
 ## Qué trabajar
 
-- Los issues marcados [`good first issue`](https://github.com/torrenegra/encontrados/labels/good%20first%20issue)
+- Los issues marcados [`good first issue`](https://github.com/encontradosco/encontrados/labels/good%20first%20issue)
   son puntos de entrada reales, no tareas de relleno.
-- Los marcados [`help wanted`](https://github.com/torrenegra/encontrados/labels/help%20wanted)
+- Los marcados [`help wanted`](https://github.com/encontradosco/encontrados/labels/help%20wanted)
   son los que más falta hacen.
 - ¿Encontraste algo por tu cuenta? Abre un issue antes de escribir el código si
   el cambio es grande. Si es chico, manda el PR directo.

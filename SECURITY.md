@@ -15,7 +15,7 @@ alcancemos a arreglarlo.
 
 Usa uno de estos dos canales:
 
-1. **[Reporte privado de vulnerabilidades de GitHub](https://github.com/torrenegra/encontrados/security/advisories/new)** —
+1. **[Reporte privado de vulnerabilidades de GitHub](https://github.com/encontradosco/encontrados/security/advisories/new)** —
    preferido. Queda en un hilo privado con los mantenedores.
 2. **Correo a `cris@pappcorn.com`** si prefieres no usar GitHub o no tienes
    cuenta.

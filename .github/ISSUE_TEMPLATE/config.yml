@@ -1,8 +1,8 @@
 blank_issues_enabled: true
 contact_links:
   - name: Reportar una vulnerabilidad de seguridad o privacidad
-    url: https://github.com/torrenegra/encontrados/security/advisories/new
+    url: https://github.com/encontradosco/encontrados/security/advisories/new
     about: En privado, nunca en un issue público. Ver SECURITY.md.
   - name: Cómo contribuir
-    url: https://github.com/torrenegra/encontrados/blob/main/CONTRIBUTING.md
+    url: https://github.com/encontradosco/encontrados/blob/main/CONTRIBUTING.md
     about: Correr el proyecto local en dos comandos, sin credenciales, y cómo se manda un PR.

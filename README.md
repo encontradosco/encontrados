@@ -93,5 +93,5 @@ npm run dev     # SQLite local, http://localhost:3000
 - [**CODE_OF_CONDUCT.md**](CODE_OF_CONDUCT.md).
 
 Buenos puntos de entrada: los issues marcados
-[`good first issue`](https://github.com/torrenegra/encontrados/labels/good%20first%20issue)
-y [`help wanted`](https://github.com/torrenegra/encontrados/labels/help%20wanted).
+[`good first issue`](https://github.com/encontradosco/encontrados/labels/good%20first%20issue)
+y [`help wanted`](https://github.com/encontradosco/encontrados/labels/help%20wanted).
