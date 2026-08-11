@@ -45,6 +45,16 @@ test('las tres opciones de donación están en el pie, en orden y sin adivinar e
     const intro = html.indexOf('Este sitio no recibe donaciones');
     assert.ok(intro > 0 && intro < html.indexOf(`href="${DESTINATIONS[0]}"`), `falta el contexto en ${path}`);
     assert.match(html.slice(intro), /Vaki, una plataforma de recaudo colectivo/);
+    // Y se dice el conflicto de interés: quien recomienda estos enlaces
+    // cofundó la plataforma a la que llevan. Va con prueba porque es lo
+    // primero que se cae en una reescritura de copy, y es justo lo que
+    // convierte "puso su empresa en un sitio de catástrofe" en "lo dijo de
+    // entrada". Divulgado no cuesta nada; descubierto cuesta caro.
+    assert.match(
+      html.slice(intro),
+      /cofundada por uno de los mantenedores de este sitio/,
+      `falta la divulgación del vínculo en ${path}`
+    );
   }
 });
 

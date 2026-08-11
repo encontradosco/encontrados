@@ -270,7 +270,7 @@ const OUTREACH = `<p class="outreach">¿Deseas contribuir? Puedes usar tu agente
 //      to the wrong door with no way back.
 //   3. One paragraph, three links, zero JavaScript. Same budget as everything
 //      else here.
-const GIVE = `<p class="outreach">Este sitio no recibe donaciones. Si quieres aportar dinero, estos enlaces llevan a Vaki, una plataforma de recaudo colectivo: <a href="https://vaki.co/explorar" target="_blank" rel="noopener">ver campañas abiertas en Colombia</a> · <a href="https://helpcolombia.vaki.org" target="_blank" rel="noopener">donar desde Estados Unidos, con Vaki Foundation</a> · <a href="https://vaki.co/crear" target="_blank" rel="noopener">crear una vaki para ayudar a alguien en particular</a>.</p>`;
+const GIVE = `<p class="outreach">Este sitio no recibe donaciones. Si quieres aportar dinero, estos enlaces llevan a Vaki, una plataforma de recaudo colectivo cofundada por uno de los mantenedores de este sitio: <a href="https://vaki.co/explorar" target="_blank" rel="noopener">ver campañas abiertas en Colombia</a> · <a href="https://helpcolombia.vaki.org" target="_blank" rel="noopener">donar desde Estados Unidos, con Vaki Foundation</a> · <a href="https://vaki.co/crear" target="_blank" rel="noopener">crear una vaki para ayudar a alguien en particular</a>.</p>`;
 
 function layout(title, body, meta = {}) {
   const fullTitle = meta.fullTitle || `${title} — encontrados.co · Personas y terremoto en Colombia`;
