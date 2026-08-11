@@ -52,6 +52,52 @@ function remember(res, name, value) {
   );
 }
 
+// Where an aviso for the operators is mailed. Read LIVE from process.env, not
+// from the module snapshot — same staleness trap /api/diag documents for the
+// SendGrid key. Unset = no mail; whatever produced the aviso still stands on
+// its own (the timeline entry, the report) and nothing is lost.
+function avisoEmail() {
+  return (process.env.AVISO_EMAIL || env.AVISO_EMAIL || '').trim();
+}
+
+// Emails the operators everything they need to file this report on Colombia Te
+// Busca by hand. Never throws: the report is already saved and public by the
+// time this runs, and a mail failure must not turn a filed report into a 500.
+async function relayToColombiaTeBusca({ person, update, photos, contact, location, message }) {
+  const to = avisoEmail();
+  if (!to) {
+    console.warn('[report:colombiatebusca] AVISO_EMAIL sin configurar — la solicitud no se envió');
+    return { ok: false, error: 'AVISO_EMAIL no configurada' };
+  }
+  try {
+    return await sendEmail(
+      to,
+      `Publicar en Colombia Te Busca — ${person.full_name}`,
+      [
+        'Quien reportó a esta persona en encontrados.co pidió expresamente que el reporte se publique también en Colombia Te Busca.',
+        '',
+        `Persona: ${person.full_name}`,
+        `Ficha: ${env.BASE_URL}/person/${person.id}`,
+        `Dónde estaba: ${location}`,
+        `Contacto de quien reporta: ${contact}`,
+        message && message.trim() ? `Otros datos: ${message.trim()}` : null,
+        `Fecha del reporte: ${update.created_at || 'ahora'}`,
+        '',
+        photos.length
+          ? `Foto(s) del reporte:\n${photos.map((p) => `${env.BASE_URL}/photo/${p.id}`).join('\n')}`
+          : 'El reporte no trae fotos.',
+        '',
+        'Siguiente paso: llenar el formulario de reporte de Colombia Te Busca (https://colombiatebusca.com) en nombre de la familia.'
+      ]
+        .filter((l) => l !== null)
+        .join('\n')
+    );
+  } catch (e) {
+    console.error('[report:colombiatebusca] email failed:', e.message);
+    return { ok: false, error: e.message };
+  }
+}
+
 const RESCUE_PRIVACY = `<p class="privacy">🔒 <strong>La foto no se guarda.</strong> Se compara al instante contra las fotos de las personas reportadas como desaparecidas y se borra de inmediato: no queda almacenada en ningún servidor. Solo conservamos su <em>firma facial</em> (un código que no permite reconstruir la imagen) para poder avisarte si alguien empieza a buscar a esta persona.</p>`;
 
 // One small line under the listing heading. Kept honest — the data flows from
@@ -188,6 +234,22 @@ function duplicateNotice({ person, sameName, priorPhoto, candidates }) {
 ${sameNameCard}
 ${otherCards}`;
 }
+// The last thing above the submit button on /report. Colombia Te Busca has no
+// public API, so "also report there" is a person filling their form on the
+// family's behalf: the checkbox emails the report to the operators (see
+// AVISO_EMAIL) and they relay it.
+//
+// Deliberately UNCHECKED by default. Everything else on this form stays inside
+// encontrados.co, where the reporter's phone or email is shown only to a
+// rescuer after a facial match and never on a public page. Publishing the same
+// report on a third-party registry is a different promise, and a family cannot
+// consent to it by not noticing a pre-ticked box.
+const CTB_CHECKBOX = `<label class="share-check">
+    <input type="checkbox" name="colombiatebusca" value="1">
+    Reportar también en ColombiaTeBusca.com
+  </label>
+  <p class="subtle share-note">Le haremos llegar tu reporte a su equipo para que también quede publicado en su registro público de desaparecidos.</p>`;
+
 const REPORT_PRIVACY = `<p class="privacy">📢 Las fotos del reporte <strong>se publican</strong> en la lista de personas desaparecidas, con los puntos de reconocimiento facial marcados sobre el rostro. Es lo que permite que un rescatista reconozca a la persona que tiene al lado. Sube solo fotos que quieras hacer públicas.</p>`;
 
 // Photos stored before thumbnails existed catch up on their own, so nobody has
@@ -549,14 +611,12 @@ ${body}
 
       // Best effort: the aviso already lives in the timeline; this mail is the
       // operators' real-time signal to go relay it to the source registry. An
-      // email failure must never lose the aviso. Read live, not from the
-      // module snapshot — same staleness trap /api/diag documents for the
-      // SendGrid key.
-      const avisoEmail = (process.env.AVISO_EMAIL || env.AVISO_EMAIL || '').trim();
-      if (avisoEmail) {
+      // email failure must never lose the aviso.
+      const operators = avisoEmail();
+      if (operators) {
         try {
           await sendEmail(
-            avisoEmail,
+            operators,
             `Aviso de rescatista — ${person.full_name}`,
             [
               'Un rescatista informa dónde puede ser localizada una persona reportada como desaparecida.',
@@ -603,6 +663,7 @@ ${body}
   </span>
   <input name="contact" required value="${esc(readCookie(req, REPORTER_COOKIE))}" placeholder="Tu teléfono o correo para que te contacten *" aria-label="Teléfono o correo de contacto">
   <textarea name="message" rows="2" placeholder="Otros datos que ayuden a reconocerla (opcional)" aria-label="Datos adicionales"></textarea>
+  ${CTB_CHECKBOX}
   <button>Reporta desaparecido</button>
 </form>
 <script>
@@ -663,14 +724,28 @@ ${LOCATION_SCRIPT}`,
 
       // Each photo is indexed so a rescuer holding this person can find the
       // report; a match also alerts any rescuer already waiting for news.
+      const photos = [];
       for (const f of files) {
-        await processPhoto(store, matcher, {
-          personId: person.id,
-          kind: 'report',
-          updateId: update.id,
-          bytes: f.buffer,
-          contentType: f.mimetype
-        });
+        photos.push(
+          await processPhoto(store, matcher, {
+            personId: person.id,
+            kind: 'report',
+            updateId: update.id,
+            bytes: f.buffer,
+            contentType: f.mimetype
+          })
+        );
+      }
+
+      // The family ticked "report this on Colombia Te Busca too". That registry
+      // has no API, so the relay is a human filling their form: this mail is
+      // the operators' signal to go do it, and the ticked box is the consent
+      // that lets them publish contact data we otherwise never make public.
+      //
+      // Best effort, and last on purpose: the report is already stored and
+      // public by now, so a SendGrid outage costs the relay, never the report.
+      if (req.body.colombiatebusca) {
+        await relayToColombiaTeBusca({ person, update, photos, contact, location, message });
       }
 
       // Duplicate detection runs LAST, once the report is durable. Everything
