@@ -52,6 +52,24 @@ function remember(res, name, value) {
 
 const RESCUE_PRIVACY = `<p class="privacy">🔒 <strong>La foto no se guarda.</strong> Se compara al instante contra las fotos de las personas reportadas como desaparecidas y se borra de inmediato: no queda almacenada en ningún servidor. Solo conservamos su <em>firma facial</em> (un código que no permite reconstruir la imagen) para poder avisarte si alguien empieza a buscar a esta persona.</p>`;
 
+// Home-page block: which sources feed this list, and how to contribute more.
+// Kept honest — only Colombia Te Busca is actually integrated today; the rest
+// are listed as "coming soon" so nobody assumes data is already flowing from
+// a source that isn't wired up yet.
+const SOURCES_SECTION = `
+<section class="sources">
+  <h2>Fuentes de información</h2>
+  <p class="subtle">Consolidamos reportes de estas fuentes:</p>
+  <ul class="subtle sources-list">
+    <li>✅ <strong>Activa hoy:</strong> <a href="https://colombiatebusca.com" target="_blank" rel="noopener">Colombia Te Busca</a></li>
+    <li>🔜 <strong>En integración / próximamente:</strong> medios verificados (El Espectador, El Tiempo, El País, Semana, Cambio) y canales oficiales (Medicina Legal, UNGRD, Defensa Civil)</li>
+  </ul>
+  <p class="subtle">Seguimos añadiendo más fuentes.</p>
+</section>
+<section class="notice sources-cta">
+  <p>¿Tienes más datos, o quieres acceso al API para reportar? Avísanos: <a href="https://github.com/torrenegra/encontrados/issues" target="_blank" rel="noopener">abre un issue en GitHub</a> · escríbele a Alex (<a href="https://x.com/torrenegra" target="_blank" rel="noopener">@torrenegra</a>) · o a Nic (<a href="https://x.com/ni500" target="_blank" rel="noopener">@ni500</a>).</p>
+</section>`;
+
 const REPORT_PRIVACY = `<p class="privacy">📢 Las fotos del reporte <strong>se publican</strong> en la lista de personas desaparecidas, con los puntos de reconocimiento facial marcados sobre el rostro. Es lo que permite que un rescatista reconozca a la persona que tiene al lado. Sube solo fotos que quieras hacer públicas.</p>`;
 
 // Photos stored before thumbnails existed catch up on their own, so nobody has
@@ -134,6 +152,7 @@ function webRoutes(store, matcher) {
     <span class="btn-title">📢 Reportar desaparecido</span>
   </a>
 </section>
+${SOURCES_SECTION}
 ${list}
 `,
           {
