@@ -75,3 +75,23 @@ Al llegar un reporte nuevo se notifica a todos los suscriptores **verificados** 
 - **Correo**: la suscripción nace sin verificar; se envía un correo con enlace `/verify?token=…`. No se manda ninguna alerta hasta confirmar.
 - **WhatsApp**: verificadas implícitamente (la persona escribe desde su propio número).
 - **Baja**: toda alerta (correo y WhatsApp) incluye un enlace personal `/unsubscribe?token=…` de un clic. En el bot también funciona `BAJA <nombre>` / `BAJA TODO`.
+
+## Contribuir
+
+El proyecto es abierto y se corre local en dos comandos, **sin credenciales de
+nada**:
+
+```bash
+npm install
+npm run dev     # SQLite local, http://localhost:3000
+```
+
+- [**CONTRIBUTING.md**](CONTRIBUTING.md) — cómo mandar un cambio, qué conviene
+  conversar antes de construirlo, y las reglas duras sobre datos personales.
+- [**SECURITY.md**](SECURITY.md) — un hallazgo de seguridad o privacidad **no va
+  en un issue público**.
+- [**CODE_OF_CONDUCT.md**](CODE_OF_CONDUCT.md).
+
+Buenos puntos de entrada: los issues marcados
+[`good first issue`](https://github.com/encontradosco/encontrados/labels/good%20first%20issue)
+y [`help wanted`](https://github.com/encontradosco/encontrados/labels/help%20wanted).
