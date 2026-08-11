@@ -206,10 +206,18 @@ function webRoutes(store, matcher) {
   router.get(
     '/',
     wrap(async (req, res) => {
-      const missing = await store.getMissingPeople(50);
+      const [missing, reunited] = await Promise.all([
+        store.getMissingPeople(50),
+        store.getReunitedCount()
+      ]);
+      // The only number on this page that is good news. It is also the honest
+      // counterweight to the missing count right next to it.
+      const reunitedNote = reunited
+        ? ` · <span class="reunited-count">🎉 ${reunited} reencontrada${reunited === 1 ? '' : 's'}</span>`
+        : '';
       const photos = await store.reportPhotoByPerson(missing.map((p) => p.id));
       const list = missing.length
-        ? `<h2>Reportes de desaparecidos más recientes</h2>${SOURCES_NOTE}` +
+        ? `<h2>Reportes de desaparecidos más recientes${reunitedNote}</h2>${SOURCES_NOTE}` +
           missing
             .map((p) => {
               return `<article class="card person">
@@ -221,7 +229,9 @@ function webRoutes(store, matcher) {
 </article>`;
             })
             .join('')
-        : `<p class="subtle">Todavía no hay personas reportadas como desaparecidas.</p>${SOURCES_NOTE}`;
+        : `<p class="subtle">Todavía no hay personas reportadas como desaparecidas.${
+            reunited ? ` 🎉 ${reunited} reencontrada${reunited === 1 ? '' : 's'}.` : ''
+          }</p>${SOURCES_NOTE}`;
 
       res.send(
         layout(

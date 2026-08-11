@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const { createSqliteAdapter } = require('../src/store/sqlite');
+const { createStore } = require('../src/people');
 const { createApp } = require('../src/server');
 const { nullMatcher } = require('../src/faces');
 
@@ -316,3 +317,49 @@ test('the contact is remembered between reports via a cookie', async (t) => {
   assert.match(await form.text(), /Cruz Roja · 300 555 1234/);
 });
 
+
+// Bug fix: the home query filtered by "has ANY update with status='missing'"
+// instead of the LATEST status, so once a person was found alive they stayed
+// listed as missing forever — their family kept seeing them on the list, and
+// rescuers kept looking for someone already home.
+test('store: missingPeople/getReunitedCount reflect the LATEST status, not any past one', async (t) => {
+  const store = createStore(await createSqliteAdapter(':memory:'));
+  t.after(() => store.close());
+
+  const { person: stillMissing } = await store.findOrCreatePerson('Camila Vanegas');
+  await store.addUpdate(stillMissing.id, { status: 'missing', source: 'web', location: 'Suba' });
+
+  const { person: found } = await store.findOrCreatePerson('Julián Restrepo Toro');
+  await store.addUpdate(found.id, { status: 'missing', source: 'web', location: 'Kennedy' });
+  await store.addUpdate(found.id, { status: 'safe', source: 'web', message: 'Confirmado' });
+
+  const missing = await store.getMissingPeople(50);
+  assert.deepEqual(missing.map((p) => p.full_name), ['Camila Vanegas']);
+  assert.equal(await store.getReunitedCount(), 1);
+
+  // Flip back to missing (a mistaken "safe" report) — must re-appear.
+  await store.addUpdate(found.id, { status: 'missing', source: 'web', message: 'Se perdió de nuevo' });
+  const missingAgain = await store.getMissingPeople(50);
+  assert.deepEqual(
+    missingAgain.map((p) => p.full_name).sort(),
+    ['Camila Vanegas', 'Julián Restrepo Toro']
+  );
+  assert.equal(await store.getReunitedCount(), 0);
+});
+
+test('home: a person later marked safe drops off the list and counts as reunited', async (t) => {
+  const { server, base, store } = await startApp();
+  t.after(() => server.close());
+
+  const { person } = await store.findOrCreatePerson('Andrés Felipe Mora');
+  await store.addUpdate(person.id, { status: 'missing', source: 'web', location: 'Bosa' });
+
+  const before = await (await fetch(base)).text();
+  assert.match(before, /Andrés Felipe Mora/);
+
+  await store.addUpdate(person.id, { status: 'safe', source: 'web', message: 'Ya está en casa' });
+
+  const after = await (await fetch(base)).text();
+  assert.doesNotMatch(after, /Andrés Felipe Mora/, 'quien ya apareció no sigue listado como desaparecido');
+  assert.match(after, /1 reencontrada/);
+});

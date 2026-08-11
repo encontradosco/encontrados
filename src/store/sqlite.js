@@ -171,17 +171,44 @@ async function createSqliteAdapter(dbPath) {
         .get(personId);
     },
     // Everyone currently reported missing, most recent report first.
+    // Everyone whose LATEST update is 'missing' — not everyone who was EVER
+    // reported missing. Under the old "has ANY missing update" filter a person
+    // later confirmed alive stayed on the list forever: their family sees them
+    // still listed as missing, and rescuers keep looking for someone who is
+    // already home.
+    // The `reports` count this query used to return is gone: nothing rendered
+    // it, and keeping it meant a second full GROUP BY over every update on the
+    // busiest page of the site.
     async missingPeople(limit) {
       return db
         .prepare(
-          `SELECT p.id, p.full_name, MAX(u.created_at) AS last_report, COUNT(u.id) AS reports
-           FROM people p JOIN updates u ON u.person_id = p.id
-           WHERE u.status = 'missing'
-           GROUP BY p.id, p.full_name
-           ORDER BY last_report DESC
+          `WITH latest AS (
+             SELECT u.person_id, u.status, u.created_at,
+                    ROW_NUMBER() OVER (PARTITION BY u.person_id ORDER BY u.created_at DESC, u.id DESC) AS rn
+             FROM updates u
+           )
+           SELECT p.id, p.full_name, l.status, l.created_at AS last_report
+           FROM people p
+           JOIN latest l ON l.person_id = p.id AND l.rn = 1
+           WHERE l.status = 'missing'
+           ORDER BY l.created_at DESC
            LIMIT ?`
         )
         .all(limit);
+    },
+    // How many people whose LATEST status is 'safe' — the reunited counter.
+    // Same "latest status per person" logic as missingPeople above.
+    async reunitedCount() {
+      return db
+        .prepare(
+          `WITH latest AS (
+             SELECT u.person_id, u.status,
+                    ROW_NUMBER() OVER (PARTITION BY u.person_id ORDER BY u.created_at DESC, u.id DESC) AS rn
+             FROM updates u
+           )
+           SELECT COUNT(*) AS n FROM latest WHERE rn = 1 AND status = 'safe'`
+        )
+        .get().n;
     },
     async recentUpdates(limit) {
       return db

@@ -89,6 +89,11 @@ function createStore(adapter) {
     return (await adapter.missingPeople(limit)).map(isoRow);
   }
 
+  // How many people whose LATEST status is 'safe' — the "reencontradas" count.
+  async function getReunitedCount() {
+    return adapter.reunitedCount();
+  }
+
   async function getUpdates(personId) {
     return (await adapter.updatesForPerson(personId)).map(isoRow);
   }
@@ -235,6 +240,7 @@ function createStore(adapter) {
     getLatestUpdate,
     getRecentUpdates,
     getMissingPeople,
+    getReunitedCount,
     subscribe,
     verifySubscription,
     unsubscribeByToken,
