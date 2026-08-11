@@ -88,8 +88,24 @@ function capitalizeWord(word) {
     .join('');
 }
 
+// Not every row in `people` is a person. The rescue flow and the API create
+// anchor rows labelled "Persona rescatada d00822" / "Búsqueda por foto 3bfadd",
+// recognisable by the hex token they end in (the digit requirement keeps a real
+// surname like "Abbe" from matching). Title case turns those into "Persona
+// Rescatada D00822", so they get sentence case instead — which also repairs any
+// that were mangled before this rule existed.
+function isGeneratedLabel(words) {
+  const last = words[words.length - 1] || '';
+  return words.length > 1 && /^(?=.*\d)[0-9a-f]{4,}$/i.test(last);
+}
+
 function titleCaseName(name) {
   const words = String(name || '').trim().split(/\s+/).filter(Boolean);
+  if (isGeneratedLabel(words)) {
+    const lower = words.map((w) => w.toLocaleLowerCase('es'));
+    lower[0] = lower[0][0].toLocaleUpperCase('es') + lower[0].slice(1);
+    return lower.join(' ');
+  }
   return words
     .map((word, i) => {
       const lower = word.toLocaleLowerCase('es');
