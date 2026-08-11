@@ -371,6 +371,16 @@ function mapLink(u) {
   return ` · <a href="https://www.openstreetmap.org/?mlat=${u.lat}&amp;mlon=${u.lng}#map=16/${u.lat}/${u.lng}" target="_blank" rel="noopener">ver en mapa</a>`;
 }
 
+// `source` is an enum for the database, not for a family reading the ficha —
+// "Fuente: aggregator" is developer jargon on the most human page of the site.
+const SOURCE_LABEL = {
+  web: 'sitio web',
+  whatsapp: 'WhatsApp',
+  api: 'API',
+  aggregator: 'registro externo',
+  rescate: 'rescatista'
+};
+
 function updateCard(u, personName) {
   // Never render the raw `reporter` — it may be a phone number or email
   // (see src/privacy.js). Only the masked public label is safe to show.
@@ -380,7 +390,7 @@ function updateCard(u, personName) {
   <p>${statusBadge(u.status)} ${timeTag(u.created_at)}</p>
   ${u.message ? `<p class="msg">${esc(u.message)}</p>` : ''}
   ${u.location ? `<p class="loc">📍 ${esc(u.location)}${mapLink(u)}</p>` : u.lat != null && u.lng != null ? `<p class="loc">📍 Ubicación GPS${mapLink(u)}</p>` : ''}
-  <p class="meta">Fuente: ${esc(u.source)}${reporterLabel ? ` · Reportado por: ${esc(reporterLabel)}` : ''}</p>
+  <p class="meta">Fuente: ${esc(SOURCE_LABEL[u.source] || u.source)}${reporterLabel ? ` · Reportado por: ${esc(reporterLabel)}` : ''}</p>
 </article>`;
 }
 
