@@ -455,6 +455,18 @@ pre {
 }
 .share-note { font-size: 0.78rem; margin: -0.2rem 0 0; }
 
+/* Honeypot on the ideas/bug forms. Not `display:none` — some bots skip fields
+   hidden that way, and some password managers try to fill them. Off-screen and
+   out of the tab order keeps it invisible to people and tempting to bots. */
+.hp {
+  position: absolute;
+  left: -9999px;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
 .choice { display: flex; gap: 0.5rem; flex-wrap: wrap; }
 .choice label {
   flex: 1 1 45%;
