@@ -1,7 +1,7 @@
 // Shared person/update/subscription logic over a storage adapter (SQLite or Postgres).
 // All fuzzy-matching decisions live here so both backends behave identically.
 const crypto = require('crypto');
-const { normalize, phoneticKey, matchScore } = require('./names');
+const { normalize, phoneticKey, titleCaseName, matchScore } = require('./names');
 
 const STATUSES = ['safe', 'injured', 'missing', 'deceased', 'unknown'];
 // 'aggregator': updates pushed by an external data aggregator, distinct from
@@ -41,7 +41,9 @@ function createStore(adapter) {
     if (exact) return { person: isoRow(exact), created: false };
     const [best] = await searchPeople(fullName, { limit: 1, minScore: 0.85 });
     if (best) return { person: await getPerson(best.id), created: false };
-    const person = await adapter.insertPerson(fullName.trim(), norm, phoneticKey(fullName));
+    // Only new people are re-cased: an existing row keeps whatever it has, so
+    // a correction made by hand isn't undone by the next report.
+    const person = await adapter.insertPerson(titleCaseName(fullName), norm, phoneticKey(fullName));
     return { person: isoRow(person), created: true };
   }
 
@@ -139,6 +141,41 @@ function createStore(adapter) {
     return adapter.setPhotoSubscriptionId(photoId, subscriptionId);
   }
 
+  async function setPhotoFaceDetail(photoId, detail) {
+    return adapter.setPhotoFaceDetail(photoId, detail);
+  }
+
+  // Postgres returns JSONB already parsed; SQLite returns the raw JSON text.
+  function withParsedDetail(photo) {
+    if (!photo) return photo;
+    const raw = photo.face_detail;
+    if (typeof raw !== 'string') return photo;
+    try {
+      return { ...photo, face_detail: JSON.parse(raw) };
+    } catch {
+      return { ...photo, face_detail: null };
+    }
+  }
+
+  async function getPhoto(id) {
+    return withParsedDetail(await adapter.getPhoto(id));
+  }
+
+  // The public listing shows at most one photo per person. Both adapters order
+  // by (person_id, has-geometry, id), so the first row per person wins.
+  async function reportPhotoByPerson(personIds) {
+    const rows = await adapter.reportPhotosForPeople(personIds);
+    const byPerson = new Map();
+    for (const row of rows) {
+      if (!byPerson.has(row.person_id)) byPerson.set(row.person_id, withParsedDetail(row));
+    }
+    return byPerson;
+  }
+
+  async function photosMissingFaceDetail(limit = 100) {
+    return adapter.photosMissingFaceDetail(limit);
+  }
+
   async function clearPhotoContent(photoId) {
     return adapter.clearPhotoContent(photoId);
   }
@@ -186,10 +223,14 @@ function createStore(adapter) {
     addPhoto,
     setPhotoFaceId,
     setPhotoSubscriptionId,
+    setPhotoFaceDetail,
+    getPhoto,
+    reportPhotoByPerson,
     clearPhotoContent,
     photosByFaceIds,
     countQueryPhotos,
     photosMissingFaceId,
+    photosMissingFaceDetail,
     counts,
     deletePerson,
     close: () => adapter.close()

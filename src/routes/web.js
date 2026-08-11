@@ -3,7 +3,7 @@ const express = require('express');
 const multer = require('multer');
 const { sendVerificationEmail } = require('../notify');
 const { processPhoto, identifyRescuedPerson, MAX_QUERY_PHOTOS } = require('../facematch');
-const { esc, layout, updateCard, timeTag, statusBadge, LOCATION_SCRIPT } = require('../html');
+const { esc, layout, updateCard, timeTag, statusBadge, facePlate, LOCATION_SCRIPT } = require('../html');
 
 // Express 4 doesn't catch async errors on its own.
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
@@ -55,7 +55,7 @@ function remember(res, name, value) {
 
 const RESCUE_PRIVACY = `<p class="privacy">🔒 <strong>Gracias a nuestra IA, podemos avisarte si alguien busca a esta persona.</strong> Tu foto se compara al instante contra los reportes de desaparecidos y se borra de inmediato: no queda almacenada en ningún servidor. Solo conservamos su <em>firma facial</em> (un código que no permite reconstruir la imagen) para poder avisarte si alguien la reporta después.</p>`;
 
-const REPORT_PRIVACY = `<p class="privacy">🔒 Las fotos <strong>nunca</strong> se muestran públicamente ni se comparten: solo se usan para que un rescatista pueda reconocer a la persona por su rostro.</p>`;
+const REPORT_PRIVACY = `<p class="privacy">📢 Las fotos del reporte <strong>se publican</strong> en la lista de personas desaparecidas, con los puntos de reconocimiento facial marcados sobre el rostro. Es lo que permite que un rescatista reconozca a la persona que tiene al lado. Sube solo fotos que quieras hacer públicas.</p>`;
 
 function webRoutes(store, matcher) {
   const router = express.Router();
@@ -70,15 +70,19 @@ function webRoutes(store, matcher) {
       const reunitedNote = reunited
         ? ` · <span class="reunited-count">🎉 ${reunited} reencontrada${reunited === 1 ? '' : 's'}</span>`
         : '';
+      const photos = await store.reportPhotoByPerson(missing.map((p) => p.id));
       const list = missing.length
         ? `<h2>Personas reportadas como desaparecidas (${missing.length})${reunitedNote}</h2>` +
           missing
-            .map(
-              (p) => `<article class="card">
+            .map((p) => {
+              const photo = photos.get(p.id);
+              return `<article class="card">
+  ${facePlate(photo, p.full_name)}
+  ${photo && photo.face_detail ? '<p class="face-caption">Puntos de reconocimiento facial detectados sobre el rostro.</p>' : ''}
   <h3><a href="/person/${p.id}">${esc(p.full_name)}</a></h3>
   <p>${statusBadge(p.status)} <span class="meta">Último reporte: ${timeTag(p.last_report)}</span></p>
-</article>`
-            )
+</article>`;
+            })
             .join('')
         : `<p class="subtle">Todavía no hay personas reportadas como desaparecidas.${reunited ? ` 🎉 ${reunited} reencontrada${reunited === 1 ? '' : 's'}.` : ''}</p>`;
 
@@ -92,27 +96,27 @@ function webRoutes(store, matcher) {
         layout(
           'Inicio',
           `
-<div class="hero">
-  <h1>Voluntarios, rescatistas, bomberos, policías y hospitales: mira quién está buscando la persona que rescataste</h1>
-</div>
-<div class="big-actions">
+<section class="action-group">
+  <h1>Voluntarios, rescatistas, bomberos, policías y hospitales:</h1>
   <a class="big-btn report" href="/rescate">
-    <span class="btn-eyebrow">🚑 🚒 👮 🏥 Tienes a la persona contigo</span>
-    <span class="btn-title">📸 Mira quién la está buscando</span>
+    <span class="btn-title">🔍 Mira quién está buscando la persona que rescataste</span>
     <span class="btn-sub">Subes una foto, la comparamos y la borramos al instante</span>
   </a>
+</section>
+<section class="action-group">
+  <h2>¿Buscas un ser querido?</h2>
   <a class="big-btn search" href="/report">
     <span class="btn-eyebrow">👪 Buscas a alguien</span>
     <span class="btn-title">📢 Reportar desaparecido</span>
     <span class="btn-sub">Sube su foto, cuéntanos dónde y cómo contactarte</span>
   </a>
-</div>
+</section>
 ${searchPrompt}
 ${list}
 `,
           {
             fullTitle:
-              'Voluntarios, rescatistas, bomberos, policías y hospitales: mira quién está buscando la persona que rescataste — aqui.online',
+              'Voluntarios, rescatistas, bomberos, policías y hospitales — encontrados.co',
             description:
               'Si rescataste a alguien, sube su foto y te decimos quién la está buscando. La foto se borra de inmediato. También puedes reportar a una persona desaparecida.',
             path: '/'
@@ -174,6 +178,25 @@ ${resultsHtml}
     })
   );
 
+  // ------------------------------------------------------------- photos
+  // Serves REPORT photos only. A rescuer's photo ('query') is never served:
+  // its bytes were dropped at upload, so there is nothing here to return —
+  // this route enforces that rather than relying on the row being empty.
+  router.get(
+    '/photo/:id',
+    wrap(async (req, res) => {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(404).end();
+      const photo = await store.getPhoto(id);
+      if (!photo || photo.kind !== 'report') return res.status(404).end();
+      const bytes = Buffer.isBuffer(photo.content) ? photo.content : Buffer.from(photo.content || '');
+      if (!bytes.length) return res.status(404).end();
+      res.set('Content-Type', photo.content_type || 'image/jpeg');
+      res.set('Cache-Control', 'public, max-age=3600');
+      res.send(bytes);
+    })
+  );
+
   // ------------------------------------------------------------- rescuer
   function rescueForm(rememberedEmail = '') {
     return `
@@ -206,7 +229,7 @@ document.addEventListener('submit', function (ev) {
 <p class="subtle">Sube una foto de la persona que tienes contigo. La comparamos con las fotos de las personas reportadas como desaparecidas y te mostramos los datos de contacto de quien la busca.</p>
 ${rescueForm(readCookie(req, EMAIL_COOKIE))}`,
         {
-          fullTitle: 'Mira quién está buscando a la persona que rescataste — aqui.online',
+          fullTitle: 'Mira quién está buscando a la persona que rescataste — encontrados.co',
           description:
             'Sube la foto de la persona que rescataste: te decimos quién la está buscando y cómo contactarlo. La foto se borra de inmediato.',
           path: '/rescate'
@@ -294,7 +317,7 @@ ${rescueForm(email)}`
           `<h1 class="compact">Resultado</h1>
 ${body}
 <p class="notice">🔒 Borramos tu foto al instante — y aun así, gracias a nuestra IA, podemos reconocer a esta persona y avisarte si alguien la reporta después.</p>
-<p><a class="big-btn report" href="/rescate">📸 Consultar otra persona</a></p>`
+<p><a class="big-btn report" href="/rescate">🔍 Consultar otra persona</a></p>`
         )
       );
     })
@@ -385,7 +408,7 @@ document.addEventListener('submit', function (ev) {
 </script>
 ${LOCATION_SCRIPT}`,
         {
-          fullTitle: 'Reportar una persona desaparecida — aqui.online',
+          fullTitle: 'Reportar una persona desaparecida — encontrados.co',
           description:
             'Reporta a una persona desaparecida con sus fotos, el lugar donde crees que estaba y tu contacto. Los rescatistas podrán reconocerla y avisarte.',
           path: '/report'
@@ -458,10 +481,10 @@ ${req.query.reported ? '<p class="notice">✅ Reporte registrado. Cuando un resc
 ${lastLocated ? `<p class="notice">📍 Última ubicación reportada: <strong>${esc(lastLocated.location)}</strong> (${timeTag(lastLocated.created_at)})</p>` : ''}
 ${updates.length ? updates.map((u) => updateCard(u)).join('') : '<p class="subtle">Sin reportes todavía.</p>'}
 <p class="subtle">Los datos de contacto de quien reporta solo se muestran a un rescatista cuando el rostro coincide.</p>
-<p><a class="big-btn report" href="/rescate">📸 ¿La tienes contigo? Mira quién la busca</a></p>`,
+<p><a class="big-btn report" href="/rescate">🔍 ¿La tienes contigo? Mira quién la busca</a></p>`,
           {
-            fullTitle: `${person.full_name} — reportada como desaparecida · aqui.online`,
-            description: `${person.full_name} fue reportada como desaparecida tras el terremoto en Colombia. Si la rescataste, aqui.online te dice quién la está buscando.`,
+            fullTitle: `${person.full_name} — reportada como desaparecida · encontrados.co`,
+            description: `${person.full_name} fue reportada como desaparecida tras el terremoto en Colombia. Si la rescataste, encontrados.co te dice quién la está buscando.`,
             path: `/person/${person.id}`
           }
         )
@@ -483,7 +506,7 @@ ${updates.length ? updates.map((u) => updateCard(u)).join('') : '<p class="subtl
   <p>Sin ese paso no podremos avisarte. Revisa tu bandeja de entrada —y la carpeta de spam— un correo de <strong>a@torrenegra.com</strong>.</p>
   <p class="subtle"><a href="${esc(safeNext)}">Volver</a></p>
 </div>`,
-        { fullTitle: 'Revisa tu correo — aqui.online' }
+        { fullTitle: 'Revisa tu correo — encontrados.co' }
       )
     );
   });
@@ -506,7 +529,7 @@ ${updates.length ? updates.map((u) => updateCard(u)).join('') : '<p class="subtl
   <h1>Listo: te avisaremos por correo apenas alguien busque a esta persona.</h1>
   <p class="subtle"><a href="/">Ir al inicio</a></p>
 </div>`,
-          { fullTitle: 'Aviso confirmado — aqui.online' }
+          { fullTitle: 'Aviso confirmado — encontrados.co' }
         )
       );
     })
@@ -538,13 +561,13 @@ ${updates.length ? updates.map((u) => updateCard(u)).join('') : '<p class="subtl
         `
 <h1>Política de privacidad</h1>
 <p class="subtle">Última actualización: 10 de agosto de 2026</p>
-<p><strong>aqui.online</strong> existe con un único propósito: que un rescatista que tiene a una persona a su lado pueda encontrar a quien la está buscando, tras el terremoto en Colombia del lunes 10 de agosto.</p>
+<p><strong>encontrados.co</strong> existe con un único propósito: que un rescatista que tiene a una persona a su lado pueda encontrar a quien la está buscando, tras el terremoto en Colombia del lunes 10 de agosto.</p>
 
 <h2>La foto del rescatista no se guarda</h2>
-<p>Cuando un rescatista sube la foto de la persona que tiene consigo, esa imagen se compara al instante y <strong>se borra de inmediato</strong>. No queda almacenada en ningún servidor. Solo conservamos su <em>firma facial</em>: un código matemático que permite comparar rostros pero <strong>no permite reconstruir la fotografía</strong>. La conservamos para poder avisarle si más adelante alguien reporta a esa persona como desaparecida.</p>
+<p>Cuando un rescatista sube la foto de la persona que tiene consigo, esa imagen se compara al instante y <strong>se borra de inmediato</strong>. No queda almacenada en ningún servidor y no se muestra en ninguna parte. Solo conservamos sus <em>metadatos faciales</em>: la firma facial —un código matemático que permite comparar rostros pero <strong>no permite reconstruir la fotografía</strong>— para poder avisarle si más adelante alguien reporta a esa persona como desaparecida.</p>
 
-<h2>Las fotos de los reportes</h2>
-<p>Las fotos que acompañan un reporte de persona desaparecida se guardan de forma privada y se usan <strong>exclusivamente</strong> para el reconocimiento facial. <strong>Nunca</strong> se publican, se muestran ni se comparten con nadie: no existe en este sitio ninguna página que muestre fotos.</p>
+<h2>Las fotos de los reportes sí se publican</h2>
+<p>Es distinto cuando reportas a una persona desaparecida: esas fotos <strong>se guardan y se muestran públicamente</strong> en la lista de personas desaparecidas, junto con los puntos de reconocimiento facial que el sistema detecta sobre el rostro. Ese es justamente el propósito del reporte: que cualquier rescatista pueda reconocer a la persona que tiene al lado. Sube únicamente fotos que quieras hacer públicas. Para eliminar un reporte o sus fotos, escribe a <a href="mailto:a@torrenegra.com">a@torrenegra.com</a>.</p>
 
 <h2>Datos de contacto</h2>
 <p>El teléfono o correo de quien reporta se muestra <strong>solo</strong> a un rescatista cuando el rostro de la persona que tiene consigo coincide con el reporte. No aparece en las páginas públicas ni se comparte de ninguna otra forma.</p>
@@ -559,9 +582,9 @@ ${updates.length ? updates.map((u) => updateCard(u)).join('') : '<p class="subtl
 <ul>
   <li>No vendemos ni compartimos datos con terceros con fines comerciales.</li>
   <li>No usamos la información para publicidad.</li>
-  <li>No usamos las fotos para nada distinto a la comparación de rostros descrita aquí.</li>
+  <li>No usamos las fotos para nada distinto a lo descrito aquí: comparar rostros y, en el caso de los reportes, mostrar a la persona buscada.</li>
 </ul>`,
-        { fullTitle: 'Política de privacidad — aqui.online', path: '/privacidad' }
+        { fullTitle: 'Política de privacidad — encontrados.co', path: '/privacidad' }
       )
     );
   });
@@ -573,7 +596,7 @@ ${updates.length ? updates.map((u) => updateCard(u)).join('') : '<p class="subtl
         `
 <h1>Términos de servicio</h1>
 <p class="subtle">Última actualización: 10 de agosto de 2026</p>
-<p><strong>aqui.online</strong> es un servicio gratuito y de emergencia que conecta a quien rescata a una persona con quien la está buscando. Al usarlo aceptas estos términos, deliberadamente simples dada la naturaleza de la emergencia:</p>
+<p><strong>encontrados.co</strong> es un servicio gratuito y de emergencia que conecta a quien rescata a una persona con quien la está buscando. Al usarlo aceptas estos términos, deliberadamente simples dada la naturaleza de la emergencia:</p>
 <ul>
   <li><strong>Úsalo de buena fe.</strong> Reporta solo información que creas cierta. Está prohibido publicar datos falsos o usar el servicio para localizar a alguien que no quiere ser encontrado.</li>
   <li><strong>Los datos de contacto son para reunir familias.</strong> Al mostrarse tras una coincidencia facial, deben usarse únicamente para informar sobre la persona; cualquier otro uso está prohibido.</li>
@@ -581,7 +604,7 @@ ${updates.length ? updates.map((u) => updateCard(u)).join('') : '<p class="subtl
   <li><strong>Sin garantías.</strong> El servicio se ofrece "tal cual", sin garantía de disponibilidad ni exactitud, y no sustituye a las autoridades ni a los organismos de socorro.</li>
   <li><strong>Podemos retirar contenido</strong> que incumpla estos términos y atender solicitudes de eliminación en <a href="mailto:a@torrenegra.com">a@torrenegra.com</a>.</li>
 </ul>`,
-        { fullTitle: 'Términos de servicio — aqui.online', path: '/terminos' }
+        { fullTitle: 'Términos de servicio — encontrados.co', path: '/terminos' }
       )
     );
   });
@@ -592,11 +615,11 @@ ${updates.length ? updates.map((u) => updateCard(u)).join('') : '<p class="subtl
       layout(
         'API',
         `
-<h1>API de aqui.online</h1>
-<p>Base: <code>https://aqui.online/api</code> · JSON. Pensada para organismos de socorro que quieran reportar en lote.</p>
+<h1>API de encontrados.co</h1>
+<p>Base: <code>https://encontrados.co/api</code> · JSON. Pensada para organismos de socorro que quieran reportar en lote.</p>
 
 <h2>Reportar una persona desaparecida</h2>
-<pre>curl -X POST https://aqui.online/api/updates \\
+<pre>curl -X POST https://encontrados.co/api/updates \\
   -H 'Content-Type: application/json' \\
   -d '{
     "name": "Juan Carlos Pérez",
@@ -612,11 +635,11 @@ ${updates.length ? updates.map((u) => updateCard(u)).join('') : '<p class="subtl
 </ul>
 
 <h2>Consultar</h2>
-<pre>curl 'https://aqui.online/api/people?q=jaun%20peres'
-curl https://aqui.online/api/people/12</pre>
+<pre>curl 'https://encontrados.co/api/people?q=jaun%20peres'
+curl https://encontrados.co/api/people/12</pre>
 
 <p class="subtle">Publica solo información que creas cierta — ver <a href="/terminos">términos</a> y <a href="/privacidad">privacidad</a>.</p>`,
-        { fullTitle: 'API — aqui.online', path: '/api-doc' }
+        { fullTitle: 'API — encontrados.co', path: '/api-doc' }
       )
     );
   });

@@ -65,6 +65,7 @@ async function createPostgresAdapter(connectionString) {
       content BYTEA NOT NULL,
       content_type TEXT NOT NULL,
       face_id TEXT,
+      face_detail JSONB,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
     CREATE INDEX IF NOT EXISTS idx_photos_face ON photos(face_id);
@@ -80,6 +81,8 @@ async function createPostgresAdapter(connectionString) {
   await pool.query('ALTER TABLE updates ADD COLUMN IF NOT EXISTS lat DOUBLE PRECISION');
   await pool.query('ALTER TABLE updates ADD COLUMN IF NOT EXISTS lng DOUBLE PRECISION');
   await pool.query('ALTER TABLE updates ADD COLUMN IF NOT EXISTS contact TEXT');
+  // Detection geometry (bounding box + landmarks) for the public overlay.
+  await pool.query('ALTER TABLE photos ADD COLUMN IF NOT EXISTS face_detail JSONB');
 
   // Integration seam for an external aggregator: external_id lets a caller
   // re-POST the same update idempotently (see insertUpdate below), and
@@ -274,6 +277,36 @@ async function createPostgresAdapter(connectionString) {
     // nothing and silently never notify.
     async setPhotoSubscriptionId(photoId, subscriptionId) {
       await pool.query('UPDATE photos SET subscription_id = $1 WHERE id = $2', [subscriptionId, photoId]);
+    },
+    async setPhotoFaceDetail(photoId, detail) {
+      await pool.query('UPDATE photos SET face_detail = $1 WHERE id = $2', [
+        detail ? JSON.stringify(detail) : null,
+        photoId
+      ]);
+    },
+    async getPhoto(id) {
+      return one('SELECT * FROM photos WHERE id = $1', [id]);
+    },
+    // One photo per person for the public listing: the earliest report photo
+    // that still has bytes and, preferably, detection geometry to draw.
+    async reportPhotosForPeople(personIds) {
+      if (!personIds.length) return [];
+      return all(
+        `SELECT DISTINCT ON (person_id) id, person_id, content_type, face_id, face_detail
+         FROM photos
+         WHERE kind = 'report' AND person_id = ANY($1) AND octet_length(content) > 0
+         ORDER BY person_id, (face_detail IS NULL), id`,
+        [personIds]
+      );
+    },
+    // Report photos indexed before the geometry was captured.
+    async photosMissingFaceDetail(limit) {
+      return all(
+        `SELECT * FROM photos
+         WHERE face_detail IS NULL AND kind = 'report' AND octet_length(content) > 0
+         ORDER BY id LIMIT $1`,
+        [limit]
+      );
     },
     // Rescue photos are never kept: only the face signature survives.
     async clearPhotoContent(photoId) {

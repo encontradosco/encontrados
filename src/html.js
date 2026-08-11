@@ -23,7 +23,51 @@ const STATUS_CLASS = {
   unknown: 'muted'
 };
 
-const PRIVACY_NOTE = `<p class="privacy">🔒 Las fotos <strong>nunca</strong> se muestran públicamente ni se comparten: solo se usan para reconocimiento facial.</p>`;
+const PRIVACY_NOTE = `<p class="privacy">🔒 La foto del reporte <strong>se publica</strong> junto al nombre, para que un rescatista pueda reconocer a la persona. La foto de un rescatista, en cambio, nunca se guarda.</p>`;
+
+// The public face plate: the report photo with the face-detection geometry
+// drawn over it. Rekognition gives every coordinate as a ratio of the image,
+// so positioning in percentages lands each marker on the right pixel at any
+// rendered size — and, unlike an SVG stretched to the box, keeps the dots
+// round on a non-square photo.
+const LANDMARK_LABEL = {
+  eyeLeft: 'ojo izquierdo',
+  eyeRight: 'ojo derecho',
+  nose: 'nariz',
+  mouthLeft: 'comisura izquierda',
+  mouthRight: 'comisura derecha'
+};
+
+function pct(n) {
+  return `${(Math.min(1, Math.max(0, Number(n) || 0)) * 100).toFixed(3)}%`;
+}
+
+function facePlate(photo, personName) {
+  if (!photo) return '';
+  const detail = photo.face_detail;
+  const alt = `Foto del reporte de ${personName}`;
+  let overlay = '';
+  if (detail && detail.box) {
+    const { l, t, w, h } = detail.box;
+    const points = (detail.points || [])
+      .map(
+        (p) =>
+          `<span class="face-pt" style="left:${pct(p.x)};top:${pct(p.y)}" title="${esc(
+            LANDMARK_LABEL[p.t] || p.t
+          )}"></span>`
+      )
+      .join('');
+    const confidence =
+      detail.confidence != null ? `<span class="face-conf">${Math.round(detail.confidence)}%</span>` : '';
+    overlay = `<div class="face-box" style="left:${pct(l)};top:${pct(t)};width:${pct(w)};height:${pct(
+      h
+    )}">${confidence}</div>${points}`;
+  }
+  return `<div class="face${overlay ? '' : ' plain'}">
+  <img src="/photo/${photo.id}" alt="${esc(alt)}" loading="lazy" decoding="async">
+  ${overlay}
+</div>`;
+}
 
 // Client-side downscale + XHR upload with a visible progress bar. Emergency
 // users on weak connections must see that something is happening.
@@ -119,7 +163,7 @@ const RESIZE_SCRIPT = `<script>
 </script>`;
 
 function layout(title, body, meta = {}) {
-  const fullTitle = meta.fullTitle || `${title} — aqui.online · Personas y terremoto en Colombia`;
+  const fullTitle = meta.fullTitle || `${title} — encontrados.co · Personas y terremoto en Colombia`;
   const description = meta.description || DEFAULT_DESCRIPTION;
   const url = meta.path ? `${env.BASE_URL}${meta.path}` : env.BASE_URL;
   return `<!doctype html>
@@ -129,7 +173,7 @@ function layout(title, body, meta = {}) {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(fullTitle)}</title>
 <meta name="description" content="${esc(description)}">
-<meta property="og:site_name" content="aqui.online">
+<meta property="og:site_name" content="encontrados.co">
 <meta property="og:type" content="website">
 <meta property="og:locale" content="es_CO">
 <meta property="og:title" content="${esc(fullTitle)}">
@@ -143,7 +187,7 @@ function layout(title, body, meta = {}) {
 <body>
 <div class="tricolor"><span class="y"></span><span class="b"></span><span class="r"></span></div>
 <header>
-  <a class="brand" href="/">📍 aqui.online</a>
+  <a class="brand" href="/">📍 encontrados.co</a>
   <nav>
     <a href="/rescate">Soy rescatista</a>
     <a href="/report" class="cta">Reportar desaparecido</a>
@@ -283,4 +327,14 @@ const LOCATION_SCRIPT = `<script>
 })();
 </script>`;
 
-module.exports = { esc, layout, statusBadge, updateCard, fmtDate, timeTag, PRIVACY_NOTE, LOCATION_SCRIPT };
+module.exports = {
+  esc,
+  layout,
+  statusBadge,
+  updateCard,
+  fmtDate,
+  timeTag,
+  facePlate,
+  PRIVACY_NOTE,
+  LOCATION_SCRIPT
+};

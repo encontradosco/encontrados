@@ -1,4 +1,4 @@
-# 📍 aqui.online
+# 📍 encontrados.co
 
 Conecta a quien **rescata** a una persona con quien la **busca** — tras el terremoto en Colombia del lunes 10 de agosto.
 
@@ -26,7 +26,7 @@ npm test
 ### WhatsApp (Meta Cloud API) — pendiente de credenciales; el canal está implementado pero sin referencias en la interfaz hasta activarlo
 
 1. En [Meta for Developers](https://developers.facebook.com), crea una app con el producto WhatsApp y toma `WHATSAPP_TOKEN` y `WHATSAPP_PHONE_NUMBER_ID`.
-2. Configura el webhook: URL `https://aqui.online/webhooks/whatsapp`, verify token = `WHATSAPP_VERIFY_TOKEN`, suscrito al campo `messages`.
+2. Configura el webhook: URL `https://encontrados.co/webhooks/whatsapp`, verify token = `WHATSAPP_VERIFY_TOKEN`, suscrito al campo `messages`.
 3. Comandos: `AYUDA`, `BUSCAR <nombre>`, `BIEN|HERIDO|DESAPARECIDO <nombre>: <nota> @ <lugar>`, `SUSCRIBIR <nombre>`, `BAJA <nombre>` / `BAJA TODO`. Un mensaje sin comando se trata como búsqueda.
 
 ## API
@@ -35,18 +35,18 @@ Lecturas públicas; si defines `API_KEY`, los POST requieren `Authorization: Bea
 
 ```bash
 # Reportar (crea la persona si no existe; matching difuso para no duplicar)
-curl -X POST https://aqui.online/api/updates \
+curl -X POST https://encontrados.co/api/updates \
   -H 'Content-Type: application/json' \
   -d '{"name":"Juan Pérez","status":"safe","message":"Confirmado por teléfono","location":"Albergue San José","reporter":"María"}'
 
 # Buscar (tolera typos, acentos, nombres incompletos)
-curl 'https://aqui.online/api/people?q=jaun%20peres'
+curl 'https://encontrados.co/api/people?q=jaun%20peres'
 
 # Detalle + historial
-curl https://aqui.online/api/people/1
+curl https://encontrados.co/api/people/1
 
 # Suscribir
-curl -X POST https://aqui.online/api/people/1/subscriptions \
+curl -X POST https://encontrados.co/api/people/1/subscriptions \
   -H 'Content-Type: application/json' \
   -d '{"channel":"email","address":"familia@ejemplo.com"}'
 ```

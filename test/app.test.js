@@ -83,7 +83,7 @@ test('home lists missing people and offers both actions', async (t) => {
 
   const html = await (await fetch(base)).text();
   assert.match(html, /mira quién está buscando la persona que rescataste/i);
-  assert.match(html, /Mira quién la está buscando/);
+  assert.match(html, /href="\/rescate"/);
   assert.match(html, /Reportar desaparecido/);
   // Both home buttons carry the same eyebrow + title + subtitle structure.
   assert.match(html, /👪 Buscas a alguien/);

@@ -17,7 +17,7 @@ const MAX_QUERY_PHOTOS = 3;
 // Sent to a rescuer when someone reports the person they rescued as missing.
 function matchText(matchedPerson, similarity, sub, contact) {
   return [
-    `🔔 aqui.online — alguien está buscando a la persona que rescataste (${Math.round(similarity)}% de coincidencia facial).`,
+    `🔔 encontrados.co — alguien está buscando a la persona que rescataste (${Math.round(similarity)}% de coincidencia facial).`,
     `Reportada como desaparecida: *${matchedPerson.full_name}*`,
     contact ? `Contacto de quien la busca: ${contact}` : null,
     `Detalles del reporte: ${env.BASE_URL}/person/${matchedPerson.id}`,
@@ -40,7 +40,7 @@ async function notifyFaceMatch(store, sub, matchedPerson, similarity, contact) {
   );
   const text = matchText(matchedPerson, similarity, sub, contact);
   if (sub.channel === 'email') {
-    await sendEmail(sub.address, 'Alguien busca a la persona que rescataste — aqui.online', text);
+    await sendEmail(sub.address, 'Alguien busca a la persona que rescataste — encontrados.co', text);
   } else if (sub.channel === 'whatsapp') {
     await sendWhatsApp(sub.address, text);
   }
@@ -54,8 +54,10 @@ async function matchStoredPhoto(store, matcher, photo, bytes) {
   // Search BEFORE indexing so the photo never matches itself.
   const matches = await matcher.searchByImage(bytes);
   console.log(`[facematch] photo ${id} (${kind}) → ${matches.length} raw match(es)`);
-  const faceId = await matcher.indexFace(bytes, id);
+  const { faceId, geometry } = await matcher.indexFace(bytes, id);
   if (faceId) await store.setPhotoFaceId(id, faceId);
+  // Report photos are shown publicly with this geometry drawn over them.
+  if (geometry) await store.setPhotoFaceDetail(id, geometry);
   if (!matches.length) return 0;
 
   const bySimilarity = new Map(matches.map((m) => [m.faceId, m.similarity]));
@@ -137,6 +139,36 @@ async function backfillUnindexedPhotos(store, matcher, limit = 100) {
   return { ok: true, pending: pending.length, processed: indexed, notifications: notified, failed: noFace };
 }
 
+// Fill in the detection geometry for report photos indexed before it was
+// captured. Uses DetectFaces, not IndexFaces: these photos are already in the
+// collection and re-indexing them would register a duplicate face.
+async function backfillFaceDetail(store, matcher, limit = 100) {
+  if (typeof matcher.ensureReady === 'function') await matcher.ensureReady();
+  if (!matcher.enabled) {
+    return { ok: false, error: 'El reconocimiento facial no está activo.', processed: 0 };
+  }
+  const pending = await store.photosMissingFaceDetail(limit);
+  let processed = 0;
+  let noFace = 0;
+  for (const photo of pending) {
+    try {
+      const bytes = Buffer.isBuffer(photo.content) ? photo.content : Buffer.from(photo.content);
+      const geometry = await matcher.detectFace(bytes);
+      if (geometry) {
+        await store.setPhotoFaceDetail(photo.id, geometry);
+        processed++;
+      } else {
+        noFace++;
+      }
+    } catch (e) {
+      console.error(`[facematch:geometry] photo ${photo.id} failed:`, e.message);
+      noFace++;
+    }
+  }
+  console.log(`[facematch:geometry] pendientes=${pending.length} procesadas=${processed} sin_rostro=${noFace}`);
+  return { ok: true, pending: pending.length, processed, failed: noFace };
+}
+
 // The rescuer flow: identify who is looking for the person in front of you.
 // The photo is NEVER stored — it is compared, its face signature is indexed so
 // future reports can reach this rescuer, and the bytes are dropped immediately.
@@ -157,8 +189,10 @@ async function identifyRescuedPerson(store, matcher, { bytes, contentType, perso
     contentType
   });
   try {
-    const faceId = await matcher.indexFace(bytes, photo.id);
+    const { faceId } = await matcher.indexFace(bytes, photo.id);
     if (faceId) await store.setPhotoFaceId(photo.id, faceId);
+    // No geometry is stored for a rescuer's photo: the image is dropped on the
+    // next line, so there would be nothing to draw it over.
   } catch (e) {
     console.error('[facematch:rescue] index failed:', e.message);
   }
@@ -188,5 +222,6 @@ module.exports = {
   processPhoto,
   identifyRescuedPerson,
   backfillUnindexedPhotos,
+  backfillFaceDetail,
   MAX_QUERY_PHOTOS
 };
