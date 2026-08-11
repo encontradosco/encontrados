@@ -92,12 +92,12 @@ function webRoutes(store, matcher) {
         ? `<h2>Personas reportadas como desaparecidas (${missing.length})</h2>` +
           missing
             .map((p) => {
-              const photo = photos.get(p.id);
-              return `<article class="card">
-  ${facePlate(photo, p.full_name)}
-  ${photo && photo.face_detail ? '<p class="face-caption">Puntos de reconocimiento facial detectados sobre el rostro.</p>' : ''}
-  <h3><a href="/person/${p.id}">${esc(p.full_name)}</a></h3>
-  <p class="meta">Último reporte: ${timeTag(p.last_report)}</p>
+              return `<article class="card person">
+  <div class="person-info">
+    <h3><a href="/person/${p.id}">${esc(p.full_name)}</a></h3>
+    <p class="meta">Último reporte: ${timeTag(p.last_report)}</p>
+  </div>
+  ${facePlate(photos.get(p.id), p.full_name)}
 </article>`;
             })
             .join('')
@@ -111,7 +111,7 @@ function webRoutes(store, matcher) {
   <h1>Voluntarios, rescatistas, bomberos, policías y hospitales:</h1>
   <a class="big-btn report" href="/rescate">
     <span class="btn-title">🔍 Mira quién está buscando la persona que rescataste</span>
-    <span class="btn-sub">Subes una foto, la comparamos y la borramos al instante</span>
+    <span class="btn-sub">Subes una foto, la comparamos con IA y la borramos al instante</span>
   </a>
 </section>
 <section class="action-group">

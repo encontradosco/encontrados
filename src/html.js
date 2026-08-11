@@ -84,19 +84,17 @@ function facePlate(photo, personName) {
           )}"></span>`
       )
       .join('');
-    const confidence =
-      detail.confidence != null ? `<span class="face-conf">${Math.round(detail.confidence)}%</span>` : '';
     overlay = `<div class="face-box" style="left:${pct(l)};top:${pct(t)};width:${pct(w)};height:${pct(
       h
-    )}">${confidence}</div>${points}`;
+    )}"></div>${points}`;
   }
 
   // The <img> is built by PHOTO_SCRIPT, not rendered here: an <img> that is
   // hidden with display:none never satisfies loading="lazy" in Chrome, so it
   // would sit there forever without fetching anything.
   return `<div class="face pending" data-src="${src}" data-alt="${esc(alt)}">
-  <button type="button" class="face-load">📷 Ver foto</button>
-  <noscript><img class="face-noscript" src="${src}" alt="${esc(alt)}" width="240" height="240"></noscript>
+  <button type="button" class="face-load" aria-label="Ver la foto de ${esc(personName)}" title="Ver foto">📷</button>
+  <noscript><img class="face-noscript" src="${src}" alt="${esc(alt)}" width="80" height="80"></noscript>
   ${overlay}
 </div>`;
 }
@@ -127,8 +125,8 @@ const PHOTO_SCRIPT = `<script>
     face.classList.add('loading');
     var img = document.createElement('img');
     img.alt = face.getAttribute('data-alt') || '';
-    img.width = 240;
-    img.height = 240;
+    img.width = 80;
+    img.height = 80;
     img.loading = 'lazy';
     img.decoding = 'async';
     img.addEventListener('load', function () {
