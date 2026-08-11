@@ -169,6 +169,16 @@ ${list}
     wrap((req, res) => sendPhoto(req, res, (p) => ({ raw: p.thumb, contentType: p.thumb_type })))
   );
 
+  // The same crop at 480px, for the person page — one face shown at 240 CSS px
+  // wants to be sharp on a phone screen, where the listing's 80px copy would
+  // look like mush.
+  router.get(
+    '/photo/:id/face',
+    wrap((req, res) =>
+      sendPhoto(req, res, (p) => ({ raw: p.thumb_large || p.thumb, contentType: p.thumb_type }))
+    )
+  );
+
   // Manual version of the sweep above, openable in a browser. Unlike
   // /api/reindex this needs no API key, and it is safe without one: it never
   // notifies anybody, never calls IndexFaces (so it cannot duplicate a face in
@@ -435,12 +445,14 @@ ${LOCATION_SCRIPT}`,
           person.full_name,
           `
 ${req.query.reported ? '<p class="notice">✅ Reporte registrado. Cuando un rescatista tenga a esta persona, verá tus datos de contacto.</p>' : ''}
-<div class="person-header">
-  <h1>${esc(person.full_name)}</h1>
+<h1>${esc(person.full_name)}</h1>
+${locationIsBuried ? `<p class="notice">📍 Última ubicación reportada: <strong>${esc(lastLocated.location)}</strong> (${timeTag(lastLocated.created_at)})</p>` : ''}
+<div class="person-body">
+  <div class="person-updates">
+${updates.length ? updates.map((u) => updateCard(u)).join('') : '<p class="subtle">Sin reportes todavía.</p>'}
+  </div>
   ${facePlate(photo, person.full_name, { large: true })}
 </div>
-${locationIsBuried ? `<p class="notice">📍 Última ubicación reportada: <strong>${esc(lastLocated.location)}</strong> (${timeTag(lastLocated.created_at)})</p>` : ''}
-${updates.length ? updates.map((u) => updateCard(u)).join('') : '<p class="subtle">Sin reportes todavía.</p>'}
 <p class="subtle">Los datos de contacto de quien reporta solo se muestran a un rescatista cuando el rostro coincide.</p>
 <p><a class="big-btn report" href="/rescate">🔍 ¿La tienes contigo? Mira quién la busca</a></p>`,
           {

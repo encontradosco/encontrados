@@ -62,6 +62,7 @@ async function createSqliteAdapter(dbPath) {
       face_detail TEXT,
       thumb BLOB,
       thumb_type TEXT,
+      thumb_large BLOB,
       created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
     );
     CREATE INDEX IF NOT EXISTS idx_photos_face ON photos(face_id);
@@ -79,7 +80,7 @@ async function createSqliteAdapter(dbPath) {
   } catch { /* already exists */ }
   // Detection geometry (bounding box + landmarks) for the public overlay, and
   // the face thumbnail the public listing loads instead of the full photo.
-  for (const col of ['face_detail TEXT', 'thumb BLOB', 'thumb_type TEXT']) {
+  for (const col of ['face_detail TEXT', 'thumb BLOB', 'thumb_type TEXT', 'thumb_large BLOB']) {
     try {
       db.exec(`ALTER TABLE photos ADD COLUMN ${col}`);
     } catch { /* already exists */ }
@@ -244,9 +245,10 @@ async function createSqliteAdapter(dbPath) {
         photoId
       );
     },
-    async setPhotoThumbnail(photoId, bytes, contentType) {
-      db.prepare('UPDATE photos SET thumb = ?, thumb_type = ? WHERE id = ?').run(
-        bytes,
+    async setPhotoThumbnails(photoId, { small, large, contentType }) {
+      db.prepare('UPDATE photos SET thumb = ?, thumb_large = ?, thumb_type = ? WHERE id = ?').run(
+        small,
+        large,
         contentType,
         photoId
       );
@@ -263,7 +265,7 @@ async function createSqliteAdapter(dbPath) {
         .prepare(
           `SELECT id, person_id, content_type, face_id, face_detail, thumb_type FROM photos
            WHERE kind = 'report' AND person_id IN (${marks}) AND length(content) > 0
-           ORDER BY person_id, (thumb IS NULL), (face_detail IS NULL), id`
+           ORDER BY person_id, (thumb IS NULL), (thumb_large IS NULL), (face_detail IS NULL), id`
         )
         .all(...personIds);
     },
@@ -275,7 +277,8 @@ async function createSqliteAdapter(dbPath) {
         .prepare(
           `SELECT * FROM photos
            WHERE kind = 'report' AND length(content) > 0
-             AND (thumb IS NULL OR face_detail IS NULL OR face_detail NOT LIKE '%"box"%')
+             AND (thumb IS NULL OR thumb_large IS NULL
+                  OR face_detail IS NULL OR face_detail NOT LIKE '%"box"%')
            ORDER BY id LIMIT ?`
         )
         .all(limit);

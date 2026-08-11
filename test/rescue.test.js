@@ -282,8 +282,15 @@ test('the person page shows the face bigger, and no duplicated location', async 
   await reportMissing(base, { name: 'Andrés Beltrán', contact: '300 555 2222', face: 'andres' });
   const html = await (await fetch(`${base}/person/1`)).text();
 
-  assert.match(html, /class="face pending large" data-src="\/photo\/1\/thumb"/);
+  // The bigger page pulls the bigger crop, not the listing's 80px one.
+  assert.match(html, /class="face pending large" data-src="\/photo\/1\/face"/);
   assert.match(html, /class="face-box"/);
+
+  const big = Buffer.from(await (await fetch(`${base}/photo/1/face`)).arrayBuffer());
+  const small = Buffer.from(await (await fetch(`${base}/photo/1/thumb`)).arrayBuffer());
+  assert.equal((await sharp(big).metadata()).width, 400, 'no se reescala más allá del original');
+  assert.equal((await sharp(small).metadata()).width, 240);
+  assert.ok(big.length > small.length);
 
   // The only report IS the located one, so the card already says where they
   // were seen — repeating it in a banner above adds nothing.
@@ -371,7 +378,7 @@ test('/fotos/actualizar brings photos up to date without an API key', async (t) 
 
   await reportMissing(base, { name: 'Iván Salazar', contact: '300 555 4444', face: 'ivan' });
   // Strip the derivatives, as if this photo predated thumbnails entirely.
-  await store.setPhotoThumbnail(1, null, null);
+  await store.setPhotoThumbnails(1, { small: null, large: null, contentType: null });
   await store.setPhotoFaceDetail(1, null);
 
   // No Authorization header anywhere: this is meant to be opened in a browser.
@@ -399,7 +406,7 @@ test('viewing the home page catches old photos up on its own', async (t) => {
 
   await reportMissing(base, { name: 'Rosa Gil', contact: '300 555 5555', face: 'rosa' });
   // Drop the derivatives, as if this photo predated thumbnails entirely.
-  await store.setPhotoThumbnail(1, null, null);
+  await store.setPhotoThumbnails(1, { small: null, large: null, contentType: null });
   await store.setPhotoFaceDetail(1, null);
   assert.equal((await store.photosMissingDerivatives(10)).length, 1);
 

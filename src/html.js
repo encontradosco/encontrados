@@ -71,7 +71,7 @@ function facePlate(photo, personName, { large = false } = {}) {
   if (!photo || !photo.thumb_type) return '';
   const detail = photo.face_detail ? toCropSpace(photo.face_detail) : null;
   const alt = `Foto del reporte de ${personName}`;
-  const src = `/photo/${photo.id}/thumb`;
+  const src = `/photo/${photo.id}/${large ? 'face' : 'thumb'}`;
 
   let overlay = '';
   if (detail && detail.box) {
@@ -92,9 +92,7 @@ function facePlate(photo, personName, { large = false } = {}) {
   // The <img> is built by PHOTO_SCRIPT, not rendered here: an <img> that is
   // hidden with display:none never satisfies loading="lazy" in Chrome, so it
   // would sit there forever without fetching anything.
-  // The same 240px file either way — at 80 or 160 CSS px that is 3x/1.5x
-  // density, so there is nothing to gain from a second stored size.
-  const px = large ? 160 : 80;
+  const px = large ? 240 : 80;
   return `<div class="face pending${large ? ' large' : ''}" data-src="${src}" data-alt="${esc(alt)}">
   <button type="button" class="face-load" aria-label="Ver la foto de ${esc(personName)}" title="Ver foto">📷</button>
   <noscript><img class="face-noscript" src="${src}" alt="${esc(alt)}" width="${px}" height="${px}"></noscript>
@@ -128,8 +126,9 @@ const PHOTO_SCRIPT = `<script>
     face.classList.add('loading');
     var img = document.createElement('img');
     img.alt = face.getAttribute('data-alt') || '';
-    img.width = 80;
-    img.height = 80;
+    var px = face.classList.contains('large') ? 240 : 80;
+    img.width = px;
+    img.height = px;
     img.loading = 'lazy';
     img.decoding = 'async';
     img.addEventListener('load', function () {

@@ -7,7 +7,11 @@
 // when the connection can afford it — see PHOTO_SCRIPT in src/html.js).
 const sharp = require('sharp');
 
+// Two sizes from the same crop, because the two pages want opposite things:
+// the listing shows 30 faces at 80px and must stay light, while the person
+// page shows one at 240px and should be sharp on a phone's 2-3x screen.
 const THUMB_SIZE = 240;
+const FACE_SIZE = 480;
 const THUMB_QUALITY = 70;
 
 // How much wider than the detected face box the crop is. Rekognition's box is
@@ -58,14 +62,19 @@ async function makeThumbnail(bytes, geometry) {
     if (!width || !height) return null;
 
     const rect = cropRect(geometry, width, height);
-    const out = await sharp(upright.data)
-      .extract(rect)
-      .resize(THUMB_SIZE, THUMB_SIZE, { fit: 'cover' })
-      .jpeg({ quality: THUMB_QUALITY, progressive: true })
-      .toBuffer();
+    const render = (size) =>
+      sharp(upright.data)
+        .extract(rect)
+        .resize(size, size, { fit: 'cover' })
+        .jpeg({ quality: THUMB_QUALITY, progressive: true })
+        .toBuffer();
+    // Never upscale: a small source photo would only gain bytes, not detail.
+    const faceSize = Math.min(FACE_SIZE, Math.max(THUMB_SIZE, rect.width));
+    const [small, large] = await Promise.all([render(THUMB_SIZE), render(faceSize)]);
 
     return {
-      bytes: out,
+      bytes: small,
+      largeBytes: large,
       contentType: 'image/jpeg',
       crop: {
         l: rect.left / width,
@@ -86,9 +95,13 @@ async function makeThumbnail(bytes, geometry) {
 async function storeThumbnail(store, photoId, bytes, geometry) {
   const thumb = await makeThumbnail(bytes, geometry);
   if (!thumb) return null;
-  await store.setPhotoThumbnail(photoId, thumb.bytes, thumb.contentType);
+  await store.setPhotoThumbnails(photoId, {
+    small: thumb.bytes,
+    large: thumb.largeBytes,
+    contentType: thumb.contentType
+  });
   await store.setPhotoFaceDetail(photoId, { ...(geometry || {}), crop: thumb.crop });
   return thumb;
 }
 
-module.exports = { makeThumbnail, storeThumbnail, cropRect, THUMB_SIZE };
+module.exports = { makeThumbnail, storeThumbnail, cropRect, THUMB_SIZE, FACE_SIZE };

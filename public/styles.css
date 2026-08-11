@@ -166,14 +166,22 @@ h1.compact .subtle { font-family: var(--font-sans); font-weight: 400; font-size:
 .person-info h3,
 .person-info p { margin: 0; }
 
-/* Person page: name left, a bigger version of the same face right. */
-.person-header {
+/* Person page: the reports on the left, a bigger version of the same face
+   alongside them on the right. */
+.person-body {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 1rem;
-  margin: 0.5rem 0 0.9rem;
 }
-.person-header h1 { flex: 1; min-width: 0; margin: 0; }
+.person-updates { flex: 1; min-width: 0; }
+.person-updates .card:first-child { margin-top: 0; }
+.person-body .face { flex: 0 0 240px; width: 240px; }
+
+/* No room for both side by side on a phone: the face goes on top. */
+@media (max-width: 620px) {
+  .person-body { flex-direction: column-reverse; align-items: stretch; }
+  .person-body .face { flex: 0 0 auto; width: 100%; max-width: 240px; }
+}
 
 .face {
   position: relative;
@@ -185,11 +193,7 @@ h1.compact .subtle { font-family: var(--font-sans); font-weight: 400; font-size:
   background: #eceadf;
   line-height: 0;
 }
-.face.large {
-  flex-basis: 160px;
-  width: 160px;
-  border-radius: 10px;
-}
+.face.large { border-radius: 10px; }
 .face img {
   display: block;
   width: 100%;
