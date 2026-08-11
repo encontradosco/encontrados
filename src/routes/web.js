@@ -2,7 +2,7 @@ const crypto = require('crypto');
 const express = require('express');
 const multer = require('multer');
 const env = require('../env');
-const { sendVerificationEmail, sendEmail } = require('../notify');
+const { sendVerificationEmail, sendEmail, avisoEmail, relayEnabled } = require('../notify');
 const {
   processPhoto,
   identifyRescuedPerson,
@@ -76,13 +76,19 @@ function remember(res, name, value) {
   );
 }
 
-// Where an aviso for the operators is mailed. Read LIVE from process.env, not
-// from the module snapshot — same staleness trap /api/diag documents for the
-// SendGrid key. Unset = no mail; whatever produced the aviso still stands on
-// its own (the timeline entry, the report) and nothing is lost.
-function avisoEmail() {
-  return (process.env.AVISO_EMAIL || env.AVISO_EMAIL || '').trim();
-}
+// `avisoEmail()` — el buzón de operación al que se le manda un aviso — vive en
+// `src/notify.js`: es el mismo buzón que recibe los avisos relevados, y una
+// segunda copia de la misma lectura se desincroniza sola. Se lee LIVE de
+// process.env, no del snapshot del módulo — la misma trampa de frescura que
+// /api/diag documenta para la llave de SendGrid. Sin buzón no hay correo; lo
+// que produjo el aviso (la entrada del timeline, el reporte) sigue en pie.
+//
+// Con el relevo activo (NOTIFY_MODE, por omisión "relay") entre una
+// coincidencia y el correo al rescatista hay una persona verificando a quién
+// se le entrega el dato. Los textos que prometían un aviso instantáneo
+// dejarían de ser ciertos, así que la espera se nombra — sin alarmar y sin
+// prometer tiempos que no controlamos.
+const REVIEWED_NOTE = 'Cada aviso lo revisa antes una persona del equipo, así que puede tomar un momento.';
 
 // Emails the operators everything they need to file this report on Colombia Te
 // Busca by hand. Never throws: the report is already saved and public by the
@@ -642,8 +648,10 @@ ${rescueForm(email)}`
   <p><strong>Nadie ha reportado a esta persona como desaparecida todavía.</strong></p>
   <p>${
     sub
-      ? 'Te avisaremos por correo apenas alguien la busque (confirma tu correo con el enlace que te enviamos).'
-      : 'Vuelve a intentarlo más tarde, o déjanos tu correo para avisarte apenas alguien la busque.'
+      ? `Te avisaremos por correo cuando alguien la busque (confirma tu correo con el enlace que te enviamos).${
+          relayEnabled() ? ` ${REVIEWED_NOTE}` : ''
+        }`
+      : 'Vuelve a intentarlo más tarde, o déjanos tu correo para avisarte cuando alguien la busque.'
   }</p>
 </div>`;
       } else {
@@ -1025,7 +1033,8 @@ ${updates.length ? updates.map((u) => updateCard(u)).join('') : '<p class="subtl
           `
 <div class="takeover">
   <div class="takeover-emoji">✅</div>
-  <h1>Listo: te avisaremos por correo apenas alguien busque a esta persona.</h1>
+  <h1>Listo: te avisaremos por correo cuando alguien busque a esta persona.</h1>
+  ${relayEnabled() ? `<p class="subtle">${REVIEWED_NOTE}</p>` : ''}
   <p class="subtle"><a href="/">Ir al inicio</a></p>
 </div>`,
           { fullTitle: 'Aviso confirmado — encontrados.co' }

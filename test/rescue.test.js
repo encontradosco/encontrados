@@ -136,13 +136,17 @@ test('no match tells the rescuer nobody is looking yet', async (t) => {
   assert.match(html, /Nadie ha reportado a esta persona/);
 });
 
-test('a rescuer can subscribe and is alerted when someone reports that person', async (t) => {
+// NOTIFY_MODE=direct: la cadena completa sin relevo, tal como quedaba antes.
+// El mismo caso en modo relevo (el de por omisión) vive en test/relay.test.js.
+test('in direct mode, a rescuer can subscribe and is alerted when someone reports that person', async (t) => {
   const matcher = fakeMatcher();
   const sg = await fakeSendgrid();
+  process.env.NOTIFY_MODE = 'direct';
   const { server, base, store } = await startApp(matcher);
   t.after(() => {
     server.close();
     sg.stop();
+    delete process.env.NOTIFY_MODE;
   });
 
   // Rescuer uploads a photo and leaves an email

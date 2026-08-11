@@ -56,7 +56,9 @@ test('verification email is actually sent before the response returns', async (t
   assert.match(mail.body.content[0].value, /\/verify\?token=/);
 });
 
-test('update alerts reach verified subscribers before the response returns', async (t) => {
+// NOTIFY_MODE=direct: el envío al suscriptor sin relevo. Es el modo que Alex
+// puede recuperar con una variable, y tiene que seguir intacto.
+test('in direct mode, update alerts reach verified subscribers before the response returns', async (t) => {
   const sg = await fakeSendgrid();
   const app = await startApp();
   t.after(() => {
@@ -64,9 +66,11 @@ test('update alerts reach verified subscribers before the response returns', asy
     app.server.close();
     delete process.env.SENDGRID_API_KEY;
     delete process.env.SENDGRID_API_BASE;
+    delete process.env.NOTIFY_MODE;
   });
   process.env.SENDGRID_API_KEY = 'test-key';
   process.env.SENDGRID_API_BASE = sg.base;
+  process.env.NOTIFY_MODE = 'direct';
 
   const { person } = await app.store.findOrCreatePerson('Hernán Duque');
   const { sub } = await app.store.subscribe(person.id, 'email', 'tio@ejemplo.com');

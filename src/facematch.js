@@ -10,7 +10,7 @@
 // comparison.
 
 const env = require('./env');
-const { sendEmail, sendWhatsApp } = require('./notify');
+const { sendEmail, sendWhatsApp, relayEnabled, relayToOperators } = require('./notify');
 const { storeThumbnail } = require('./thumbs');
 const { toMatchable } = require('./photo');
 
@@ -41,8 +41,31 @@ async function notifyFaceMatch(store, sub, matchedPerson, similarity, contact) {
     `[facematch] notifying sub ${sub.id} (${sub.channel}) about ${matchedPerson.full_name} @ ${Math.round(similarity)}%`
   );
   const text = matchText(matchedPerson, similarity, sub, contact);
+  const subject = 'Alguien busca a la persona que rescataste — encontrados.co';
+
+  // El aviso más sensible de la app: su cuerpo lleva el contacto de la familia
+  // y su destinatario es alguien que dice haber rescatado a la persona, sin que
+  // nadie lo haya verificado. En modo relevo no sale solo.
+  if (relayEnabled()) {
+    await relayToOperators({
+      reason: 'Coincidencia facial con quien dice haber rescatado a esta persona',
+      channel: sub.channel,
+      address: sub.address,
+      subject,
+      text,
+      person: matchedPerson,
+      details: [
+        `Coincidencia facial: ${Math.round(similarity)}%`,
+        contact
+          ? `Contacto de quien la busca (no entregarlo sin verificar): ${contact}`
+          : 'El reporte no trae contacto de quien la busca.'
+      ]
+    });
+    return;
+  }
+
   if (sub.channel === 'email') {
-    await sendEmail(sub.address, 'Alguien busca a la persona que rescataste — encontrados.co', text);
+    await sendEmail(sub.address, subject, text);
   } else if (sub.channel === 'whatsapp') {
     await sendWhatsApp(sub.address, text);
   }
