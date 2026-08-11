@@ -244,6 +244,13 @@ async function createPostgresAdapter(connectionString) {
     async setPhotoFaceId(photoId, faceId) {
       await pool.query('UPDATE photos SET face_id = $1 WHERE id = $2', [faceId, photoId]);
     },
+    // Links an already-indexed photo to a subscription created AFTER the
+    // photo was stored (e.g. a rescuer adds their email post-hoc). Without
+    // this, matchStoredPhoto's later lookup by subscription_id would find
+    // nothing and silently never notify.
+    async setPhotoSubscriptionId(photoId, subscriptionId) {
+      await pool.query('UPDATE photos SET subscription_id = $1 WHERE id = $2', [subscriptionId, photoId]);
+    },
     // Rescue photos are never kept: only the face signature survives.
     async clearPhotoContent(photoId) {
       await pool.query('UPDATE photos SET content = $1 WHERE id = $2', [Buffer.alloc(0), photoId]);

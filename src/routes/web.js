@@ -165,7 +165,7 @@ ${rescueForm(email)}`
         remember(res, EMAIL_COOKIE, email);
       }
 
-      const { available, matches } = await identifyRescuedPerson(store, matcher, {
+      const { available, matches, photoId } = await identifyRescuedPerson(store, matcher, {
         bytes: req.file.buffer,
         contentType: req.file.mimetype,
         personId: person.id,
@@ -182,11 +182,16 @@ ${rescueForm(email)}`
       } else if (!matches.length) {
         body = `<div class="error">
   <p><strong>Nadie ha reportado a esta persona como desaparecida todavía.</strong></p>
-  <p>${
+  ${
     sub
-      ? 'Te avisaremos por correo apenas alguien la busque (confirma tu correo con el enlace que te enviamos).'
-      : 'Vuelve a intentarlo más tarde, o déjanos tu correo para avisarte apenas alguien la busque.'
-  }</p>
+      ? '<p>Te avisaremos por correo apenas alguien la busque (confirma tu correo con el enlace que te enviamos).</p>'
+      : `<p>Déjanos tu correo y te avisamos apenas alguien la busque — no hace falta que vuelvas a subir la foto.</p>
+  <form class="stack compact" method="post" action="/rescate/${person.id}/subscribe">
+    <input type="hidden" name="photoId" value="${esc(photoId)}">
+    <input type="email" name="email" required placeholder="Tu correo" aria-label="Tu correo">
+    <button>🔔 Avísame cuando alguien la busque</button>
+  </form>`
+  }
 </div>`;
       } else {
         body =
@@ -211,6 +216,55 @@ ${rescueForm(email)}`
 ${body}
 <p class="notice">🔒 La foto que subiste ya fue borrada. No quedó almacenada en ningún servidor.</p>
 <p><a class="big-btn report" href="/rescate">📸 Consultar otra persona</a></p>`
+        )
+      );
+    })
+  );
+
+  // The rescuer's face was already indexed by the /rescate POST above, even
+  // when no match was found and no email was given. This lets them add an
+  // email afterward WITHOUT re-uploading the photo or re-running the facial
+  // match — purely additive: it never touches identifyRescuedPerson or the
+  // matching pipeline in facematch.js, only links the existing photo row to
+  // the new subscription so a later match still finds it.
+  router.post(
+    '/rescate/:personId/subscribe',
+    wrap(async (req, res) => {
+      const person = await store.getPerson(req.params.personId);
+      if (!person) {
+        return res.status(404).send(layout('No encontrado', '<p class="error">Persona no encontrada.</p>'));
+      }
+      const email = (req.body.email || '').trim();
+      if (!EMAIL_RE.test(email)) {
+        return res.status(400).send(
+          layout(
+            'Avísame cuando la busquen',
+            `<h1 class="compact">Ese correo no parece válido</h1>
+<p class="error">Revisa el correo e inténtalo de nuevo.</p>
+<p><a href="/rescate">Volver</a></p>`
+          )
+        );
+      }
+
+      const { sub, needsVerification } = await store.subscribe(person.id, 'email', email);
+      const photoId = req.body.photoId;
+      if (photoId) {
+        await store.setPhotoSubscriptionId(photoId, sub.id);
+      }
+      if (needsVerification) {
+        await sendVerificationEmail(person, sub);
+      }
+      remember(res, EMAIL_COOKIE, email);
+
+      res.send(
+        layout(
+          'Aviso registrado',
+          `<div class="takeover">
+  <div class="takeover-emoji">📬</div>
+  <h1>Listo: confirma tu correo para activar el aviso.</h1>
+  <p>Te escribimos a <strong>${esc(email)}</strong> con un enlace de confirmación. Sin ese paso no podremos avisarte.</p>
+  <p class="subtle"><a href="/">Ir al inicio</a></p>
+</div>`
         )
       );
     })
