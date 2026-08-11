@@ -10,6 +10,7 @@ const {
 const { STATUSES, SOURCES } = require('../people');
 const {
   processPhoto,
+  forgetPersonFaces,
   backfillUnindexedPhotos,
   backfillPhotoDerivatives,
   MAX_QUERY_PHOTOS
@@ -279,6 +280,10 @@ function apiRoutes(store, matcher) {
 
   // DELETE /api/people/:id — honours the deletion requests promised in the
   // privacy policy. Requires API_KEY; disabled entirely when it is unset.
+  //
+  // Borra las dos copias del rastro: la fila (y en cascada sus reportes,
+  // suscripciones y fotos) y las firmas faciales en la colección de
+  // Rekognition, que no viven en la base y por tanto la cascada no toca.
   router.delete(
     '/people/:id',
     wrap(async (req, res) => {
@@ -290,9 +295,20 @@ function apiRoutes(store, matcher) {
       if ((req.get('authorization') || '') !== `Bearer ${env.API_KEY}`) {
         return res.status(401).json({ error: 'API key inválida o ausente' });
       }
+      // Las firmas primero: son la parte que sobrevive a la fila, y sus ids
+      // solo se pueden leer mientras las filas de `photos` sigan existiendo.
+      // Nunca lanza, así que el borrado de abajo ocurre pase lo que pase.
+      const faces = await forgetPersonFaces(store, matcher, req.params.id);
       const deleted = await store.deletePerson(req.params.id);
       if (!deleted) return res.status(404).json({ error: 'Persona no encontrada' });
-      res.json({ ok: true, deleted: { id: deleted.id, full_name: deleted.full_name } });
+      res.json({
+        ok: true,
+        deleted: { id: deleted.id, full_name: deleted.full_name },
+        // Lo que quedó por retirar. Reintentar el DELETE ya no sirve —la
+        // persona no existe y sus ids se fueron con ella—, así que esta
+        // respuesta y el log son el único rastro para limpiarlo a mano.
+        faces
+      });
     })
   );
 

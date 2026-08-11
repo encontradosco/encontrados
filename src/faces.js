@@ -31,6 +31,10 @@ function faceGeometry(detail) {
   };
 }
 
+// DeleteFaces admite hasta 4096 ids por llamada. Una persona tiene un puñado
+// de fotos, pero el tope existe y salir de él es un error, no una truncación.
+const DELETE_BATCH = 1000;
+
 const nullMatcher = {
   enabled: false,
   status: 'deshabilitado (sin credenciales de AWS o error de inicialización)',
@@ -42,6 +46,11 @@ const nullMatcher = {
   },
   async searchByImage() {
     return [];
+  },
+  // Sin proveedor no se borra nada, y decirlo es el punto: quien pidió el
+  // borrado tiene que enterarse de que la firma facial sigue donde estaba.
+  async deleteFaces(faceIds) {
+    return { deleted: [], unconfirmed: [...(faceIds || [])] };
   }
 };
 
@@ -55,7 +64,8 @@ async function createMatcher() {
     CreateCollectionCommand,
     IndexFacesCommand,
     SearchFacesByImageCommand,
-    DetectFacesCommand
+    DetectFacesCommand,
+    DeleteFacesCommand
   } = require('@aws-sdk/client-rekognition');
 
   const client = new RekognitionClient({ region: process.env.AWS_REGION || 'us-east-1' });
@@ -145,6 +155,37 @@ async function createMatcher() {
         console.error('[faces] search failed:', e.name, e.message);
         throw e;
       }
+    },
+    // Retira firmas faciales de la colección. La foto vive en la base y se va
+    // en cascada con su persona; la firma vive acá y no se va con nada.
+    //
+    // Devuelve { deleted, unconfirmed } y NO lanza: el borrado que promete la
+    // política de privacidad no puede quedar bloqueado porque Rekognition esté
+    // caído. `unconfirmed` es lo que la colección no confirmó haber borrado —
+    // incluye tanto un fallo real como un id que ya no estaba, así que
+    // reintentarlo es inofensivo.
+    async deleteFaces(faceIds) {
+      const ids = [...new Set((faceIds || []).filter(Boolean).map(String))];
+      if (!ids.length) return { deleted: [], unconfirmed: [] };
+      const deleted = [];
+      for (let i = 0; i < ids.length; i += DELETE_BATCH) {
+        const batch = ids.slice(i, i + DELETE_BATCH);
+        try {
+          const res = await client.send(
+            new DeleteFacesCommand({ CollectionId: COLLECTION_ID, FaceIds: batch })
+          );
+          deleted.push(...(res.DeletedFaces || []));
+        } catch (e) {
+          console.error('[faces] delete failed:', e.name, e.message);
+        }
+      }
+      const done = new Set(deleted);
+      const unconfirmed = ids.filter((id) => !done.has(id));
+      console.log(
+        `[faces] deleted ${deleted.length}/${ids.length} face(s) from ${COLLECTION_ID}` +
+          (unconfirmed.length ? ` — sin confirmar: ${unconfirmed.join(', ')}` : '')
+      );
+      return { deleted, unconfirmed };
     }
   };
 }
@@ -186,6 +227,9 @@ function createLazyMatcher() {
     },
     async searchByImage(bytes) {
       return (await get(Date.now())).searchByImage(bytes);
+    },
+    async deleteFaces(faceIds) {
+      return (await get(Date.now())).deleteFaces(faceIds);
     },
     async ensureReady() {
       return get(Date.now());

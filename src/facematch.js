@@ -336,9 +336,58 @@ async function identifyRescuedPerson(store, matcher, { bytes, contentType, perso
   return { available: true, matches: found, photoId: photo.id };
 }
 
+// Retira de la colección las firmas faciales de una persona, justo antes de
+// borrar su ficha. La cascada se lleva las filas de `photos`, pero la firma no
+// vive ahí: vive en Rekognition, y sin esto sobrevivía al borrado para siempre
+// — una foto de rescatista seguiría coincidiendo con alguien cuya ficha ya no
+// existe, y quedaría un dato biométrico retenido sin el registro que lo
+// justificaba.
+//
+// Best effort a propósito: la política de privacidad promete el borrado, así
+// que un Rekognition caído NO puede bloquearlo. Lo que no se pudo confirmar se
+// devuelve y se loguea, porque después del borrado ya no hay dónde volver a
+// leer esos ids — la cascada se llevó las filas que los tenían.
+async function forgetPersonFaces(store, matcher, personId) {
+  const faceIds = await store.faceIdsForPerson(personId);
+  if (!faceIds.length) {
+    return { total: 0, deleted: 0, unconfirmed: [], face_matching: !!matcher.enabled };
+  }
+
+  // La misma trampa de arranque en frío de siempre: `enabled` es un getter
+  // sobre un matcher perezoso y da false en una invocación nueva.
+  if (typeof matcher.ensureReady === 'function') await matcher.ensureReady();
+
+  let result;
+  try {
+    result = await matcher.deleteFaces(faceIds);
+  } catch (e) {
+    // El proveedor no debería lanzar (el suyo atrapa por lote), pero la
+    // garantía tiene que ser estructural y no depender de que se porte bien.
+    console.error('[facematch:olvido] DeleteFaces falló:', e.name, e.message);
+    result = { deleted: [], unconfirmed: faceIds };
+  }
+
+  const unconfirmed = result.unconfirmed || [];
+  if (unconfirmed.length) {
+    // El único rastro duradero: la respuesta HTTP se la lleva quien llamó, y
+    // los ids ya no están en la base para reintentarlo desde ahí.
+    console.error(
+      `[facematch:olvido] persona ${personId}: ${unconfirmed.length} firma(s) sin retirar de la colección —`,
+      unconfirmed.join(', ')
+    );
+  }
+  return {
+    total: faceIds.length,
+    deleted: (result.deleted || []).length,
+    unconfirmed,
+    face_matching: !!matcher.enabled
+  };
+}
+
 module.exports = {
   processPhoto,
   identifyRescuedPerson,
+  forgetPersonFaces,
   backfillUnindexedPhotos,
   backfillPhotoDerivatives,
   MAX_QUERY_PHOTOS
