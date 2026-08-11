@@ -102,8 +102,11 @@ test('home lists missing people and offers both actions', async (t) => {
   assert.match(home, /Pedro Pablo Ramírez/);
   // The sources line sits under the listing heading, small, not as a section
   // of its own competing with it.
-  assert.match(home, /Fuentes de información de desaparecidos: Encontrados\.co, <a [^>]*>Colombia Te Busca<\/a>/);
+  assert.match(home, /Fuentes de información de desaparecidos: Encontrados\.co y <a [^>]*>Colombia Te Busca<\/a>, el registro público/);
   assert.doesNotMatch(home, /<h2>Fuentes de información<\/h2>/);
+  // No false "coming soon" promises: media and official channels don't expose a
+  // scrapable photo registry, so they must not be listed as sources.
+  assert.doesNotMatch(home, /Próximamente/);
 });
 
 // A second party reporting the same person is never rejected: the report is

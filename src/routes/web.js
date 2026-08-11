@@ -53,10 +53,14 @@ function remember(res, name, value) {
 
 const RESCUE_PRIVACY = `<p class="privacy">🔒 <strong>La foto no se guarda.</strong> Se compara al instante contra las fotos de las personas reportadas como desaparecidas y se borra de inmediato: no queda almacenada en ningún servidor. Solo conservamos su <em>firma facial</em> (un código que no permite reconstruir la imagen) para poder avisarte si alguien empieza a buscar a esta persona.</p>`;
 
-// One small line under the listing heading. Kept honest — only Colombia Te
-// Busca is actually integrated today; the rest are listed as "coming soon" so
-// nobody assumes data is already flowing from a source that isn't wired up yet.
-const SOURCES_NOTE = `<p class="sources-note">Fuentes de información de desaparecidos: Encontrados.co, <a href="https://colombiatebusca.com" target="_blank" rel="noopener">Colombia Te Busca</a>. Próximamente: El Espectador, El Tiempo, El País, Semana, Cambio, Medicina Legal, UNGRD, Defensa Civil.</p>`;
+// One small line under the listing heading. Kept honest — the data flows from
+// Encontrados.co's own reports and from Colombia Te Busca, the public photo
+// registry families use to publish and search (and to which the Red Cross
+// points them). Media and official channels (El Espectador, El Tiempo,
+// Medicina Legal/SIRDEC, UNGRD…) don't expose a scrapable photo registry — a
+// lookup-by-identity form or an intake channel is not a source of faces — so
+// they are not promised here as "coming soon".
+const SOURCES_NOTE = `<p class="sources-note">Fuentes de información de desaparecidos: Encontrados.co y <a href="https://colombiatebusca.com" target="_blank" rel="noopener">Colombia Te Busca</a>, el registro público donde las familias publican fotos y buscan a sus desaparecidos.</p>`;
 
 // The possible-duplicate finding travels from POST /report to the person page
 // in a short-lived cookie rather than in the URL, and this is the whole reason
