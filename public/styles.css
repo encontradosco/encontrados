@@ -204,9 +204,16 @@ button.secondary {
 button.secondary:hover { background: #f4efe4; border-color: var(--accent); color: var(--accent-dark); }
 button:disabled { opacity: 0.55; cursor: progress; }
 
-.search-row { display: flex; gap: 0.5rem; }
+.search-row { display: flex; gap: 0.5rem; margin: 1rem 0; }
 .search-row input { flex: 1; }
 .search-row button { width: auto; }
+
+.reunited-count {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  font-size: 0.8rem;
+  color: #4a7c59;
+}
 
 .notice {
   background: #eef3ee;

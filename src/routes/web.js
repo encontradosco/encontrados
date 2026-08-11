@@ -3,7 +3,7 @@ const express = require('express');
 const multer = require('multer');
 const { sendVerificationEmail } = require('../notify');
 const { processPhoto, identifyRescuedPerson, MAX_QUERY_PHOTOS } = require('../facematch');
-const { esc, layout, updateCard, timeTag, LOCATION_SCRIPT } = require('../html');
+const { esc, layout, updateCard, timeTag, statusBadge, LOCATION_SCRIPT } = require('../html');
 
 // Express 4 doesn't catch async errors on its own.
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
@@ -52,17 +52,27 @@ function webRoutes(store, matcher) {
     '/',
     wrap(async (req, res) => {
       const missing = await store.getMissingPeople(50);
+      const reunited = await store.getReunitedCount();
+      const reunitedNote = reunited
+        ? ` · <span class="reunited-count">🎉 ${reunited} reencontrada${reunited === 1 ? '' : 's'}</span>`
+        : '';
       const list = missing.length
-        ? `<h2>Personas reportadas como desaparecidas (${missing.length})</h2>` +
+        ? `<h2>Personas reportadas como desaparecidas (${missing.length})${reunitedNote}</h2>` +
           missing
             .map(
               (p) => `<article class="card">
   <h3><a href="/person/${p.id}">${esc(p.full_name)}</a></h3>
-  <p class="meta">Último reporte: ${timeTag(p.last_report)}</p>
+  <p>${statusBadge(p.status)} <span class="meta">Último reporte: ${timeTag(p.last_report)}</span></p>
 </article>`
             )
             .join('')
-        : '<p class="subtle">Todavía no hay personas reportadas como desaparecidas.</p>';
+        : `<p class="subtle">Todavía no hay personas reportadas como desaparecidas.${reunited ? ` 🎉 ${reunited} reencontrada${reunited === 1 ? '' : 's'}.` : ''}</p>`;
+
+      const searchPrompt = `
+<form class="search-row" method="get" action="/buscar">
+  <input type="text" name="q" placeholder="🔎 Buscar a alguien por nombre" aria-label="Buscar a alguien por nombre">
+  <button>Buscar</button>
+</form>`;
 
       res.send(
         layout(
@@ -81,6 +91,7 @@ function webRoutes(store, matcher) {
     <span class="btn-title">📢 Reportar desaparecido</span>
   </a>
 </div>
+${searchPrompt}
 ${list}
 `,
           {
@@ -89,6 +100,58 @@ ${list}
             description:
               'Si rescataste a alguien, sube su foto y te decimos quién la está buscando. La foto se borra de inmediato. También puedes reportar a una persona desaparecida.',
             path: '/'
+          }
+        )
+      );
+    })
+  );
+
+  // --------------------------------------------------------------- buscar
+  // Read-only search for a family checking on someone they already
+  // reported — "¿ya encontraron a mi desaparecido?". Reuses the same fuzzy
+  // matching as GET /api/people?q= (see src/people.js searchPeople); never
+  // touches face matching or the report flow.
+  router.get(
+    '/buscar',
+    wrap(async (req, res) => {
+      const q = String(req.query.q || '').trim();
+      let resultsHtml = '';
+      if (q) {
+        const matches = await store.searchPeople(q, { limit: 10 });
+        const withStatus = await Promise.all(
+          matches.map(async (p) => ({ p, update: await store.getLatestUpdate(p.id) }))
+        );
+        resultsHtml = withStatus.length
+          ? `<h2>Resultados para “${esc(q)}”</h2>` +
+            withStatus
+              .map(
+                ({ p, update }) => `<article class="card">
+  <h3><a href="/person/${p.id}">${esc(p.full_name)}</a></h3>
+  ${update ? `<p>${statusBadge(update.status)} ${timeTag(update.created_at)}</p>` : ''}
+  ${update && update.location ? `<p class="loc">📍 ${esc(update.location)}</p>` : ''}
+</article>`
+              )
+              .join('')
+          : `<p class="subtle">No encontramos a nadie con ese nombre. Revisa la ortografía o intenta con menos palabras.</p>`;
+      }
+
+      res.send(
+        layout(
+          'Buscar',
+          `
+<h1 class="compact">🔎 Buscar a alguien</h1>
+<p class="subtle">Escribe el nombre de la persona para ver si ya hay reportes sobre ella.</p>
+<form class="search-row" method="get" action="/buscar">
+  <input type="text" name="q" value="${esc(q)}" placeholder="Nombre completo" aria-label="Nombre a buscar" autofocus>
+  <button>Buscar</button>
+</form>
+${resultsHtml}
+<p><a class="big-btn report" href="/report">📢 ¿No aparece? Repórtala como desaparecida</a></p>`,
+          {
+            fullTitle: 'Buscar a una persona — aqui.online',
+            description:
+              'Busca por nombre para ver si ya hay reportes sobre una persona tras el terremoto en Colombia.',
+            path: '/buscar'
           }
         )
       );
