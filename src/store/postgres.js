@@ -171,17 +171,41 @@ async function createPostgresAdapter(connectionString) {
         [personId]
       );
     },
-    // Everyone currently reported missing, most recent report first.
+    // Everyone whose LATEST update is 'missing' — not just anyone who was
+    // EVER reported missing. Without this, a person later marked 'safe'
+    // would stay on this list forever (see reunitedCount below for the
+    // matching "found" count). Mirrors sqlite.js exactly.
     async missingPeople(limit) {
       return all(
-        `SELECT p.id, p.full_name, MAX(u.created_at) AS last_report, COUNT(u.id)::int AS reports
-         FROM people p JOIN updates u ON u.person_id = p.id
-         WHERE u.status = 'missing'
-         GROUP BY p.id, p.full_name
-         ORDER BY last_report DESC
+        `WITH latest AS (
+           SELECT u.person_id, u.status, u.created_at,
+                  ROW_NUMBER() OVER (PARTITION BY u.person_id ORDER BY u.created_at DESC, u.id DESC) AS rn
+           FROM updates u
+         ), reports AS (
+           SELECT person_id, COUNT(*)::int AS n FROM updates GROUP BY person_id
+         )
+         SELECT p.id, p.full_name, l.status, l.created_at AS last_report, r.n AS reports
+         FROM people p
+         JOIN latest l ON l.person_id = p.id AND l.rn = 1
+         JOIN reports r ON r.person_id = p.id
+         WHERE l.status = 'missing'
+         ORDER BY l.created_at DESC
          LIMIT $1`,
         [limit]
       );
+    },
+    // How many people whose LATEST status is 'safe' — the reunited counter.
+    // Same "latest status per person" logic as missingPeople above.
+    async reunitedCount() {
+      const r = await one(
+        `WITH latest AS (
+           SELECT u.person_id, u.status,
+                  ROW_NUMBER() OVER (PARTITION BY u.person_id ORDER BY u.created_at DESC, u.id DESC) AS rn
+           FROM updates u
+         )
+         SELECT COUNT(*)::int AS n FROM latest WHERE rn = 1 AND status = 'safe'`
+      );
+      return r.n;
     },
     async recentUpdates(limit) {
       return all(

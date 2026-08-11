@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const { createSqliteAdapter } = require('../src/store/sqlite');
+const { createStore } = require('../src/people');
 const { createApp } = require('../src/server');
 const { nullMatcher } = require('../src/faces');
 
@@ -102,6 +103,58 @@ test('home lists missing people and offers both actions', async (t) => {
   assert.match(home, /Pedro Pablo Ramírez/);
 });
 
+// Bug fix: a person reported 'missing' and later updated to 'safe' must
+// "graduate" off the missing list — the home query used to filter by
+// "has ANY update with status='missing'" instead of the LATEST status, so
+// once found, someone stayed listed as missing forever.
+test('store: missingPeople/getReunitedCount reflect the LATEST status, not any past one', async (t) => {
+  const store = createStore(await createSqliteAdapter(':memory:'));
+  t.after(() => store.close());
+
+  const { person: stillMissing } = await store.findOrCreatePerson('Camila Vanegas');
+  await store.addUpdate(stillMissing.id, { status: 'missing', source: 'web', location: 'Suba' });
+
+  const { person: found } = await store.findOrCreatePerson('Julián Restrepo Toro');
+  await store.addUpdate(found.id, { status: 'missing', source: 'web', location: 'Kennedy' });
+  await store.addUpdate(found.id, { status: 'safe', source: 'web', message: 'Confirmado' });
+
+  const missing = await store.getMissingPeople(50);
+  assert.deepEqual(
+    missing.map((p) => p.full_name).sort(),
+    ['Camila Vanegas']
+  );
+  assert.equal(missing[0].status, 'missing');
+
+  assert.equal(await store.getReunitedCount(), 1);
+
+  // Flip back to missing (e.g. a mistaken "safe" report) — must re-appear.
+  await store.addUpdate(found.id, { status: 'missing', source: 'web', message: 'Se perdió de nuevo' });
+  const missingAgain = await store.getMissingPeople(50);
+  assert.deepEqual(
+    missingAgain.map((p) => p.full_name).sort(),
+    ['Camila Vanegas', 'Julián Restrepo Toro']
+  );
+  assert.equal(await store.getReunitedCount(), 0);
+});
+
+test('home: a person later marked safe drops off the missing list and counts as reunited', async (t) => {
+  const { server, base, store } = await startApp();
+  t.after(() => server.close());
+
+  const { person } = await store.findOrCreatePerson('Andrés Felipe Mora');
+  await store.addUpdate(person.id, { status: 'missing', source: 'web', location: 'Bosa' });
+
+  const beforeHtml = await (await fetch(base)).text();
+  assert.match(beforeHtml, /Andrés Felipe Mora/);
+  assert.match(beforeHtml, /DESAPARECID/i); // statusBadge on the home card
+
+  await store.addUpdate(person.id, { status: 'safe', source: 'web', message: 'Ya está en casa' });
+
+  const afterHtml = await (await fetch(base)).text();
+  assert.doesNotMatch(afterHtml, /Andrés Felipe Mora/);
+  assert.match(afterHtml, /1 reencontrada/);
+});
+
 test('reporting requires photos, name, place and contact', async (t) => {
   const { server, base } = await startApp();
   t.after(() => server.close());
@@ -145,11 +198,39 @@ test('families can no longer subscribe to alerts', async (t) => {
   const { server, base, store } = await startApp();
   t.after(() => server.close());
   const { person } = await store.findOrCreatePerson('Alguien Buscado');
+  // POST /buscar was never a subscribe endpoint and still isn't — the
+  // read-only search screen below only answers GET.
   for (const path of ['/buscar', '/alerta', `/person/${person.id}/subscribe`, '/subscribe-by-name']) {
     const res = await fetch(`${base}${path}`, { method: 'POST' });
     assert.equal(res.status, 404, `${path} debería no existir`);
   }
-  assert.equal((await fetch(`${base}/buscar`)).status, 404);
+});
+
+test('GET /buscar: read-only family search, no subscribe/report side effects', async (t) => {
+  const { server, base, store } = await startApp();
+  t.after(() => server.close());
+
+  // Empty screen: no query yet.
+  const empty = await (await fetch(`${base}/buscar`)).text();
+  assert.match(empty, /Buscar a alguien/);
+  assert.doesNotMatch(empty, /Resultados para/);
+
+  await store.addUpdate((await store.findOrCreatePerson('Sofía Elena Duarte')).person.id, {
+    status: 'missing',
+    location: 'Chapinero',
+    source: 'web',
+    contact: 'secreto@ejemplo.com'
+  });
+
+  const found = await (await fetch(`${base}/buscar?q=sofia%20duarte`)).text();
+  assert.match(found, /Resultados para/);
+  assert.match(found, /Sofía Elena Duarte/);
+  assert.match(found, /DESAPARECID/i); // statusBadge label
+  // The API-key-free read path must never leak the private contact.
+  assert.doesNotMatch(found, /secreto@ejemplo\.com/);
+
+  const noMatch = await (await fetch(`${base}/buscar?q=nadie%20con%20este%20nombre`)).text();
+  assert.match(noMatch, /No encontramos a nadie/);
 });
 
 // The old web form's reporter field is gone (the rescuer model asks for a

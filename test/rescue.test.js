@@ -237,10 +237,12 @@ test('the post-hoc subscribe endpoint rejects an invalid email and an unknown pe
   assert.equal(missing.status, 404);
 });
 
-test('removed flows are gone: no public search, no family alerts', async (t) => {
+test('removed flows are gone: no family alerts by name', async (t) => {
   const { server, base } = await startApp();
   t.after(() => server.close());
-  for (const path of ['/buscar', '/alerta', '/subscribe-by-name']) {
+  // /buscar came back as a read-only family search (see test/app.test.js);
+  // '/alerta' and '/subscribe-by-name' — the family-alert-by-name flow — stay gone.
+  for (const path of ['/alerta', '/subscribe-by-name']) {
     assert.equal((await fetch(`${base}${path}`)).status, 404, path);
   }
 });

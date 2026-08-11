@@ -62,9 +62,14 @@ function createStore(adapter) {
     );
   }
 
-  // Everyone reported missing — the home page listing.
+  // Everyone whose latest status is 'missing' — the home page listing.
   async function getMissingPeople(limit = 50) {
     return (await adapter.missingPeople(limit)).map(isoRow);
+  }
+
+  // How many people whose latest status is 'safe' — the "reencontrados" counter.
+  async function getReunitedCount() {
+    return adapter.reunitedCount();
   }
 
   async function getUpdates(personId) {
@@ -170,6 +175,7 @@ function createStore(adapter) {
     getLatestUpdate,
     getRecentUpdates,
     getMissingPeople,
+    getReunitedCount,
     subscribe,
     verifySubscription,
     unsubscribeByToken,
