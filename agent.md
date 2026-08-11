@@ -45,10 +45,16 @@ ayuda a nadie.
   manda al navegador con `toString()` — hay una sola copia, no la dupliques.
   En 2G, 3G lento o con ahorro de datos se muestra un botón «Ver foto» y la
   decisión es del visitante. Mucha gente consulta esto con una barra de señal.
-- `POST /api/reindex` es idempotente y pone al día las fotos ya guardadas
-  (miniatura + geometría). La geometría de una foto ya indexada se saca con
-  `DetectFaces`, nunca con `IndexFaces`: reindexarla duplicaría el rostro en
-  la colección.
+- Poner al día fotos ya guardadas (miniatura + geometría) — tres formas, todas
+  idempotentes, y la geometría de una foto ya indexada siempre con
+  `DetectFaces`, nunca con `IndexFaces` (reindexarla duplicaría el rostro):
+  - **Solo**: cada visita al inicio dispara un barrido de 5 fotos como mucho,
+    una vez por minuto por instancia, después de enviar la página.
+  - **`/fotos/actualizar`**: se abre en el navegador, SIN API key. Es seguro
+    sin ella porque no avisa a nadie, no indexa, y solo toca fotos a las que
+    les falta algo: cuando no falta nada no hace ni cuesta nada.
+  - **`POST /api/reindex`**: reindexa además las fotos sin firma facial y
+    manda los avisos pendientes; por eso esa sí exige la API key.
 - Producción: Vercel (función serverless única + Postgres/Neon). Dev/tests: SQLite.
 - Remitente de correo fijo: `a@torrenegra.com` (SendGrid).
 - Suscripciones por correo requieren verificación; toda alerta lleva enlace de baja.

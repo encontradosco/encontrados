@@ -2,7 +2,12 @@ const crypto = require('crypto');
 const express = require('express');
 const multer = require('multer');
 const { sendVerificationEmail } = require('../notify');
-const { processPhoto, identifyRescuedPerson, MAX_QUERY_PHOTOS } = require('../facematch');
+const {
+  processPhoto,
+  identifyRescuedPerson,
+  backfillPhotoDerivatives,
+  MAX_QUERY_PHOTOS
+} = require('../facematch');
 const { esc, layout, updateCard, timeTag, facePlate, LOCATION_SCRIPT } = require('../html');
 
 // Express 4 doesn't catch async errors on its own.
@@ -43,9 +48,39 @@ const RESCUE_PRIVACY = `<p class="privacy">🔒 <strong>La foto no se guarda.</s
 
 const REPORT_PRIVACY = `<p class="privacy">📢 Las fotos del reporte <strong>se publican</strong> en la lista de personas desaparecidas, con los puntos de reconocimiento facial marcados sobre el rostro. Es lo que permite que un rescatista reconozca a la persona que tiene al lado. Sube solo fotos que quieras hacer públicas.</p>`;
 
+// Photos stored before thumbnails existed catch up on their own, so nobody has
+// to run a maintenance command for the listing to start showing faces.
+//
+// Bounded and throttled: one small batch per minute per instance, kicked off
+// AFTER the page has been sent so it never delays anyone. It stops costing
+// anything once there is nothing pending — and on a serverless instance that
+// gets frozen mid-sweep, the work is idempotent and simply resumes next time.
+const SWEEP_INTERVAL_MS = 60000;
+const SWEEP_BATCH = 5;
+
+// State per app, not per module: a serverless instance builds exactly one app,
+// so the throttle behaves the same in production — and two apps in one process
+// (the test suite) don't throttle each other.
+function createSweeper(store, matcher) {
+  let lastSweep = 0;
+  let sweeping = false;
+  return function sweep() {
+    const now = Date.now();
+    if (sweeping || now - lastSweep < SWEEP_INTERVAL_MS) return;
+    lastSweep = now;
+    sweeping = true;
+    backfillPhotoDerivatives(store, matcher, SWEEP_BATCH)
+      .catch((e) => console.error('[fotos] barrido automático falló:', e.message))
+      .finally(() => {
+        sweeping = false;
+      });
+  };
+}
+
 function webRoutes(store, matcher) {
   const router = express.Router();
   router.use(express.urlencoded({ extended: true }));
+  const sweepPhotoDerivatives = createSweeper(store, matcher);
 
   // ---------------------------------------------------------------- home
   router.get(
@@ -96,6 +131,9 @@ ${list}
           }
         )
       );
+
+      // Page already sent: catching old photos up costs this visitor nothing.
+      sweepPhotoDerivatives();
     })
   );
 
@@ -129,6 +167,42 @@ ${list}
   router.get(
     '/photo/:id/thumb',
     wrap((req, res) => sendPhoto(req, res, (p) => ({ raw: p.thumb, contentType: p.thumb_type })))
+  );
+
+  // Manual version of the sweep above, openable in a browser. Unlike
+  // /api/reindex this needs no API key, and it is safe without one: it never
+  // notifies anybody, never calls IndexFaces (so it cannot duplicate a face in
+  // the collection), and only touches photos that are still missing a
+  // thumbnail or their geometry — once they all have both, it does nothing and
+  // costs nothing, however many times it is called.
+  router.all(
+    '/fotos/actualizar',
+    wrap(async (req, res) => {
+      const limit = Math.min(parseInt(req.query.limit || '100', 10) || 100, 500);
+      const r = await backfillPhotoDerivatives(store, matcher, limit);
+      res.send(
+        layout(
+          'Actualizar fotos',
+          `<h1 class="compact">Actualizar fotos</h1>
+${
+  r.processed === 0
+    ? '<p>✅ <strong>Todas las fotos están al día.</strong> No quedaba nada por hacer.</p>'
+    : `<p>✅ Procesadas <strong>${r.processed}</strong> foto(s): ${r.thumbnails} miniatura(s) y ${r.geometry} rostro(s) detectado(s).${
+        r.failed ? ` ${r.failed} no se pudo(ieron) procesar.` : ''
+      }</p>
+<p><a class="big-btn report" href="/fotos/actualizar?limit=${limit}">Procesar las siguientes ${limit}</a></p>
+<p class="subtle">Repite hasta que diga que están todas al día. También ocurre solo, poco a poco, a medida que la gente visita el inicio.</p>`
+}
+${
+  r.waiting
+    ? `<p class="privacy">⚠️ ${r.waiting} foto(s) ya tienen miniatura con recorte centrado, pero les falta ubicar el rostro y el reconocimiento facial no está activo. Cuando vuelva, ejecuta esto otra vez y se reencuadran sobre la cara.</p>`
+    : ''
+}
+<p><a href="/">← Volver al inicio</a></p>`,
+          { path: '/fotos/actualizar' }
+        )
+      );
+    })
   );
 
   // ------------------------------------------------------------- rescuer
