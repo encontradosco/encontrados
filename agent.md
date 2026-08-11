@@ -55,6 +55,12 @@ ayuda a nadie.
     les falta algo: cuando no falta nada no hace ni cuesta nada.
   - **`POST /api/reindex`**: reindexa además las fotos sin firma facial y
     manda los avisos pendientes; por eso esa sí exige la API key.
+- Colombia Te Busca: el formulario de reporte trae una casilla «Reportar también
+  en ColombiaTeBusca.com». Va SIN marcar por defecto — es el consentimiento de
+  la familia para publicar sus datos en un registro de terceros, y eso no se da
+  por omisión. Marcarla manda el reporte completo a `AVISO_EMAIL` (mismo buzón
+  que los avisos de rescatista) para que un operador llene su formulario a mano:
+  no tienen API. El correo es «best effort»: si falla, el reporte ya está vivo.
 - Producción: Vercel (función serverless única + Postgres/Neon). Dev/tests: SQLite.
 - Remitente de correo fijo: `a@torrenegra.com` (SendGrid).
 - Suscripciones por correo requieren verificación; toda alerta lleva enlace de baja.

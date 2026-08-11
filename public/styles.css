@@ -87,6 +87,17 @@ footer {
 }
 footer a { color: var(--muted); }
 
+/* The two asks under the credits: for Colombia Te Busca's team and for anyone
+   who can point an AI agent at social media. They are the only pitch on the
+   site, so they sit last and stay quiet — the link is what carries them. */
+.outreach {
+  margin: 0.6rem 0 0;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--border);
+  line-height: 1.5;
+}
+.outreach a { color: var(--accent-dark); text-decoration: underline; }
+
 h1, h2, h3 { font-family: var(--font-serif); font-weight: 600; letter-spacing: -0.015em; }
 h1 { font-size: 1.6rem; line-height: 1.25; }
 h2 { font-size: 1.2rem; margin-top: 1.6rem; }
@@ -416,6 +427,33 @@ pre {
 .alert-panel p { margin: 0 0 0.5rem; }
 .alert-panel form { margin: 0; }
 #location-field { display: block; }
+
+/* "Report this on Colombia Te Busca too" — the last thing above the submit
+   button on /report. Big tap target: it is ticked with a thumb, one-handed,
+   by someone who is not having a good day. */
+.share-check {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  padding: 0.6rem 0.75rem;
+  background: var(--surface);
+  cursor: pointer;
+}
+.share-check input[type='checkbox'] {
+  width: 1.15rem;
+  height: 1.15rem;
+  flex: none;
+  padding: 0;
+  margin: 0;
+  accent-color: var(--accent);
+}
+.share-check:has(input:checked) {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(43, 108, 176, 0.15);
+}
+.share-note { font-size: 0.78rem; margin: -0.2rem 0 0; }
 
 .choice { display: flex; gap: 0.5rem; flex-wrap: wrap; }
 .choice label {

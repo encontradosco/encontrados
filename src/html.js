@@ -243,6 +243,16 @@ const RESIZE_SCRIPT = `<script>
 })();
 </script>`;
 
+// Two asks at the very bottom of every page, aimed at the two kinds of people
+// who can widen the search beyond what this site indexes on its own: the
+// registry that already holds most of the country's fichas, and anyone with an
+// AI agent who can go find reports nobody has entered here yet. Kept in the
+// footer, below the credits, so they never compete with the list of missing
+// people — which is what someone landing here actually came for.
+const WRITE_US = `<a href="https://x.com/ni500" target="_blank" rel="noopener">Escríbenos</a>`;
+const OUTREACH = `<p class="outreach">¿Deseas contribuir? Puedes usar tu agente de AI para hacer crawling de redes sociales y encontrar reportes de desaparecidos. ${WRITE_US}.</p>
+  <p class="outreach">¿Eres parte del equipo de ColombiaTeBusca? Puedes integrar nuestra tech directamente o podemos integrarla por Uds. ${WRITE_US}.</p>`;
+
 function layout(title, body, meta = {}) {
   const fullTitle = meta.fullTitle || `${title} — encontrados.co · Personas y terremoto en Colombia`;
   const description = meta.description || DEFAULT_DESCRIPTION;
@@ -281,6 +291,7 @@ ${body}
 </main>
 <footer>
   <p><span class="credit">Hecho con 💙 por <a href="https://x.com/ni500" target="_blank" rel="noopener">Ni500</a> y <a href="https://me.torrenegra.com" target="_blank" rel="noopener">Torrenegra</a></span> · <a href="https://github.com/torrenegra/encontrados" target="_blank" rel="noopener">Github</a> · <a href="/privacidad">Privacidad</a> · <a href="/terminos">Términos</a></p>
+${OUTREACH}
 </footer>
 ${RESIZE_SCRIPT}
 ${TIME_SCRIPT}
