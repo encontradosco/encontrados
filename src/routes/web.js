@@ -11,6 +11,7 @@ const {
 } = require('../facematch');
 const { esc, layout, updateCard, timeTag, facePlate, LOCATION_SCRIPT } = require('../html');
 const { findDuplicateCandidates } = require('../duplicates');
+const gh = require('../github');
 
 // Express 4 doesn't catch async errors on its own.
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
@@ -263,6 +264,77 @@ const SWEEP_INTERVAL_MS = 60000;
 const SWEEP_BATCH = 5;
 // Names are a cheap text scan, no image work, so a bigger batch is free.
 const SWEEP_NAMES = 200;
+
+// ------------------------------------------------- ideas and bug reports
+// The two footer links. Same form, same handler, same destination (a GitHub
+// issue) — only the words and the label change.
+const FEEDBACK = {
+  ideas: {
+    noun: 'idea',
+    labels: ['idea'],
+    emoji: '💡',
+    title: 'Ideas',
+    heading: '💡 ¿Tienes una idea?',
+    intro:
+      'Cuéntanos qué falta, qué te confundió o qué haríamos mejor. Cada idea queda como un issue público en GitHub, así que cualquiera puede opinar o construirla.',
+    summaryPlaceholder: 'Tu idea en una línea',
+    detailsPlaceholder: '¿Para quién sería útil y por qué? (opcional)',
+    submit: '💡 Enviar idea',
+    thanks: '¡Gracias! Tu idea quedó registrada.',
+    fullTitle: 'Comparte una idea — encontrados.co',
+    description:
+      'Cuéntanos qué le falta a encontrados.co. Cada idea queda como un issue público en GitHub.'
+  },
+  bug: {
+    noun: 'reporte de error',
+    labels: ['bug'],
+    emoji: '🐛',
+    title: 'Reporta un bug',
+    heading: '🐛 ¿Algo no funciona?',
+    intro:
+      'Cuéntanos qué intentabas hacer, qué esperabas y qué pasó en su lugar. Si dice en qué teléfono o navegador te ocurrió, lo arreglamos mucho más rápido.',
+    summaryPlaceholder: 'Qué falló, en una línea',
+    detailsPlaceholder: 'Qué hiciste, qué esperabas, qué pasó. Teléfono y navegador si los sabes. (opcional)',
+    submit: '🐛 Reportar el error',
+    thanks: '¡Gracias! Ya sabemos del error.',
+    fullTitle: 'Reporta un error — encontrados.co',
+    description:
+      '¿Algo no funciona en encontrados.co? Cuéntanoslo y queda registrado como un issue público en GitHub.'
+  }
+};
+
+const SUMMARY_MAX = 120;
+const DETAILS_MAX = 4000;
+
+// A field no human sees and every naive bot fills. Cheaper than a captcha and
+// it costs a visitor on a bad connection nothing.
+const HONEYPOT = `<input class="hp" type="text" name="website" tabindex="-1" autocomplete="off" aria-hidden="true">`;
+
+// A public form that opens issues in someone else's repo is an open relay into
+// their notifications, so cap it. Per instance and in memory: on serverless
+// that is a soft ceiling, not a wall — several instances mean several buckets.
+// It is here to bound what ONE instance can do in a burst, which is the part
+// that turns a nuisance into a flood; the honeypot above handles the lazy
+// bots, and anything targeted needs a real answer, not a bigger number here.
+const FEEDBACK_WINDOW_MS = 600000;
+const FEEDBACK_MAX = 10;
+
+function createFeedbackThrottle() {
+  let windowStart = 0;
+  let count = 0;
+  return {
+    allow() {
+      const now = Date.now();
+      if (now - windowStart > FEEDBACK_WINDOW_MS) {
+        windowStart = now;
+        count = 0;
+      }
+      if (count >= FEEDBACK_MAX) return false;
+      count++;
+      return true;
+    }
+  };
+}
 
 // State per app, not per module: a serverless instance builds exactly one app,
 // so the throttle behaves the same in production — and two apps in one process
@@ -934,6 +1006,149 @@ ${updates.length ? updates.map((u) => updateCard(u)).join('') : '<p class="subtl
       );
     })
   );
+
+  // ------------------------------------------------- ideas and bug reports
+  // Two footer links, one handler. Everything sent here becomes a GitHub
+  // issue, so the backlog is public and anyone can pick something up.
+  const throttle = createFeedbackThrottle();
+
+  function feedbackForm(kind, values = {}) {
+    const k = FEEDBACK[kind];
+    return `<form class="stack compact" method="post" action="/${kind}">
+  <input name="summary" required maxlength="${SUMMARY_MAX}" value="${esc(values.summary || '')}" placeholder="${esc(k.summaryPlaceholder)} *" aria-label="Resumen">
+  <textarea name="details" rows="5" maxlength="${DETAILS_MAX}" placeholder="${esc(k.detailsPlaceholder)}" aria-label="Detalles">${esc(values.details || '')}</textarea>
+  ${HONEYPOT}
+  <button>${esc(k.submit)}</button>
+</form>`;
+  }
+
+  // The one thing that must be said before anyone types: a GitHub issue is a
+  // public, permanent, search-engine-indexed page. On a site whose front door
+  // says "reporta desaparecido", somebody WILL land on the bug form and start
+  // typing their sister's name and their phone number. Say so first, and put
+  // the door they actually wanted right next to the warning.
+  const PUBLIC_WARNING = `<p class="privacy">⚠️ <strong>Lo que escribas aquí es público</strong> y queda publicado en GitHub para siempre. No pongas aquí el nombre de una persona desaparecida, tu teléfono ni tu correo. ¿Buscas a alguien? <a href="/report">Repórtala aquí</a> — ese formulario sí es privado.</p>`;
+
+  function feedbackPage(kind, { body, values, status = 200 } = {}) {
+    const k = FEEDBACK[kind];
+    return {
+      status,
+      html: layout(
+        k.title,
+        `<h1 class="compact">${esc(k.heading)}</h1>
+<p class="subtle">${k.intro}</p>
+${PUBLIC_WARNING}
+${body || ''}
+${feedbackForm(kind, values)}
+<p class="subtle">¿Ya tienes cuenta de GitHub? También puedes <a href="${gh.newIssueUrl(k.labels)}" target="_blank" rel="noopener">abrir el issue tú mismo</a> o <a href="${gh.issuesUrl()}" target="_blank" rel="noopener">ver lo que ya está reportado</a>.</p>`,
+        { fullTitle: k.fullTitle, description: k.description, path: `/${kind}` }
+      )
+    };
+  }
+
+  for (const kind of Object.keys(FEEDBACK)) {
+    router.get(`/${kind}`, (req, res) => {
+      const page = feedbackPage(kind);
+      res.send(page.html);
+    });
+
+    router.post(
+      `/${kind}`,
+      wrap(async (req, res) => {
+        const k = FEEDBACK[kind];
+        const summary = String(req.body.summary || '')
+          .trim()
+          .slice(0, SUMMARY_MAX);
+        const details = String(req.body.details || '')
+          .trim()
+          .slice(0, DETAILS_MAX);
+
+        // A bot filling the hidden field gets the success page and nothing
+        // else: telling it that it was caught only teaches it to try again.
+        if (String(req.body.website || '').trim()) {
+          console.warn(`[${kind}] honeypot — descartado`);
+          return res.send(feedbackDone(kind, null).html);
+        }
+
+        if (!summary) {
+          const page = feedbackPage(kind, {
+            status: 400,
+            values: { details },
+            body: `<div class="error"><p>Escribe al menos una línea para saber de qué se trata.</p></div>`
+          });
+          return res.status(page.status).send(page.html);
+        }
+
+        if (!throttle.allow()) {
+          console.warn(`[${kind}] límite por instancia alcanzado — no se creó el issue`);
+          const page = feedbackPage(kind, {
+            status: 429,
+            values: { summary, details },
+            body: `<div class="error"><p>Estamos recibiendo muchos mensajes en este momento. Inténtalo de nuevo en unos minutos, o <a href="${gh.newIssueUrl(k.labels)}" target="_blank" rel="noopener">ábrelo directamente en GitHub</a>.</p></div>`
+          });
+          return res.status(page.status).send(page.html);
+        }
+
+        const body = [
+          details || '_(sin detalles)_',
+          '',
+          '---',
+          `Enviado desde el formulario de ${k.noun} de encontrados.co.`
+        ].join('\n');
+
+        const issue = await gh.createIssue({ title: summary, body, labels: k.labels });
+
+        // No token, or GitHub is down: the message must not evaporate. Mail it
+        // to the operators so it can be filed by hand — from the sender's side
+        // the outcome is the same, which is the point.
+        if (!issue.ok) {
+          const to = avisoEmail();
+          if (to) {
+            try {
+              await sendEmail(
+                to,
+                `[${k.noun}] ${summary}`,
+                [
+                  `No se pudo crear el issue en GitHub (${issue.error || 'motivo desconocido'}). Queda aquí para abrirlo a mano.`,
+                  '',
+                  `Tipo: ${k.noun}`,
+                  `Resumen: ${summary}`,
+                  '',
+                  details || '(sin detalles)'
+                ].join('\n')
+              );
+            } catch (e) {
+              console.error(`[${kind}] email de respaldo falló:`, e.message);
+            }
+          } else {
+            console.error(`[${kind}] PERDIDO — sin GITHUB_TOKEN y sin AVISO_EMAIL: "${summary}"`);
+          }
+        }
+
+        res.send(feedbackDone(kind, issue.ok ? issue.url : null).html);
+      })
+    );
+  }
+
+  function feedbackDone(kind, issueUrl) {
+    const k = FEEDBACK[kind];
+    return {
+      html: layout(
+        k.title,
+        `<div class="takeover">
+  <div class="takeover-emoji">${k.emoji}</div>
+  <h1>${esc(k.thanks)}</h1>
+  ${
+    issueUrl
+      ? `<p>Quedó registrado aquí: <a href="${esc(issueUrl)}" target="_blank" rel="noopener">ver en GitHub</a>.</p>`
+      : '<p>Lo recibimos y queda registrado.</p>'
+  }
+  <p class="subtle"><a href="/${kind}">Enviar otro</a> · <a href="/">Ir al inicio</a></p>
+</div>`,
+        { fullTitle: k.fullTitle }
+      )
+    };
+  }
 
   // --------------------------------------------------------------- legal
   router.get('/privacidad', (req, res) => {

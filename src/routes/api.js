@@ -10,6 +10,7 @@ const {
 } = require('../facematch');
 const { publicUpdate } = require('../privacy');
 const { findDuplicateCandidates, duplicateWarning } = require('../duplicates');
+const gh = require('../github');
 
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
@@ -409,6 +410,13 @@ function apiRoutes(store, matcher) {
           aws_region: process.env.AWS_REGION || '(sin definir → us-east-1)',
           matcher_enabled: !!matcher.enabled,
           status: matcher.status || 'desconocido'
+        },
+        // Same reasoning as aviso_email_present: without a token /ideas and
+        // /bug keep working but quietly fall back to email, so the issue
+        // tracker just stays empty and looks like nobody wrote in.
+        github: {
+          token_present: gh.configured(),
+          repo: gh.repo()
         }
       };
 

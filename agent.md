@@ -61,6 +61,11 @@ ayuda a nadie.
   por omisión. Marcarla manda el reporte completo a `AVISO_EMAIL` (mismo buzón
   que los avisos de rescatista) para que un operador llene su formulario a mano:
   no tienen API. El correo es «best effort»: si falla, el reporte ya está vivo.
+- `/ideas` y `/bug`: los dos enlaces del pie. Lo que se envía se abre como issue
+  en GitHub (`GITHUB_TOKEN`); sin token cae a correo a `AVISO_EMAIL` para
+  abrirlo a mano — nunca se pierde. Los formularios avisan que **es público**
+  y mandan a `/report` a quien en realidad busca a alguien: un issue queda
+  indexado para siempre y ahí no puede terminar el teléfono de una familia.
 - Producción: Vercel (función serverless única + Postgres/Neon). Dev/tests: SQLite.
 - Remitente de correo fijo: `a@torrenegra.com` (SendGrid).
 - Suscripciones por correo requieren verificación; toda alerta lleva enlace de baja.
