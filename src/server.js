@@ -42,7 +42,7 @@ async function createApp(adapter, matcher) {
     if (err && err.name === 'MulterError') {
       const msg =
         err.code === 'LIMIT_FILE_SIZE'
-          ? 'La foto es demasiado grande (máx. 4 MB). Intenta con una foto más pequeña.'
+          ? 'La foto es demasiado grande (máx. 12 MB). Intenta con una foto más pequeña.'
           : 'Demasiados archivos o carga inválida. Sube máximo 3 fotos.';
       if (req.path.startsWith('/api')) return res.status(400).json({ error: msg });
       return res.status(400).send(msg);

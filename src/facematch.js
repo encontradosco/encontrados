@@ -12,6 +12,7 @@
 const env = require('./env');
 const { sendEmail, sendWhatsApp } = require('./notify');
 const { storeThumbnail } = require('./thumbs');
+const { toMatchable } = require('./photo');
 
 const MAX_QUERY_PHOTOS = 3;
 
@@ -90,14 +91,32 @@ async function matchStoredPhoto(store, matcher, photo, bytes) {
 
 // Store a photo, then match it. Returns the stored photo row (no bytes).
 async function processPhoto(store, matcher, { personId, kind, updateId, subscriptionId, bytes, contentType }) {
+  // Convert before storing, not just before matching: the stored bytes are
+  // what GET /photo/:id later hands to a browser, and a HEIC renders as a
+  // broken image everywhere except Safari.
+  const usable = await toMatchable(bytes, contentType);
+
   const photo = await store.addPhoto({
     personId,
     kind,
     updateId,
     subscriptionId,
-    content: bytes,
-    contentType
+    content: usable ? usable.bytes : bytes,
+    contentType: usable ? usable.contentType : contentType
   });
+
+  if (!usable) {
+    // The report itself is the family's data and is already durable — losing
+    // it over an unreadable attachment is never the right trade. But the photo
+    // cannot do the one job it was uploaded for, so mark it and let the caller
+    // say so out loud rather than let the person believe the face is indexed.
+    console.warn(
+      `[facematch] photo ${photo.id} ilegible (${contentType}) — guardada sin indexar ni miniatura`
+    );
+    photo.unreadable = true;
+    return photo;
+  }
+  const content = usable.bytes;
 
   // Wake the lazy matcher BEFORE reading `enabled`: it is a getter over the
   // real matcher, which does not exist until something initializes it. On a
@@ -112,11 +131,11 @@ async function processPhoto(store, matcher, { personId, kind, updateId, subscrip
     );
     // The listing still needs something light to show, so build the thumbnail
     // anyway — centred, since nothing told us where the face is.
-    if (kind === 'report') await storeThumbnail(store, photo.id, bytes, null);
+    if (kind === 'report') await storeThumbnail(store, photo.id, content, null);
     return photo;
   }
   try {
-    await matchStoredPhoto(store, matcher, photo, bytes);
+    await matchStoredPhoto(store, matcher, photo, content);
   } catch (e) {
     // Matching must never break reporting or subscribing.
     console.error('[facematch]', e);
@@ -236,7 +255,23 @@ async function identifyRescuedPerson(store, matcher, { bytes, contentType, perso
   if (!matcher.enabled) {
     return { available: false, matches: [] };
   }
-  const matches = await matcher.searchByImage(bytes);
+
+  // A format Rekognition refuses used to throw straight through this function
+  // and out of the route, and the rescuer — holding a person, in the field —
+  // got "Error interno del servidor" and no idea what to do next.
+  const usable = await toMatchable(bytes, contentType);
+  if (!usable) return { available: true, unreadable: true, matches: [] };
+
+  let matches;
+  try {
+    matches = await matcher.searchByImage(usable.bytes);
+  } catch (e) {
+    // searchByImage already treats "no face in this image" as an empty result,
+    // so anything landing here is Rekognition itself failing. Degrade to "try
+    // again in a moment"; never a 500 on the one screen a rescuer is using.
+    console.error('[facematch:rescue] búsqueda fallida:', e.name, e.message);
+    return { available: false, matches: [] };
+  }
   const bySimilarity = new Map(matches.map((m) => [m.faceId, m.similarity]));
 
   // Index the face so a later missing-person report can alert this rescuer,
@@ -246,10 +281,10 @@ async function identifyRescuedPerson(store, matcher, { bytes, contentType, perso
     kind: 'query',
     subscriptionId,
     content: Buffer.alloc(0),
-    contentType
+    contentType: usable.contentType
   });
   try {
-    const { faceId } = await matcher.indexFace(bytes, photo.id);
+    const { faceId } = await matcher.indexFace(usable.bytes, photo.id);
     if (faceId) await store.setPhotoFaceId(photo.id, faceId);
     // No geometry is stored for a rescuer's photo: the image is dropped on the
     // next line, so there would be nothing to draw it over.

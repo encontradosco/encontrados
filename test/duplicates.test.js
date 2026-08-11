@@ -1,5 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert');
+const sharp = require('sharp');
 const { createSqliteAdapter } = require('../src/store/sqlite');
 const { createStore } = require('../src/people');
 const { createApp } = require('../src/server');
@@ -47,19 +48,49 @@ async function startApp(matcher = nullMatcher) {
   return { server, base: `http://127.0.0.1:${server.address().port}`, store: app.locals.store };
 }
 
-function reportForm({ name, location = 'Barrio Centro', contact = '300 123 4567', photos = ['foto'] }) {
+// Real JPEGs, one distinct flat colour per label. The upload path decodes what
+// it is given now (src/photo.js), so a placeholder string would be rejected as
+// an unreadable photo before any of the duplicate logic below is reached.
+const jpegCache = new Map();
+async function photoBytes(label) {
+  if (!jpegCache.has(label)) {
+    let h = 0;
+    for (const ch of label) h = (h * 31 + ch.charCodeAt(0)) % 16777216;
+    jpegCache.set(
+      label,
+      await sharp({
+        create: {
+          width: 120,
+          height: 150,
+          channels: 3,
+          background: { r: (h >> 16) & 255, g: (h >> 8) & 255, b: h & 255 }
+        }
+      })
+        .jpeg()
+        .toBuffer()
+    );
+  }
+  return jpegCache.get(label);
+}
+
+async function reportForm({
+  name,
+  location = 'Barrio Centro',
+  contact = '300 123 4567',
+  photos = ['foto']
+}) {
   const fd = new FormData();
   fd.set('name', name);
   fd.set('location', location);
   fd.set('contact', contact);
-  for (const [i, body] of photos.entries()) {
-    fd.append('photos', new File([Buffer.from(body)], `f${i}.jpg`, { type: 'image/jpeg' }));
+  for (const [i, label] of photos.entries()) {
+    fd.append('photos', new File([await photoBytes(label)], `f${i}.jpg`, { type: 'image/jpeg' }));
   }
   return fd;
 }
 
-const post = (base, body) =>
-  fetch(`${base}/report`, { method: 'POST', body, redirect: 'manual' });
+const post = async (base, body) =>
+  fetch(`${base}/report`, { method: 'POST', body: await body, redirect: 'manual' });
 
 // ---------------------------------------------------------------- detection
 
@@ -373,17 +404,26 @@ test('the pre-existing photo is the one offered for comparison, not the new one'
   const offered = Number(JSON.parse(decodeURIComponent(dupCookie(second).split('=')[1])).f);
 
   assert.equal(offered, priorPhoto.id, 'debe ofrecer la foto que ya estaba, no la recién subida');
-  assert.equal(Buffer.from((await store.getPhoto(offered)).content).toString(), 'vieja');
+  assert.deepEqual(
+    Buffer.from((await store.getPhoto(offered)).content),
+    await photoBytes('vieja')
+  );
 });
 
 test('a candidate whose photo cannot be rendered is not asked to be compared', async (t) => {
-  const { server, base } = await startApp(fakeMatcher());
+  const { server, base, store } = await startApp(fakeMatcher());
   t.after(() => server.close());
 
-  // These reports are stored without a thumbnail, so `facePlate` draws nothing
-  // for them — and asking "compare the photos" over a blank card is how two
-  // different missing people get treated as one.
   await post(base, reportForm({ name: 'Juan Carlos Pérez' }));
+
+  // Strip the candidate's thumbnail, which is the state a photo stored while
+  // face matching was down is left in. `facePlate` draws nothing without one —
+  // and asking "compare the photos" over a blank card is how two different
+  // missing people get treated as one.
+  const candidate = (await store.searchPeople('Juan Carlos Pérez'))[0];
+  const stale = (await store.reportPhotoByPerson([candidate.id])).get(candidate.id);
+  await store.setPhotoThumbnails(stale.id, { small: null, large: null, contentType: null });
+
   const second = await post(base, reportForm({ name: 'Ana Sofía Molina' }));
 
   const page = await (await follow(base, second)).text();
