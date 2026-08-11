@@ -16,10 +16,33 @@ const gh = require('../github');
 // Express 4 doesn't catch async errors on its own.
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
+// A browser does not reliably label what it is uploading. A photo picked
+// through the Files app, received over WhatsApp, or dragged in from a desktop
+// folder routinely arrives as application/octet-stream, and filtering on the
+// label alone threw those away — `cb(null, false)` drops a file WITHOUT an
+// error, so the handler saw a request carrying no photo and told the person
+// they had forgotten to attach one. They had not. That is the literal shape of
+// "no puedo subir fotos": the app insisting there is no photo.
+//
+// So the label is only ever a hint here, and the real verdict is reached on
+// the bytes themselves in src/photo.js, which can also say precisely what went
+// wrong. The size ceiling is 12 MB because that is the territory a current
+// phone camera lives in; anything oversized is downscaled server-side before
+// it is stored or matched.
+const IMAGE_EXT = /\.(jpe?g|png|gif|webp|heic|heif|avif|bmp|tiff?)$/i;
+
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 4 * 1024 * 1024, files: 8 },
-  fileFilter: (req, file, cb) => cb(null, file.mimetype.startsWith('image/'))
+  limits: { fileSize: 12 * 1024 * 1024, files: 8 },
+  fileFilter: (req, file, cb) => {
+    const type = (file.mimetype || '').toLowerCase();
+    cb(
+      null,
+      type.startsWith('image/') ||
+        type === 'application/octet-stream' ||
+        IMAGE_EXT.test(file.originalname || '')
+    );
+  }
 });
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -591,7 +614,7 @@ ${rescueForm(email)}`
         remember(res, EMAIL_COOKIE, email);
       }
 
-      const { available, matches } = await identifyRescuedPerson(store, matcher, {
+      const { available, unreadable, matches } = await identifyRescuedPerson(store, matcher, {
         bytes: req.file.buffer,
         contentType: req.file.mimetype,
         personId: person.id,
@@ -603,7 +626,16 @@ ${rescueForm(email)}`
       }
 
       let body;
-      if (!available) {
+      if (unreadable) {
+        // Say what happened and what to do about it. This used to be a bare
+        // "Error interno del servidor" — a dead end for someone standing next
+        // to the person they just pulled out.
+        body =
+          `<div class="error">
+  <p><strong>No pudimos leer esa foto.</strong> El archivo llegó en un formato que no podemos procesar.</p>
+  <p>Vuelve a intentarlo tomando la foto <strong>directamente con la cámara</strong> desde esta página, o guárdala como JPG antes de subirla.</p>
+</div>` + rescueForm(email);
+      } else if (!available) {
         body = `<div class="error"><p>El reconocimiento facial no está disponible en este momento. Inténtalo de nuevo en unos minutos.</p></div>`;
       } else if (!matches.length) {
         body = `<div class="error">
@@ -855,7 +887,12 @@ ${LOCATION_SCRIPT}`,
         });
       }
 
-      res.redirect(303, `/person/${person.id}?reported=1`);
+      // The report is saved either way, but a photo the matcher cannot read is
+      // a report that no rescuer will ever match — and the one thing worse
+      // than a failed upload is a family believing a failed one succeeded.
+      const unreadable = photos.filter((p) => p.unreadable).length;
+      const flag = unreadable ? `&fotos_ilegibles=${unreadable}` : '';
+      res.redirect(303, `/person/${person.id}?reported=1${flag}`);
     })
   );
 
@@ -925,6 +962,14 @@ ${LOCATION_SCRIPT}`,
           person.full_name,
           `
 ${req.query.reported ? '<p class="notice">✅ Reporte registrado. Cuando un rescatista tenga a esta persona, verá tus datos de contacto.</p>' : ''}
+${
+  req.query.fotos_ilegibles
+    ? `<div class="error">
+  <p><strong>Ojo: no pudimos leer ${Number(req.query.fotos_ilegibles) === 1 ? 'una de las fotos' : 'algunas de las fotos'} que subiste.</strong> El reporte quedó registrado, pero esa foto no sirve para que un rescatista reconozca a la persona.</p>
+  <p>Añade otra foto desde esta página, tomada <strong>directamente con la cámara</strong> o guardada como JPG.</p>
+</div>`
+    : ''
+}
 ${duplicates}
 <div class="person-body">
   <h1>${esc(person.full_name)}</h1>
