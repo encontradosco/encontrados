@@ -33,7 +33,7 @@ async function createApp(adapter, matcher) {
     res
       .status(404)
       .send(
-        `<!doctype html><html lang="es"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>No encontrado — aqui.online</title><body style="font-family:system-ui;max-width:640px;margin:2rem auto;padding:0 1rem"><h1>Página no encontrada</h1><p>Vuelve al <a href="/">inicio</a> para reportar o buscar a alguien.</p><p style="color:#666;font-size:.85rem">Ruta solicitada: <code>${where}</code></p></body></html>`
+        `<!doctype html><html lang="es"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>No encontrado — encontrados.co</title><body style="font-family:system-ui;max-width:640px;margin:2rem auto;padding:0 1rem"><h1>Página no encontrada</h1><p>Vuelve al <a href="/">inicio</a> para reportar o buscar a alguien.</p><p style="color:#666;font-size:.85rem">Ruta solicitada: <code>${where}</code></p></body></html>`
       );
   });
 
@@ -60,7 +60,7 @@ async function createApp(adapter, matcher) {
 if (require.main === module) {
   createApp().then((app) => {
     app.listen(env.PORT, () => {
-      console.log(`aqui.online escuchando en ${env.BASE_URL} (puerto ${env.PORT})`);
+      console.log(`encontrados.co escuchando en ${env.BASE_URL} (puerto ${env.PORT})`);
     });
   });
 }

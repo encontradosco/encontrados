@@ -17,7 +17,7 @@ ayuda a nadie.
 
 ## Contexto del proyecto
 
-- **aqui.online**: conecta a quien RESCATA a una persona con quien la BUSCA.
+- **encontrados.co**: conecta a quien RESCATA a una persona con quien la BUSCA.
   - Rescatista: sube una foto de la persona que tiene al lado → reconocimiento
     facial → ve quién la busca y su contacto. La foto NUNCA se guarda: se borra
     tras indexar su firma facial. Solo los rescatistas pueden registrar avisos.
@@ -27,7 +27,16 @@ ayuda a nadie.
     coincidencia facial; nunca en páginas públicas.
 - Toda la interfaz y los mensajes al usuario son **en español**.
 - Canales activos: web y API REST. WhatsApp está implementado pero dormido (sin credenciales aún) — no mostrar referencias a WhatsApp en la interfaz hasta que se active. (Telegram fue retirado.)
-- Fotos: solo para reconocimiento facial (AWS Rekognition). NUNCA crear rutas que muestren o sirvan fotos.
+- Fotos — dos reglas distintas según quién las sube:
+  - **Rescatista** (`kind='query'`): la foto NUNCA se guarda ni se muestra. Se
+    compara, se indexa su firma facial y los bytes se borran de inmediato. Solo
+    sobreviven los metadatos faciales.
+  - **Reporte de desaparecido** (`kind='report'`): la foto SÍ se guarda y SÍ se
+    publica, en la lista de personas desaparecidas, con los puntos de detección
+    facial dibujados encima (`GET /photo/:id` + `facePlate()` en `src/html.js`).
+    Es el propósito del reporte: que un rescatista reconozca a la persona.
+  - `GET /photo/:id` sirve únicamente fotos `kind='report'`. Nunca ampliarlo a
+    fotos de rescatistas.
 - Producción: Vercel (función serverless única + Postgres/Neon). Dev/tests: SQLite.
 - Remitente de correo fijo: `a@torrenegra.com` (SendGrid).
 - Suscripciones por correo requieren verificación; toda alerta lleva enlace de baja.

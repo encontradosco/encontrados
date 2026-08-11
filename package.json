@@ -1,7 +1,7 @@
 {
-  "name": "aqui-online",
+  "name": "encontrados-co",
   "version": "0.2.1",
-  "description": "Aquí — tablero de estado de personas en emergencias. Reporta y consulta por web, WhatsApp, Telegram y API.",
+  "description": "encontrados.co — conecta a quien rescata a una persona con quien la busca. Reporta y consulta por web y API.",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",

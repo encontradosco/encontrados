@@ -195,7 +195,7 @@ test('transactional emails disable click tracking so links are not rewritten', a
   assert.equal(sg.received.length, 1);
   const body = sg.received[0].body;
   // SendGrid's tracking domain returned 403 in production, which broke every
-  // verification link. Links must go straight to aqui.online.
+  // verification link. Links must go straight to encontrados.co.
   assert.equal(body.tracking_settings.click_tracking.enable, false);
   assert.equal(body.tracking_settings.click_tracking.enable_text, false);
   assert.equal(body.tracking_settings.open_tracking.enable, false);

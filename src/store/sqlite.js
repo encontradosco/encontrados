@@ -59,6 +59,7 @@ async function createSqliteAdapter(dbPath) {
       content BLOB NOT NULL,
       content_type TEXT NOT NULL,
       face_id TEXT,
+      face_detail TEXT,
       created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
     );
     CREATE INDEX IF NOT EXISTS idx_photos_face ON photos(face_id);
@@ -73,6 +74,10 @@ async function createSqliteAdapter(dbPath) {
   }
   try {
     db.exec('ALTER TABLE updates ADD COLUMN contact TEXT');
+  } catch { /* already exists */ }
+  // Detection geometry (bounding box + landmarks) for the public overlay.
+  try {
+    db.exec('ALTER TABLE photos ADD COLUMN face_detail TEXT');
   } catch { /* already exists */ }
   // Older dev databases: add external_id if missing. Note: SQLite can't widen
   // an existing CHECK constraint via ALTER TABLE, so a pre-existing local
@@ -227,6 +232,38 @@ async function createSqliteAdapter(dbPath) {
     },
     async setPhotoFaceId(photoId, faceId) {
       db.prepare('UPDATE photos SET face_id = ? WHERE id = ?').run(faceId, photoId);
+    },
+    async setPhotoFaceDetail(photoId, detail) {
+      db.prepare('UPDATE photos SET face_detail = ? WHERE id = ?').run(
+        detail ? JSON.stringify(detail) : null,
+        photoId
+      );
+    },
+    async getPhoto(id) {
+      return db.prepare('SELECT * FROM photos WHERE id = ?').get(id);
+    },
+    // One photo per person for the public listing: the earliest report photo
+    // that still has bytes and, preferably, detection geometry to draw.
+    async reportPhotosForPeople(personIds) {
+      if (!personIds.length) return [];
+      const marks = personIds.map(() => '?').join(',');
+      return db
+        .prepare(
+          `SELECT id, person_id, content_type, face_id, face_detail FROM photos
+           WHERE kind = 'report' AND person_id IN (${marks}) AND length(content) > 0
+           ORDER BY person_id, (face_detail IS NULL), id`
+        )
+        .all(...personIds);
+    },
+    // Report photos indexed before the geometry was captured.
+    async photosMissingFaceDetail(limit) {
+      return db
+        .prepare(
+          `SELECT * FROM photos
+           WHERE face_detail IS NULL AND kind = 'report' AND length(content) > 0
+           ORDER BY id LIMIT ?`
+        )
+        .all(limit);
     },
     // Rescue photos are never kept: only the face signature survives.
     async clearPhotoContent(photoId) {

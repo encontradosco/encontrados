@@ -40,13 +40,13 @@ async function sendEmail(to, subject, text) {
       },
       body: JSON.stringify({
         personalizations: [{ to: [{ email: to }] }],
-        from: { email: env.EMAIL_FROM, name: 'aqui.online' },
+        from: { email: env.EMAIL_FROM, name: 'encontrados.co' },
         subject,
         content: [{ type: 'text/plain', value: text }],
         // Click tracking rewrites our links through SendGrid's tracking domain.
         // That domain returns 403 here, which silently broke every
         // verification and unsubscribe link. These are transactional emails:
-        // the links must point straight at aqui.online.
+        // the links must point straight at encontrados.co.
         tracking_settings: {
           click_tracking: { enable: false, enable_text: false },
           open_tracking: { enable: false }
@@ -103,9 +103,9 @@ async function sendVerificationEmail(person, sub) {
   const link = `${env.BASE_URL}/verify?token=${sub.verify_token}`;
   return sendEmail(
     sub.address,
-    `Confirma tu suscripción a novedades de ${person.full_name} — aqui.online`,
+    `Confirma tu suscripción a novedades de ${person.full_name} — encontrados.co`,
     [
-      `Pediste recibir avisos cuando haya novedades de ${person.full_name} en aqui.online.`,
+      `Pediste recibir avisos cuando haya novedades de ${person.full_name} en encontrados.co.`,
       '',
       `Confirma tu correo abriendo este enlace: ${link}`,
       '',
@@ -119,13 +119,13 @@ async function sendVerificationEmail(person, sub) {
 // Every alert carries that subscriber's personal unsubscribe link.
 async function notifySubscribers(store, person, update, { skipAddress } = {}) {
   const subs = await store.getSubscriptions(person.id);
-  const baseText = `🔔 Actualización en aqui.online:\n${updateText(person, update)}`;
+  const baseText = `🔔 Actualización en encontrados.co:\n${updateText(person, update)}`;
   const jobs = subs
     .filter((s) => s.verified && !(skipAddress && s.address === skipAddress))
     .map((s) => {
       const text = `${baseText}\n\nPara dejar de recibir estos avisos: ${unsubscribeLink(s)}`;
       if (s.channel === 'email') {
-        return sendEmail(s.address, `Actualización sobre ${person.full_name} — aqui.online`, text);
+        return sendEmail(s.address, `Actualización sobre ${person.full_name} — encontrados.co`, text);
       }
       if (s.channel === 'whatsapp') return sendWhatsApp(s.address, text);
       return Promise.resolve(false);

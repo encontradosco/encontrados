@@ -52,6 +52,43 @@ function phoneticKey(name) {
   return tokenize(name).map(phoneticToken).join(' ');
 }
 
+// Names arrive from panicked people typing on phones: "MARIA JOSE GOMEZ",
+// "lilianny maybeth mora hurtado". Store them the way a name is written, so the
+// public listing is readable. Only the display form changes — normalize() and
+// phoneticKey() strip case anyway, so matching is untouched.
+//
+// Spanish connectors stay lowercase ("María de los Ángeles"), except as the
+// first word. Hyphens and apostrophes start a new word ("Jean-Pierre",
+// "O'Brien"). A token with no letters (a hex suffix, a number) is left alone.
+const LOWERCASE_PARTICLES = new Set([
+  'de', 'del', 'la', 'las', 'lo', 'los', 'y', 'e', 'da', 'das', 'do', 'dos',
+  'di', 'du', 'van', 'von', 'der', 'den', 'bin', 'al', 'el'
+]);
+
+function capitalizeWord(word) {
+  if (!word) return word;
+  // Split on hyphens/apostrophes, keeping the separators.
+  return word
+    .split(/([-'’])/)
+    .map((part, i) => {
+      if (i % 2 === 1) return part; // the separator itself
+      if (!part) return part;
+      return part[0].toLocaleUpperCase('es') + part.slice(1).toLocaleLowerCase('es');
+    })
+    .join('');
+}
+
+function titleCaseName(name) {
+  const words = String(name || '').trim().split(/\s+/).filter(Boolean);
+  return words
+    .map((word, i) => {
+      const lower = word.toLocaleLowerCase('es');
+      if (i > 0 && LOWERCASE_PARTICLES.has(lower)) return lower;
+      return capitalizeWord(word);
+    })
+    .join(' ');
+}
+
 function levenshtein(a, b) {
   if (a === b) return 0;
   const m = a.length;
@@ -114,4 +151,4 @@ function matchScore(query, candidate) {
   return (total / qTokens.length) * (0.7 + 0.3 * Math.min(1, coverage));
 }
 
-module.exports = { normalize, tokenize, phoneticKey, matchScore, levenshtein };
+module.exports = { normalize, tokenize, phoneticKey, titleCaseName, matchScore, levenshtein };
