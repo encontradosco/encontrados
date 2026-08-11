@@ -83,7 +83,9 @@ test('home lists missing people and offers both actions', async (t) => {
   const html = await (await fetch(base)).text();
   assert.match(html, /mira quién está buscando la persona que rescataste/i);
   assert.match(html, /href="\/rescate"/);
-  assert.match(html, /Reportar desaparecido/);
+  assert.match(html, /Reporta desaparecido/);
+  // The sources line lives small under the listing, present even when empty.
+  assert.match(html, /Fuentes de información de desaparecidos/);
 
   // a reported person shows up in the listing
   const fd = new FormData();
@@ -97,6 +99,39 @@ test('home lists missing people and offers both actions', async (t) => {
   const home = await (await fetch(base)).text();
   assert.match(home, /Personas reportadas como desaparecidas/);
   assert.match(home, /Pedro Pablo Ramírez/);
+});
+
+// A second party reporting the same person is never rejected: the report is
+// merged into the same person as one more update, keeping both contacts so a
+// rescuer's match can reach every family member who is searching.
+test('a duplicate report merges into the same person instead of being rejected', async (t) => {
+  const { server, base } = await startApp();
+  t.after(() => server.close());
+
+  const report = async (contact) => {
+    const fd = new FormData();
+    fd.set('name', 'Marta Cecilia Giraldo');
+    fd.set('location', 'Barrio La Merced');
+    fd.set('contact', contact);
+    fd.append('photos', new File([Buffer.from('foto')], 'f.jpg', { type: 'image/jpeg' }));
+    return fetch(`${base}/report`, { method: 'POST', body: fd, redirect: 'manual' });
+  };
+
+  const first = await report('300 111 1111');
+  assert.equal(first.status, 303);
+  const second = await report('310 222 2222');
+  assert.equal(second.status, 303, 'el segundo reporte no debe rechazarse');
+
+  // Both redirects land on the SAME person: merged, not duplicated.
+  const personPath = first.headers.get('location').split('?')[0];
+  assert.equal(second.headers.get('location').split('?')[0], personPath);
+
+  const results = await (await fetch(`${base}/api/people?q=Marta Cecilia Giraldo`)).json();
+  assert.equal(results.results.length, 1, 'debe existir una sola persona, no dos');
+
+  // Both reports survive as separate updates with their own contact.
+  const { updates } = await (await fetch(`${base}/api${personPath.replace('/person/', '/people/')}`)).json();
+  assert.equal(updates.length, 2);
 });
 
 test('reporting requires photos, name, place and contact', async (t) => {

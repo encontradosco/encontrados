@@ -52,23 +52,10 @@ function remember(res, name, value) {
 
 const RESCUE_PRIVACY = `<p class="privacy">🔒 <strong>La foto no se guarda.</strong> Se compara al instante contra las fotos de las personas reportadas como desaparecidas y se borra de inmediato: no queda almacenada en ningún servidor. Solo conservamos su <em>firma facial</em> (un código que no permite reconstruir la imagen) para poder avisarte si alguien empieza a buscar a esta persona.</p>`;
 
-// Home-page block: which sources feed this list, and how to contribute more.
-// Kept honest — only Colombia Te Busca is actually integrated today; the rest
-// are listed as "coming soon" so nobody assumes data is already flowing from
-// a source that isn't wired up yet.
-const SOURCES_SECTION = `
-<section class="sources">
-  <h2>Fuentes de información</h2>
-  <p class="subtle">Consolidamos reportes de estas fuentes:</p>
-  <ul class="subtle sources-list">
-    <li>✅ <strong>Activa hoy:</strong> <a href="https://colombiatebusca.com" target="_blank" rel="noopener">Colombia Te Busca</a></li>
-    <li>🔜 <strong>En integración / próximamente:</strong> medios verificados (El Espectador, El Tiempo, El País, Semana, Cambio) y canales oficiales (Medicina Legal, UNGRD, Defensa Civil)</li>
-  </ul>
-  <p class="subtle">Seguimos añadiendo más fuentes.</p>
-</section>
-<section class="notice sources-cta">
-  <p>¿Tienes más datos, o quieres acceso al API para reportar? Avísanos: <a href="https://github.com/torrenegra/encontrados/issues" target="_blank" rel="noopener">abre un issue en GitHub</a> · escríbele a Alex (<a href="https://x.com/torrenegra" target="_blank" rel="noopener">@torrenegra</a>) · o a Nic (<a href="https://x.com/ni500" target="_blank" rel="noopener">@ni500</a>).</p>
-</section>`;
+// One small line under the listing heading. Kept honest — only Colombia Te
+// Busca is actually integrated today; the rest are listed as "coming soon" so
+// nobody assumes data is already flowing from a source that isn't wired up yet.
+const SOURCES_NOTE = `<p class="sources-note">Fuentes de información de desaparecidos: Encontrados.co, <a href="https://colombiatebusca.com" target="_blank" rel="noopener">Colombia Te Busca</a>. Próximamente: El Espectador, El Tiempo, El País, Semana, Cambio, Medicina Legal, UNGRD, Defensa Civil.</p>`;
 
 const REPORT_PRIVACY = `<p class="privacy">📢 Las fotos del reporte <strong>se publican</strong> en la lista de personas desaparecidas, con los puntos de reconocimiento facial marcados sobre el rostro. Es lo que permite que un rescatista reconozca a la persona que tiene al lado. Sube solo fotos que quieras hacer públicas.</p>`;
 
@@ -121,7 +108,7 @@ function webRoutes(store, matcher) {
       const missing = await store.getMissingPeople(50);
       const photos = await store.reportPhotoByPerson(missing.map((p) => p.id));
       const list = missing.length
-        ? `<h2>Personas reportadas como desaparecidas (${missing.length})</h2>` +
+        ? `<h2>Personas reportadas como desaparecidas (${missing.length})</h2>${SOURCES_NOTE}` +
           missing
             .map((p) => {
               return `<article class="card person">
@@ -133,7 +120,7 @@ function webRoutes(store, matcher) {
 </article>`;
             })
             .join('')
-        : '<p class="subtle">Todavía no hay personas reportadas como desaparecidas.</p>';
+        : `<p class="subtle">Todavía no hay personas reportadas como desaparecidas.</p>${SOURCES_NOTE}`;
 
       res.send(
         layout(
@@ -149,10 +136,9 @@ function webRoutes(store, matcher) {
 <section class="action-group">
   <h2>¿Buscas un ser querido?</h2>
   <a class="big-btn search" href="/report">
-    <span class="btn-title">📢 Reportar desaparecido</span>
+    <span class="btn-title">📢 Reporta desaparecido</span>
   </a>
 </section>
-${SOURCES_SECTION}
 ${list}
 `,
           {
@@ -385,9 +371,9 @@ ${body}
   router.get('/report', (req, res) => {
     res.send(
       layout(
-        'Reportar desaparecido',
+        'Reporta desaparecido',
         `
-<h1 class="compact">Reportar una persona desaparecida</h1>
+<h1 class="compact">Reporta una persona desaparecida</h1>
 <p class="subtle">Cuando un rescatista tenga a esta persona, verá tus datos de contacto para avisarte.</p>
 <form class="stack compact" method="post" action="/report" enctype="multipart/form-data" data-resize-photos data-require-photos>
   <label class="file-label"><span>📷 Fotos de la persona * (1 a 3 — así la reconocen los rescatistas)</span>
@@ -398,11 +384,9 @@ ${body}
     <input name="location" id="location" list="location-options" autocomplete="off" placeholder="Dónde crees que estaba *" aria-label="Ubicación" required>
     <datalist id="location-options"></datalist>
   </span>
-  <button type="button" id="geo-btn" class="secondary">📍 Compartir mi ubicación actual</button>
-  <input type="hidden" name="lat" id="lat"><input type="hidden" name="lng" id="lng">
   <input name="contact" required value="${esc(readCookie(req, REPORTER_COOKIE))}" placeholder="Tu teléfono o correo para que te contacten *" aria-label="Teléfono o correo de contacto">
   <textarea name="message" rows="2" placeholder="Otros datos que ayuden a reconocerla (opcional)" aria-label="Datos adicionales"></textarea>
-  <button>Reportar desaparecido</button>
+  <button>Reporta desaparecido</button>
 </form>
 <script>
 document.addEventListener('submit', function (ev) {
@@ -417,7 +401,7 @@ document.addEventListener('submit', function (ev) {
 </script>
 ${LOCATION_SCRIPT}`,
         {
-          fullTitle: 'Reportar una persona desaparecida — encontrados.co',
+          fullTitle: 'Reporta una persona desaparecida — encontrados.co',
           description:
             'Reporta a una persona desaparecida con sus fotos, el lugar donde crees que estaba y tu contacto. Los rescatistas podrán reconocerla y avisarte.',
           path: '/report'

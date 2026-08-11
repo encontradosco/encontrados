@@ -272,7 +272,7 @@ function layout(title, body, meta = {}) {
   <a class="brand" href="/">❤️‍🩹 encontrados.co</a>
   <nav>
     <a href="/rescate">Soy rescatista</a>
-    <a href="/report" class="cta">Reportar desaparecido</a>
+    <a href="/report" class="cta">Reporta desaparecido</a>
   </nav>
 </header>
 <div class="banner">🇨🇴 <strong>Terremoto en Colombia — lunes 10 de agosto.</strong></div>
@@ -280,7 +280,7 @@ function layout(title, body, meta = {}) {
 ${body}
 </main>
 <footer>
-  <p><span class="credit">Hecho con 💙 por <a href="https://x.com/ni500" target="_blank" rel="noopener">Nicolas Contreras</a> y <a href="https://me.torrenegra.com" target="_blank" rel="noopener">Alexander Torrenegra</a></span> · <a href="https://github.com/torrenegra/encontrados" target="_blank" rel="noopener">Github</a> · <a href="/privacidad">Privacidad</a> · <a href="/terminos">Términos</a></p>
+  <p><span class="credit">Hecho con 💙 por <a href="https://x.com/ni500" target="_blank" rel="noopener">Ni500</a> y <a href="https://me.torrenegra.com" target="_blank" rel="noopener">Torrenegra</a></span> · <a href="https://github.com/torrenegra/encontrados" target="_blank" rel="noopener">Github</a> · <a href="/privacidad">Privacidad</a> · <a href="/terminos">Términos</a></p>
 </footer>
 ${RESIZE_SCRIPT}
 ${TIME_SCRIPT}
@@ -355,34 +355,6 @@ function updateCard(u, personName) {
 
 const LOCATION_SCRIPT = `<script>
 (function () {
-  var btn = document.getElementById('geo-btn');
-  if (btn) btn.addEventListener('click', function () {
-    if (!navigator.geolocation) { btn.textContent = 'GPS no disponible en este navegador'; return; }
-    btn.textContent = '📍 Obteniendo ubicación…';
-    navigator.geolocation.getCurrentPosition(function (pos) {
-      document.getElementById('lat').value = pos.coords.latitude.toFixed(6);
-      document.getElementById('lng').value = pos.coords.longitude.toFixed(6);
-      btn.textContent = '✅ Ubicación compartida';
-      // Fill the (required) location field with the raw GPS coordinates
-      // right away, before hiding it below. The reverse-geocode call is
-      // only allowed to IMPROVE this text if it succeeds — it must never be
-      // the sole source: with bad signal it can fail or time out, and an
-      // empty required field makes the server reject the whole report
-      // (photos, name, contact included).
-      var loc = document.getElementById('location');
-      if (loc) loc.value = 'Ubicación GPS compartida (' + pos.coords.latitude.toFixed(6) + ', ' + pos.coords.longitude.toFixed(6) + ')';
-      // GPS is more precise than a typed address: hide the address field.
-      var field = document.getElementById('location-field');
-      if (field) field.style.display = 'none';
-      fetch('https://nominatim.openstreetmap.org/reverse?format=json&lat=' + pos.coords.latitude + '&lon=' + pos.coords.longitude)
-        .then(function (r) { return r.json(); })
-        .then(function (d) {
-          if (d.display_name && loc) loc.value = d.display_name.split(',').slice(0, 4).join(',');
-          if (loc && loc.value) btn.textContent = '✅ ' + loc.value;
-        }).catch(function () {});
-    }, function () { btn.textContent = 'No se pudo obtener la ubicación'; });
-  });
-
   var loc = document.getElementById('location');
   var list = document.getElementById('location-options');
   var timer;
