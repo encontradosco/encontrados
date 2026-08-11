@@ -22,6 +22,9 @@ test('the report form no longer offers the GPS button', async (t) => {
   const html = await (await fetch(`${base}/report`)).text();
   assert.ok(!html.includes('Compartir mi ubicación actual'), 'el botón de GPS debe estar retirado');
   assert.ok(!LOCATION_SCRIPT.includes('geo-btn'), 'LOCATION_SCRIPT no debe cargar código muerto del botón GPS');
+  assert.doesNotMatch(html, /navigator\.geolocation/, 'ningún script de la página debe pedir el GPS');
+  // The location field itself stays: it is how the report says WHERE.
+  assert.match(html, /name="location"/);
   // The address autocomplete stays: it is how people type the location now.
   assert.ok(LOCATION_SCRIPT.includes('nominatim.openstreetmap.org/search'));
 });

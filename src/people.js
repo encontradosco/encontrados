@@ -177,6 +177,12 @@ function createStore(adapter) {
     return withParsedDetail(await adapter.getPhoto(id));
   }
 
+  // Metadata for one report photo — enough to render it, without pulling the
+  // image bytes. Returns null for a rescuer's photo, which is never rendered.
+  async function getReportPhotoMeta(id) {
+    return withParsedDetail(await adapter.reportPhotoMeta(id));
+  }
+
   // The public listing shows at most one photo per person. Both adapters order
   // by (person_id, has-geometry, id), so the first row per person wins.
   async function reportPhotoByPerson(personIds) {
@@ -247,6 +253,7 @@ function createStore(adapter) {
     setPhotoFaceDetail,
     setPhotoThumbnails,
     getPhoto,
+    getReportPhotoMeta,
     reportPhotoByPerson,
     clearPhotoContent,
     photosByFaceIds,

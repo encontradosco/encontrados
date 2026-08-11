@@ -9,6 +9,7 @@ const {
   MAX_QUERY_PHOTOS
 } = require('../facematch');
 const { esc, layout, updateCard, timeTag, facePlate, LOCATION_SCRIPT } = require('../html');
+const { findDuplicateCandidates } = require('../duplicates');
 
 // Express 4 doesn't catch async errors on its own.
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
@@ -26,13 +27,13 @@ const EMAIL_COOKIE = 'encontrados_email';
 // cookie, so read it as a fallback rather than making them type it again.
 const LEGACY_COOKIE = { encontrados_reporter: 'aqui_reporter', encontrados_email: 'aqui_email' };
 
-function readCookie(req, name) {
+function readCookie(req, name, maxLength = 120) {
   const raw = req.headers.cookie || '';
   const read = (key) => {
     const hit = raw.split(';').map((c) => c.trim()).find((c) => c.startsWith(key + '='));
     if (!hit) return '';
     try {
-      return decodeURIComponent(hit.slice(key.length + 1)).slice(0, 120);
+      return decodeURIComponent(hit.slice(key.length + 1)).slice(0, maxLength);
     } catch {
       return '';
     }
@@ -57,6 +58,106 @@ const RESCUE_PRIVACY = `<p class="privacy">🔒 <strong>La foto no se guarda.</s
 // nobody assumes data is already flowing from a source that isn't wired up yet.
 const SOURCES_NOTE = `<p class="sources-note">Fuentes de información de desaparecidos: Encontrados.co, <a href="https://colombiatebusca.com" target="_blank" rel="noopener">Colombia Te Busca</a>. Próximamente: El Espectador, El Tiempo, El País, Semana, Cambio, Medicina Legal, UNGRD, Defensa Civil.</p>`;
 
+// The possible-duplicate finding travels from POST /report to the person page
+// in a short-lived cookie rather than in the URL, and this is the whole reason
+// why: the warning asserts that two specific missing people may be the same
+// human. That claim belongs to the server, for the visitor who just reported —
+// a query string would make it a link anyone could forge and circulate, and on
+// a post-disaster site a forwarded "these two are the same person" is how a
+// real report gets written off as a duplicate and stops being searched for.
+// A cookie is not shareable; the worst a visitor can do is mislead themselves.
+const DUP_COOKIE = 'encontrados_dup';
+const DUP_TTL_SECONDS = 300;
+
+function rememberDuplicateFinding(res, finding) {
+  res.append(
+    'Set-Cookie',
+    `${DUP_COOKIE}=${encodeURIComponent(JSON.stringify(finding))}; Path=/; Max-Age=${DUP_TTL_SECONDS}; SameSite=Lax`
+  );
+}
+
+function clearDuplicateFinding(res) {
+  res.append('Set-Cookie', `${DUP_COOKIE}=; Path=/; Max-Age=0; SameSite=Lax`);
+}
+
+// Returns the finding only when it is about THIS person; anything unparseable
+// or stale is treated as absent. Shape: { p, n, f, c: [{ i, r, s }] }.
+function readDuplicateFinding(req, personId) {
+  const raw = readCookie(req, DUP_COOKIE, 2000);
+  if (!raw) return null;
+  try {
+    const finding = JSON.parse(raw);
+    if (!finding || String(finding.p) !== String(personId)) return null;
+    return {
+      sameName: !!finding.n,
+      priorPhotoId: Number(finding.f) || 0,
+      candidates: (Array.isArray(finding.c) ? finding.c : []).slice(0, 4)
+    };
+  } catch {
+    return null;
+  }
+}
+
+// Shown on the person page right after a report that looks like it may already
+// exist. It is a WARNING, not a rejection and not a decision: the report is
+// already saved and public by the time this renders, and nothing here changes
+// a record. It exists so the reporter — and anyone reading the page — can SEE
+// the other report and act on it out of band.
+//
+// Reconciling the two records (merging them, or splitting a namesake apart) is
+// deliberately absent: those are irreversible mutations of public records and
+// there is no way to prove, from a cookie, that the caller is entitled to make
+// them. That belongs behind a real authorization, not here.
+function duplicateNotice({ person, sameName, priorPhoto, candidates }) {
+  // The question only makes sense next to a face — and `facePlate` renders
+  // nothing without a thumbnail, so ask on the SAME condition it draws on.
+  // Branching on the row alone printed "compare the photos" over a blank card.
+  const showsFace = (photo) => !!(photo && photo.thumb_type);
+  const compare = (photo) =>
+    showsFace(photo)
+      ? '<p class="dup-q">Compara las fotos: si es la misma persona, escríbenos y unimos los reportes.</p>'
+      : '<p class="dup-q">Ese reporte no tiene foto para comparar.</p>';
+
+  // The record we landed on because the NAMES matched. It may be the same
+  // person (good — the reports are already together) or a namesake, which is
+  // the dangerous case: a rescuer would be shown the wrong family's contact.
+  const sameNameCard = sameName
+    ? `<article class="card dup">
+  ${facePlate(priorPhoto, person.full_name)}
+  <p>🔤 <strong>Ya había un reporte con este mismo nombre</strong>, así que este se sumó a ese registro.</p>
+  ${compare(priorPhoto)}
+  <p class="subtle">Si <strong>no</strong> es la misma persona —dos personas distintas con el mismo nombre— escríbenos a <a href="mailto:a@torrenegra.com">a@torrenegra.com</a> para separarlos: si quedan juntos, un rescatista vería los datos de la familia equivocada.</p>
+</article>`
+      : '';
+
+  // A 97% facial match and a name that merely scored 0.61 are not the same
+  // evidence, and an anxious family reads whatever it is shown as certainty.
+  // Say which signal fired, and how strong it was.
+  const why = (c) =>
+    c.reason === 'face' && c.similarity
+      ? `👤 La foto coincide en un <strong>${c.similarity}%</strong> con este otro reporte.`
+      : '🔤 El nombre se parece al de este otro reporte. Es una pista débil: revisa la foto.';
+
+  const otherCards = candidates
+    .map(
+      (c) => `<article class="card dup">
+  ${facePlate(c.photo, c.person.full_name)}
+  <h3><a href="/person/${c.person.id}">${esc(c.person.full_name)}</a></h3>
+  <p>${why(c)}</p>
+  ${c.update && c.update.location ? `<p class="loc">📍 ${esc(c.update.location)}</p>` : ''}
+  ${compare(c.photo)}
+</article>`
+    )
+    .join('');
+
+  if (!sameNameCard && !otherCards) return '';
+
+  return `<div class="warning">
+  <p>⚠️ <strong>Puede que esta persona ya estuviera reportada.</strong> Los reportes repartidos en dos fichas son un problema real: quien la rescate vería el contacto de una sola familia, y la otra nunca recibe la llamada.</p>
+</div>
+${sameNameCard}
+${otherCards}`;
+}
 const REPORT_PRIVACY = `<p class="privacy">📢 Las fotos del reporte <strong>se publican</strong> en la lista de personas desaparecidas, con los puntos de reconocimiento facial marcados sobre el rostro. Es lo que permite que un rescatista reconozca a la persona que tiene al lado. Sube solo fotos que quieras hacer públicas.</p>`;
 
 // Photos stored before thumbnails existed catch up on their own, so nobody has
@@ -114,7 +215,7 @@ function webRoutes(store, matcher) {
         : '';
       const photos = await store.reportPhotoByPerson(missing.map((p) => p.id));
       const list = missing.length
-        ? `<h2>Personas reportadas como desaparecidas (${missing.length})${reunitedNote}</h2>${SOURCES_NOTE}` +
+        ? `<h2>Reportes de desaparecidos más recientes${reunitedNote}</h2>${SOURCES_NOTE}` +
           missing
             .map((p) => {
               return `<article class="card person">
@@ -435,13 +536,18 @@ ${LOCATION_SCRIPT}`,
           );
       }
 
-      const { person } = await store.findOrCreatePerson(name);
+      const { person, created } = await store.findOrCreatePerson(name);
+
+      // Read the record's existing photo BEFORE this report's own photos are
+      // stored below — afterwards there is no way to tell, from the person id
+      // alone, which face was already there and which one just arrived. That
+      // pre-existing face is the whole point of the comparison.
+      const priorPhoto = created ? null : (await store.reportPhotoByPerson([person.id])).get(person.id);
+
       const update = await store.addUpdate(person.id, {
         status: 'missing',
         message,
         location,
-        lat: parseFloat(req.body.lat),
-        lng: parseFloat(req.body.lng),
         source: 'web',
         contact
       });
@@ -456,6 +562,41 @@ ${LOCATION_SCRIPT}`,
           updateId: update.id,
           bytes: f.buffer,
           contentType: f.mimetype
+        });
+      }
+
+      // Duplicate detection runs LAST, once the report is durable. Everything
+      // above is the family's data; everything here is a courtesy. Running the
+      // face searches first meant a slow Rekognition call — or a serverless
+      // timeout inside it — could take the whole report down with it, which is
+      // the one outcome this service must never produce. The photos are already
+      // indexed by now and would match themselves, but `excludePersonId` drops
+      // every hit on this record, so self-matching is a non-issue.
+      const candidates = await findDuplicateCandidates(store, matcher, {
+        name,
+        photos: files.map((f) => f.buffer),
+        excludePersonId: person.id
+      });
+
+      // Two different ways this report can be a duplicate:
+      //   created === false → the NAME matched, so it was appended to a record
+      //     that may or may not be the same human;
+      //   candidates        → a FACE matched a report filed under another name,
+      //     which is now a second record for one person.
+      //
+      // Either way the answer is a 303, never a page rendered onto the POST:
+      // this handler stores photos and pays for a face index per photo, so a
+      // reload of its response would manufacture the very duplicate it warns
+      // about. The finding travels in a short-lived COOKIE, not in the URL: a
+      // link is shareable and a cookie is not, and this warning asserts that
+      // two specific missing people may be the same person — a claim only the
+      // server is entitled to make, and only for the visitor who just reported.
+      if (candidates.length || !created) {
+        rememberDuplicateFinding(res, {
+          p: person.id,
+          n: created ? 0 : 1,
+          f: priorPhoto ? priorPhoto.id : 0,
+          c: candidates.map((c) => ({ i: c.person.id, r: c.reason, s: c.similarity }))
         });
       }
 
@@ -477,11 +618,59 @@ ${LOCATION_SCRIPT}`,
       // otherwise it just repeats the card right below it.
       const lastLocated = updates.find((u) => u.location);
       const locationIsBuried = lastLocated && lastLocated !== updates[0];
+
+      // Possible-duplicate warning for the visitor who just filed this report.
+      // It comes from the cookie POST /report set, never from the URL — see
+      // DUP_COOKIE above for why. Shown once, then cleared.
+      const finding = readDuplicateFinding(req, person.id);
+      let duplicates = '';
+      if (finding) {
+        clearDuplicateFinding(res);
+        const wanted = finding.candidates.filter(
+          (c) => Number.isInteger(Number(c.i)) && Number(c.i) > 0 && String(c.i) !== String(person.id)
+        );
+        const dupPhotos = await store.reportPhotoByPerson(wanted.map((c) => Number(c.i)));
+        const candidates = (
+          await Promise.all(
+            wanted.map(async (c) => {
+              const other = await store.getPerson(Number(c.i));
+              if (!other) return null;
+              return {
+                person: other,
+                photo: dupPhotos.get(Number(c.i)) || null,
+                update: await store.getLatestUpdate(Number(c.i)),
+                // A 97% facial match and a name that merely scored 0.61 are not
+                // the same evidence, and an anxious family reads this card as
+                // if they were. Keep them distinguishable.
+                reason: c.r === 'face' ? 'face' : 'name',
+                similarity: Number(c.s) || null
+              };
+            })
+          )
+        ).filter(Boolean);
+
+        let priorPhoto = null;
+        if (finding.priorPhotoId) {
+          // Metadata only — `getPhoto` would drag the full image and both
+          // thumbnails out of Postgres just to read `thumb_type`.
+          const p = await store.getReportPhotoMeta(finding.priorPhotoId);
+          // Same guard as GET /photo/:id — a rescuer's photo is never rendered.
+          if (p && p.kind === 'report' && String(p.person_id) === String(person.id)) priorPhoto = p;
+        }
+        duplicates = duplicateNotice({
+          person,
+          sameName: finding.sameName,
+          priorPhoto,
+          candidates
+        });
+      }
+
       res.send(
         layout(
           person.full_name,
           `
 ${req.query.reported ? '<p class="notice">✅ Reporte registrado. Cuando un rescatista tenga a esta persona, verá tus datos de contacto.</p>' : ''}
+${duplicates}
 <div class="person-body">
   <h1>${esc(person.full_name)}</h1>
   <div class="person-updates">
@@ -643,6 +832,30 @@ ${updates.length ? updates.map((u) => updateCard(u)).join('') : '<p class="subtl
   <li><code>contact</code>: teléfono o correo de quien debe ser avisado. Solo se muestra a un rescatista cuando hay coincidencia facial.</li>
   <li><code>photo</code>: opcional pero decisiva — es lo que permite el reconocimiento facial.</li>
 </ul>
+
+<h2>Duplicados</h2>
+<p>La respuesta <code>201</code> incluye siempre un bloque <code>duplicate</code>. <strong>Es un aviso, nunca un rechazo</strong>: el reporte queda guardado pase lo que pase.</p>
+<pre>{
+  "person_id": 42,
+  "person_created": false,
+  "duplicate": {
+    "merged_into_existing_person": true,
+    "candidates": [
+      { "person_id": 17, "full_name": "Juan Carlos Pérez",
+        "reason": "face", "similarity": 97, "name_score": null,
+        "url": "https://encontrados.co/person/17" }
+    ],
+    "warning": "Ya existía una persona con este nombre: …"
+  }
+}</pre>
+<ul>
+  <li><code>merged_into_existing_person</code>: el reporte se sumó al historial de alguien ya registrado en vez de crear una persona nueva.</li>
+  <li><code>candidates</code>: otros reportes que parecen ser la misma persona.</li>
+  <li><code>reason: "face"</code> — coincidencia facial. Trae <code>similarity</code> (% de coincidencia de rostro) y <code>name_score: null</code>. Es la señal fuerte.</li>
+  <li><code>reason: "name"</code> — nombre parecido. Trae <code>name_score</code> (0 a 1, similitud difusa de texto) y <code>similarity: null</code>. <strong>Es una señal débil y no es comparable con la facial</strong>: no las mezcles en un mismo umbral — «Juan Carlos Pérez» y «Juan Camilo Pérez» puntúan alto y son dos personas distintas.</li>
+  <li><code>warning</code>: la misma información en una frase, o <code>null</code> si no hay nada que advertir.</li>
+</ul>
+<p class="subtle">Si reportas en lote, usa <code>external_id</code> para que un reenvío del mismo registro actualice el reporte en vez de duplicarlo.</p>
 
 <h2>Consultar</h2>
 <pre>curl 'https://encontrados.co/api/people?q=jaun%20peres'
