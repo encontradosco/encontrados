@@ -9,7 +9,7 @@ const {
   backfillPhotoDerivatives,
   MAX_QUERY_PHOTOS
 } = require('../facematch');
-const { esc, layout, updateCard, timeTag, facePlate, LOCATION_SCRIPT } = require('../html');
+const { esc, layout, updateCard, timeTag, facePlate, statusBadge, LOCATION_SCRIPT } = require('../html');
 const { findDuplicateCandidates } = require('../duplicates');
 const gh = require('../github');
 
@@ -189,6 +189,16 @@ const RESCUE_PRIVACY = `<p class="privacy">🔒 <strong>La foto no se guarda.</s
 // lookup-by-identity form or an intake channel is not a source of faces — so
 // they are not promised here as "coming soon".
 const SOURCES_NOTE = `<p class="sources-note">Fuentes de información de desaparecidos: Encontrados.co y <a href="https://colombiatebusca.com" target="_blank" rel="noopener">Colombia Te Busca</a>, el registro público donde las familias publican fotos y buscan a sus desaparecidos.</p>`;
+
+// The fuzzy name matcher (typos, accents, partial names) served the API and
+// the bot from day one, but the site itself had no way to look someone up —
+// the home page shows only the most recent reports. This form is that missing
+// door. GET on purpose: the results URL is shareable and shows nothing the
+// public listing doesn't already show.
+const SEARCH_FORM = (q = '') => `<form class="search-form" method="get" action="/buscar" role="search">
+  <input type="search" name="q" value="${esc(q)}" placeholder="Busca por nombre — ej. María Fernanda López" aria-label="Nombre de la persona" required maxlength="120">
+  <button type="submit">🔍 Buscar</button>
+</form>`;
 
 // What the rescuer can DO with a match depends on what the report carries.
 // Reports typed into the app bring the family's contact; the fichas imported
@@ -532,6 +542,7 @@ function webRoutes(store, matcher) {
     <span class="btn-title">📢 Reporta desaparecido</span>
   </a>
 </section>
+${SEARCH_FORM()}
 ${list}
 `,
           {
@@ -546,6 +557,55 @@ ${list}
 
       // Page already sent: catching old photos up costs this visitor nothing.
       sweepPhotoDerivatives();
+    })
+  );
+
+  // ------------------------------------------------------------ search
+  // Same fuzzy matcher as GET /api/people, rendered as HTML. Shows only what
+  // the public listing already shows — name, status, time, report photo.
+  // Contacts and reporters never appear here; they only surface to a rescuer
+  // after a facial match.
+  router.get(
+    '/buscar',
+    wrap(async (req, res) => {
+      const q = String(req.query.q || '').trim().slice(0, 120);
+      if (!q) return res.redirect(303, '/');
+      const matches = await store.searchPeople(q, { limit: 20 });
+      const photos = await store.reportPhotoByPerson(matches.map((p) => p.id));
+      const cards = await Promise.all(
+        matches.map(async (p) => {
+          const latest = await store.getLatestUpdate(p.id);
+          const meta = latest
+            ? `${statusBadge(latest.status)} · Último reporte: ${timeTag(latest.created_at)}`
+            : 'Sin reportes todavía.';
+          return `<article class="card person">
+  <div class="person-info">
+    <h3><a href="/person/${p.id}">${esc(p.full_name)}</a></h3>
+    <p class="meta">${meta}</p>
+  </div>
+  ${facePlate(photos.get(p.id), p.full_name)}
+</article>`;
+        })
+      );
+      const results = cards.length
+        ? cards.join('')
+        : `<p class="subtle">No encontramos a nadie que se llame parecido a «${esc(q)}».</p>`;
+      res.send(
+        layout(
+          `Buscar: ${q}`,
+          `
+<h1>Resultados para «${esc(q)}»</h1>
+${SEARCH_FORM(q)}
+<p class="subtle">El buscador tolera errores de escritura, tildes y nombres incompletos.</p>
+${results}
+<p class="subtle">¿No aparece? <a href="/report">Repórtala como desaparecida</a> para que un rescatista pueda reconocerla.</p>`,
+          {
+            description:
+              'Busca por nombre entre las personas reportadas tras el terremoto en Colombia. El buscador tolera errores de escritura y nombres incompletos.',
+            path: `/buscar?q=${encodeURIComponent(q)}`
+          }
+        )
+      );
     })
   );
 

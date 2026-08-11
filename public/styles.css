@@ -150,6 +150,45 @@ h1.compact .subtle { font-family: var(--font-sans); font-weight: 400; font-size:
 .big-btn.search { background: var(--accent); color: #fff; }
 .big-btn.search:hover { background: var(--accent-dark); }
 
+/* Name search: one input, one button, comfortable under a thumb on a phone. */
+.search-form {
+  display: flex;
+  gap: 0.5rem;
+  margin: 0.4rem 0 0.6rem;
+}
+.search-form input[type="search"] {
+  flex: 1;
+  min-width: 0;
+  padding: 0.65rem 0.8rem;
+  font-size: 1rem;
+  font-family: inherit;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+}
+.search-form input[type="search"]:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-color: var(--accent);
+}
+.search-form button {
+  /* The global `button { width: 100% }` would swallow the whole row here. */
+  width: auto;
+  flex: 0 0 auto;
+  padding: 0.65rem 1rem;
+  font-size: 1rem;
+  font-weight: 600;
+  font-family: inherit;
+  color: #fff;
+  background: var(--accent);
+  border: 0;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.search-form button:hover { background: var(--accent-dark); }
+
 .card {
   background: var(--surface);
   border: 1px solid var(--border);

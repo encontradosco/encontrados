@@ -173,10 +173,14 @@ test('in direct mode, a rescuer can subscribe and is alerted when someone report
   assert.match(text, /unsubscribe\?token=/);
 });
 
-test('removed flows are gone: no public search, no family alerts', async (t) => {
+// /buscar exists again, but as a window over the PUBLIC listing only — it
+// shows nothing the home page doesn't already show (test/buscador.test.js
+// pins that no contact or reporter ever renders there). Family alerts stay
+// removed: only rescuers register avisos.
+test('removed flows are gone: no family alerts', async (t) => {
   const { server, base } = await startApp();
   t.after(() => server.close());
-  for (const path of ['/buscar', '/alerta', '/subscribe-by-name']) {
+  for (const path of ['/alerta', '/subscribe-by-name']) {
     assert.equal((await fetch(`${base}${path}`)).status, 404, path);
   }
 });

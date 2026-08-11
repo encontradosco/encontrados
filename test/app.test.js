@@ -185,11 +185,13 @@ test('families can no longer subscribe to alerts', async (t) => {
   const { server, base, store } = await startApp();
   t.after(() => server.close());
   const { person } = await store.findOrCreatePerson('Alguien Buscado');
-  for (const path of ['/buscar', '/alerta', `/person/${person.id}/subscribe`, '/subscribe-by-name']) {
+  for (const path of ['/alerta', `/person/${person.id}/subscribe`, '/subscribe-by-name']) {
     const res = await fetch(`${base}${path}`, { method: 'POST' });
     assert.equal(res.status, 404, `${path} debería no existir`);
   }
-  assert.equal((await fetch(`${base}/buscar`)).status, 404);
+  // /buscar is back as a GET-only window over the public listing (see
+  // test/buscador.test.js); it accepts no POST and registers nothing.
+  assert.equal((await fetch(`${base}/buscar`, { method: 'POST' })).status, 404);
 });
 
 // The old web form's reporter field is gone (the rescuer model asks for a
