@@ -71,3 +71,182 @@ ayuda a nadie.
 - Suscripciones por correo requieren verificación; toda alerta lleva enlace de baja.
 - El matching difuso de nombres vive en `src/names.js` + `people.js`; los umbrales
   (0.85 merge / 0.55 búsqueda) están calibrados — no los cambies sin pruebas.
+
+## Mapa del código
+
+Express 4 con HTML renderizado en el servidor a punta de template strings. No
+hay framework de frontend ni paso de build: lo que se lee es lo que corre.
+
+- `api/index.js` — entrada serverless. Construye la app una sola vez por
+  instancia y reusa la promesa; todo lo demás cuelga de ahí.
+- `src/server.js` — `createApp(adapter?, matcher?)`: estáticos, `/health`,
+  `/api`, `/webhooks`, la web, el 404 y el manejador de errores. Los dos
+  parámetros existen para las pruebas; producción lo llama sin ellos.
+- `src/store/index.js` — elige el motor. Si aparece cualquier variable de
+  conexión a Postgres (`DATABASE_URL`, `POSTGRES_URL`, `STORAGE_URL`… y de
+  hecho cualquier `*_POSTGRES_URL` que inyecte la integración) usa
+  `store/postgres.js`; si no, `store/sqlite.js`.
+- `src/store/postgres.js` y `src/store/sqlite.js` — el mismo contrato sobre dos
+  motores. El esquema se crea solo al arrancar (`CREATE TABLE IF NOT EXISTS` +
+  `ALTER TABLE … ADD COLUMN IF NOT EXISTS`): **no hay carpeta de migraciones**,
+  así que una columna nueva se agrega ahí y hay que agregarla en los dos.
+- `src/people.js` — `createStore(adapter)`, la capa de dominio encima del
+  adaptador (búsqueda, merge, suscripciones, fotos). Exporta `STATUSES` y
+  `SOURCES`.
+- `src/names.js` — normalización, clave fonética, distancia de edición y
+  `matchScore`. También `titleCaseName`, que es lo que hace legible la lista
+  pública cuando alguien escribió el nombre en mayúsculas sostenidas.
+- `src/faces.js` — el proveedor de reconocimiento: Rekognition, o `nullMatcher`
+  cuando no hay credenciales. Nunca tumba la app; degrada.
+- `src/facematch.js` — la orquestación encima del proveedor: `processPhoto`,
+  `identifyRescuedPerson` (el flujo del rescatista) y los dos barridos,
+  `backfillUnindexedPhotos` y `backfillPhotoDerivatives`.
+- `src/thumbs.js` — el recorte cuadrado sobre el rostro, con `sharp`, en dos
+  tamaños (240 para la lista, 480 para la ficha).
+- `src/html.js` — `layout()`, `esc()`, `facePlate()`, `statusBadge()` y los
+  scripts que van al navegador como texto.
+- `src/routes/web.js` — todas las páginas: `/`, `/report`, `/rescate`,
+  `/person/:id`, `/photo/:id{,/thumb,/face}`, `/verify`, `/unsubscribe`,
+  `/ideas`, `/bug`, `/privacidad`, `/terminos`, `/api-doc` y
+  `/mantenimiento` ≡ `/fotos/actualizar`. Es el archivo más grande del repo.
+- `src/routes/api.js` — el JSON: `/api/people`, `/api/updates`,
+  `/api/people/:id/subscriptions`, `/api/reindex` y los `/api/diag*`.
+- `src/routes/webhooks.js` — WhatsApp (Meta Cloud API), dormido.
+- `src/privacy.js` — `publicUpdate()` y `maskReporter()`: la única puerta por
+  la que una fila de `updates` sale a una respuesta pública.
+- `src/duplicates.js` — detección de reportes repetidos. Siempre consultiva.
+- `src/github.js` (issues de `/ideas` y `/bug`), `src/notify.js` (SendGrid y
+  WhatsApp), `src/bot.js` (motor conversacional), `src/env.js` (carga `.env`).
+
+Trampas al editar, todas con cicatriz:
+
+- Express 4 no atrapa errores de una función async. Toda ruta async va envuelta
+  en el `wrap()` que ya está definido en el archivo.
+- El HTML se arma concatenando strings: **todo dato que venga de afuera pasa por
+  `esc()`**. No hay nada más protegiéndolo.
+- `matcher.enabled` es un getter sobre un matcher que se construye perezosamente.
+  Hay que `await matcher.ensureReady()` **antes** de leerlo: en un arranque en
+  frío da `false` con Rekognition perfectamente disponible, y ese camino guarda
+  la foto sin indexar.
+- `src/env.js` es una foto congelada al cargar el módulo, pero de paso vuelca el
+  `.env` dentro de `process.env`. Lo que pueda cambiar en caliente —o lo que una
+  prueba necesite borrar para ejercitar el camino "sin configurar"— se lee de
+  `process.env`, no del snapshot. Así lo hacen `src/github.js` y `/api/diag`.
+- Nunca devuelvas una fila de `updates` cruda en una respuesta pública: pasa por
+  `publicUpdate()`. `contact` no sale nunca y `reporter` sale enmascarado.
+- `SOURCES` (lo que acepta el API) son cuatro; el `CHECK` de la tabla acepta
+  además `'rescate'`, que solo escribe el flujo web del rescatista. Un `source`
+  desconocido en `POST /api/updates` no es un error: cae a `'api'`.
+- `external_id` tiene índice único parcial y el insert es un upsert. Por eso el
+  reintento es idempotente — y por eso la fila puede terminar en una persona
+  distinta a la que devolvió `findOrCreatePerson`; hay que resolver el dueño
+  real antes de notificar (está comentado en `POST /api/updates`).
+
+## Correr y probar
+
+```bash
+npm install
+npm run dev     # SQLite en ./data/encontrados.db → http://localhost:3000
+npm test
+```
+
+`npm run dev` es `node --watch src/server.js`: sin `DATABASE_URL` levanta SQLite
+local, y sin credenciales de AWS levanta el `nullMatcher`. O sea que el flujo
+del rescatista se puede abrir, pero no va a encontrar a nadie. Para trabajar en
+matching de verdad hacen falta credenciales; para todo lo demás, no.
+
+Las pruebas son `node --test` sobre `test/**/*.test.js` — sin framework, sin
+mocks mágicos. Las convenciones, que conviene calcar al agregar una:
+
+- Cada prueba levanta su propia app con `createApp(await createSqliteAdapter(':memory:'), matcher)`
+  y la escucha en el puerto 0. Nada se comparte entre archivos.
+- El matcher es el `nullMatcher` de `src/faces.js`, o uno falso local cuando la
+  prueba sí necesita coincidencias (`test/rescue.test.js` tiene el patrón: bytes
+  idénticos = mismo rostro, y una geometría con la forma exacta que devuelve
+  Rekognition).
+- `test/helpers.js` levanta servidores HTTP de mentira para SendGrid y GitHub y
+  los enchufa por `SENDGRID_API_BASE` / `GITHUB_API_BASE`. Existen para que las
+  pruebas recorran el camino de "sí se mandó", no solo el de la falla — y para
+  que un `GITHUB_TOKEN` en el shell de alguien no abra issues de verdad.
+- CI corre lo mismo en Node 22, en cada PR y en `main` (`.github/workflows/ci.yml`).
+
+Si `npm test` muere con `ERR_DLOPEN_FAILED` o un `NODE_MODULE_VERSION` que no
+cuadra, es `better-sqlite3` compilado para otro Node: `npm rebuild better-sqlite3`
+y vuelve a correr. No es el cambio, es el entorno.
+
+## Invariantes de serverless
+
+`vercel.json` reenvía **todo** a `/api`, así que la aplicación entera es una
+sola función. De ahí salen tres reglas que no son negociables:
+
+- **El disco es de solo lectura salvo `/tmp`.** Nada se escribe al lado del
+  código. Si no hay Postgres, `store/index.js` cae a un SQLite en `/tmp` que
+  sirve para no quedar caídos, pero **no persiste entre invocaciones**;
+  `/api/diag` lo reporta como `sqlite (efímero)`.
+- **El estado en memoria es por instancia, y hay varias.** El barrido de fotos
+  del inicio (una tanda por minuto) y el tope de `/ideas` y `/bug` (10 cada 10
+  minutos) son techos blandos: N instancias son N cubetas. Están así a
+  propósito y comentados como tales — sirven para acotar una ráfaga de una
+  instancia, no para defender nada. Un contador que de verdad tenga que ser uno
+  solo va en la base de datos.
+- **Una instancia vive mucho y se congela sin avisar.** Por eso el matcher
+  reintenta inicializarse (máximo una vez por minuto) en vez de quedarse
+  apagado para siempre, y por eso todo trabajo de fondo es idempotente y
+  reanudable: si la instancia se congela a mitad del barrido, la siguiente
+  visita lo retoma sin duplicar nada.
+
+## Variables de entorno
+
+Ninguna es obligatoria para arrancar; casi todas apagan una función al faltar,
+en silencio y a propósito. `GET /api/diag` dice cuáles están puestas (por
+presencia y huella, nunca el valor).
+
+| Variable | Si falta |
+|---|---|
+| `BASE_URL` | Se deriva de `VERCEL_PROJECT_PRODUCTION_URL` / `VERCEL_URL`, o `http://localhost:3000`. Es lo que se pega en los enlaces de los correos. |
+| `PORT` | 3000. Solo aplica a `npm run dev` / `npm start`; en Vercel nadie escucha un puerto. |
+| `DATABASE_URL` (o `POSTGRES_URL`, `STORAGE_URL`, `NEON_DATABASE_URL`…) | SQLite. En local, un archivo; **en Vercel, un `/tmp` efímero que se pierde**. |
+| `DB_PATH` | `./data/encontrados.db`. Solo para SQLite local. |
+| `API_KEY` | Los `POST` del API quedan **abiertos** y `DELETE /api/people/:id` responde 503. Las lecturas son públicas siempre, con o sin llave. |
+| `SENDGRID_API_KEY` | No sale ningún correo: ni verificación de suscripción, ni alertas, ni avisos. Se le hace `trim()` porque un salto de línea pegado sin querer devuelve 401. |
+| `EMAIL_FROM` | `a@torrenegra.com`. Tiene que ser un remitente verificado en SendGrid o SendGrid responde 403. |
+| `AVISO_EMAIL` | El aviso del rescatista y el relevo a Colombia Te Busca no se mandan. Falla en silencio: quien reportó ve su página de éxito igual. |
+| `GITHUB_TOKEN` | `/ideas` y `/bug` siguen funcionando pero caen a correo a `AVISO_EMAIL`. El síntoma es un tracker vacío, que se parece mucho a que nadie escribió. |
+| `GITHUB_REPO` | `torrenegra/encontrados`. |
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | Sin reconocimiento facial: las fotos se guardan pero no se indexan ni coinciden. Las miniaturas igual se generan, centradas. `POST /api/reindex` las recoge después. |
+| `AWS_REGION` | `us-east-1`. |
+| `FACE_COLLECTION_ID` | `aqui-faces` — el nombre anterior al cambio de marca, a propósito. **No lo renombres**: apuntaría a una colección nueva y vacía y rompería el matching de todos los que ya están indexados. |
+| `FACE_MATCH_THRESHOLD` | 90. |
+| `WHATSAPP_TOKEN` / `WHATSAPP_PHONE_NUMBER_ID` | El canal queda dormido (que es su estado actual). |
+| `WHATSAPP_VERIFY_TOKEN` | `encontrados-verify`. Es el handshake del webhook de Meta. |
+
+`SENDGRID_API_BASE` y `GITHUB_API_BASE` existen solo para que las pruebas
+apunten a sus servidores falsos. No se definen en producción.
+
+## Endpoints operativos
+
+Para diagnosticar sin abrir la base de datos. Los tres primeros son de solo
+lectura y por eso no piden llave; lo que gasta cuota, indexa o le escribe a
+alguien, sí:
+
+- `GET /api/diag` — **sin llave.** Configuración y autodiagnóstico en vivo:
+  motor de base de datos y si responde, conteos, estado del matcher, fotos
+  pendientes de indexar, y presencia de cada credencial. Nunca muestra un
+  secreto: de la llave de SendGrid enseña largo y prefijo. Es lo primero que
+  hay que mirar cuando algo "no está pasando" en producción.
+- `GET /api/diag/sendgrid?email=…` — **sin llave.** Le pregunta a SendGrid por
+  supresiones (rebotes, bloqueos, spam), remitentes verificados y autenticación
+  del dominio. Un 202 al enviar solo significa "aceptado"; acá están las
+  razones por las que aun así el correo no llegó.
+- `GET /health` — un `{ ok: true }` para el monitoreo.
+- `POST /api/diag/test-email` — **con llave.** Manda un correo real y traduce
+  la respuesta de SendGrid a una frase accionable. Gasta cuota, así que no es
+  un `GET`.
+- `POST /api/maintenance/purge-test-data` — **sin llave**, y es seguro sin ella
+  porque solo puede tocar una lista fija de nombres de prueba que está en el
+  código. Cualquier otra cosa la ignora.
+- `DELETE /api/people/:id` — **con llave**, y deshabilitado (503) si no hay
+  `API_KEY`. Cumple el borrado que promete la política de privacidad. Ojo: la
+  fila se va en cascada, pero el rostro **sigue en la colección de Rekognition**.
+- `/fotos/actualizar` y `POST /api/reindex` — ver "Poner al día fotos" arriba:
+  la primera es la segura sin llave, la segunda es la que indexa y avisa.
