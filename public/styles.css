@@ -34,6 +34,11 @@ body {
 
 header {
   display: flex;
+  /* wrap: on a 375px phone the brand and the two buttons don't share a row.
+     Without this the nav squeezed next to the brand and "Reporta
+     desaparecido" broke onto two lines ON TOP of the logo — the first thing
+     every visitor saw. Wrapped, the nav simply takes its own full row. */
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
   gap: 0.5rem;
@@ -41,11 +46,18 @@ header {
   background: var(--paper);
   border-bottom: 1px solid var(--border);
 }
-header a { color: var(--ink); text-decoration: none; margin-left: 0.6rem; font-size: 0.95rem; }
+header a { color: var(--ink); text-decoration: none; font-size: 0.95rem; }
+header nav {
+  display: flex;
+  gap: 0.5rem;
+  margin-left: auto; /* right-aligned beside the brand, and when wrapped too */
+}
 header nav a {
   background: var(--accent);
   color: #fff;
-  padding: 0.4rem 0.8rem;
+  /* A finger-sized target (~40px tall), and never broken mid-label. */
+  padding: 0.55rem 0.9rem;
+  white-space: nowrap;
   border-radius: 8px;
   font-weight: 600;
 }
@@ -57,6 +69,7 @@ header nav a:hover { background: var(--accent-dark); color: #fff; }
   margin-left: 0;
   letter-spacing: -0.01em;
   color: var(--accent);
+  white-space: nowrap; /* the ❤️‍🩹 stays glued to the name */
 }
 .brand:hover { color: var(--accent-dark); }
 nav .cta {
@@ -160,8 +173,10 @@ h1.compact .subtle { font-family: var(--font-sans); font-weight: 400; font-size:
 .card h3 { margin: 0 0 0.3rem; font-size: 1.05rem; }
 .card h3 a { color: var(--ink); text-decoration: none; }
 .card h3 a:hover { color: var(--accent-dark); }
-.card .meta { color: var(--muted); font-size: 0.78rem; margin-bottom: 0; }
-.card time { color: var(--muted); font-size: 0.82rem; }
+/* 0.85rem ≈ 13.6px — the floor for the timestamps and source lines that get
+   read on one bar of signal, squinting, outdoors. */
+.card .meta { color: var(--muted); font-size: 0.85rem; margin-bottom: 0; }
+.card time { color: var(--muted); font-size: 0.85rem; }
 .card p { margin: 0.3rem 0; }
 
 /* Report photo with the face-detection geometry drawn over it. Every marker is
