@@ -1203,7 +1203,7 @@ ${updates.length ? updates.map((u) => updateCard(u)).join('') : '<p class="subtl
   // says "reporta desaparecido", somebody WILL land on the bug form and start
   // typing their sister's name and their phone number. Say so first, and put
   // the door they actually wanted right next to the warning.
-  const PUBLIC_WARNING = `<p class="privacy">⚠️ <strong>Lo que escribas aquí es público</strong> y queda publicado en GitHub para siempre. No pongas aquí el nombre de una persona desaparecida, tu teléfono ni tu correo. ¿Buscas a alguien? <a href="/report">Repórtala aquí</a> — ese formulario sí es privado.</p>`;
+  const PUBLIC_WARNING = `<p class="privacy">⚠️ <strong>Lo que escribas aquí es público</strong> y queda publicado en GitHub para siempre. No pongas aquí el nombre de una persona desaparecida, tu teléfono ni tu correo. ¿Buscas a alguien? <a href="/report">Repórtala aquí</a> — ahí tu contacto queda privado, aunque la foto de la persona se publica para que un rescatista pueda reconocerla.</p>`;
 
   function feedbackPage(kind, { body, values, status = 200 } = {}) {
     const k = FEEDBACK[kind];
