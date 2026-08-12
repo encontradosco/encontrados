@@ -3,6 +3,7 @@
 const env = require('./env');
 const { STATUS_LABEL } = require('./notify');
 const { maskReporter } = require('./privacy');
+const { isReadyToShow, toCropSpace } = require('./report-photo');
 
 const DEFAULT_DESCRIPTION =
   'Si rescataste a alguien, sube su foto y te decimos quién la está buscando; la foto se borra de inmediato. También puedes reportar a una persona desaparecida. Terremoto en Colombia, 10 de agosto.';
@@ -43,32 +44,11 @@ function pct(n) {
   return `${(Number.isFinite(v) ? v * 100 : 0).toFixed(3)}%`;
 }
 
-// The overlay coordinates are ratios of the ORIGINAL photo, and the thumbnail
-// is a crop of it — so they have to be moved into the crop's own coordinate
-// space before they land anywhere near the right pixel.
-function toCropSpace(detail) {
-  const c = detail.crop;
-  if (!c || !c.w || !c.h) return detail;
-  const mapX = (x) => (x - c.l) / c.w;
-  const mapY = (y) => (y - c.t) / c.h;
-  return {
-    ...detail,
-    box: detail.box
-      ? { l: mapX(detail.box.l), t: mapY(detail.box.t), w: detail.box.w / c.w, h: detail.box.h / c.h }
-      : null,
-    // A landmark can fall outside the crop on an off-centre face; pinning it to
-    // the edge would be a lie, so drop it.
-    points: (detail.points || [])
-      .map((p) => ({ ...p, x: mapX(p.x), y: mapY(p.y) }))
-      .filter((p) => p.x >= 0 && p.x <= 1 && p.y >= 0 && p.y <= 1)
-  };
-}
-
 // The listing loads the face thumbnail, never the full photo, and only once
 // PHOTO_SCRIPT decides the visitor's connection can afford it. Without
 // JavaScript the <noscript> copy loads normally.
 function facePlate(photo, personName, { large = false } = {}) {
-  if (!photo || !photo.thumb_type) return '';
+  if (!isReadyToShow(photo)) return '';
   const detail = photo.face_detail ? toCropSpace(photo.face_detail) : null;
   const alt = `Foto del reporte de ${personName}`;
   const src = `/photo/${photo.id}/${large ? 'face' : 'thumb'}`;

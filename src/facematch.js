@@ -21,6 +21,7 @@ const {
 } = require('./notify');
 const { storeThumbnail } = require('./thumbs');
 const { toMatchable } = require('./photo');
+const { hasGeometry, derivativeAction } = require('./report-photo');
 
 const MAX_QUERY_PHOTOS = 3;
 
@@ -505,18 +506,16 @@ async function backfillPhotoDerivatives(store, matcher, limit = 100) {
   let noFace = 0;
 
   for (const photo of pending) {
-    const hasBox = !!(photo.face_detail && photo.face_detail.box);
-    const hasThumb = !!(photo.thumb && photo.thumb.length);
     // Already thumbnailed, and only Rekognition could add what's missing.
     // Redoing the centred crop would change nothing, so leave it for later —
     // otherwise this photo looks "pending" forever while matching is down.
-    if (hasThumb && !hasBox && !matcher.enabled) {
+    if (derivativeAction(photo, matcher.enabled) === 'skip') {
       waiting++;
       continue;
     }
     try {
       const bytes = Buffer.isBuffer(photo.content) ? photo.content : Buffer.from(photo.content);
-      let geometry = hasBox ? photo.face_detail : null;
+      let geometry = hasGeometry(photo) ? photo.face_detail : null;
       if (!geometry && matcher.enabled) {
         geometry = await matcher.detectFace(bytes);
         if (geometry) geometries++;
