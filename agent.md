@@ -310,7 +310,9 @@ alguien, sí:
   un `GET`.
 - `POST /api/maintenance/purge-test-data` — **sin llave**, y es seguro sin ella
   porque solo puede tocar una lista fija de nombres de prueba que está en el
-  código. Cualquier otra cosa la ignora.
+  código. Cualquier otra cosa la ignora. Retira también las firmas faciales de
+  lo que borra, con el mismo orden que el DELETE del ARCO; el radio no cambia,
+  y cuando no hay nada que purgar no gasta ni una llamada a Rekognition.
 - `DELETE /api/people/:id` — **con llave**, y deshabilitado (503) si no hay
   `API_KEY`. Cumple el borrado que promete la política de privacidad, y se lleva
   las dos copias del rastro: la fila (en cascada) y las firmas faciales de sus
@@ -326,7 +328,7 @@ alguien, sí:
   `false` si el matcher estaba apagado. Reintentar el DELETE ya no sirve —la
   persona no existe y sus ids se fueron con ella—, así que esa respuesta y la
   línea `[facematch:olvido]` del log son el único rastro para limpiarlo a mano.
-  Ojo: `POST /api/maintenance/purge-test-data` borra por otro camino y **no**
-  retira firmas.
+  `POST /api/maintenance/purge-test-data` usa el mismo orden y también retira
+  firmas: los dos caminos de borrado se comportan igual.
 - `/fotos/actualizar` y `POST /api/reindex` — ver "Poner al día fotos" arriba:
   la primera es la segura sin llave, la segunda es la que indexa y avisa.

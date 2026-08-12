@@ -259,22 +259,39 @@ function apiRoutes(store, matcher) {
     'conteo prueba'
   ];
 
-  // POST /api/maintenance/purge-test-data — remove only the seeded test rows.
+  // POST /api/maintenance/purge-test-data — remove only the seeded test rows,
+  // y ahora también sus firmas faciales: un registro de prueba no tiene por qué
+  // dejar un dato biométrico en la colección después de que su ficha se fue.
+  //
+  // Sigue siendo segura sin llave, y el radio no cambió: solo puede tocar a
+  // quien tenga uno de los nombres de la lista fija de arriba, igual que antes.
+  // Y cuando no hay nada que purgar no gasta ni una llamada a Rekognition,
+  // porque el retiro va después del borrado y ese bucle no entra.
   router.post(
     '/maintenance/purge-test-data',
     wrap(async (req, res) => {
       const { normalize } = require('../names');
       const removed = [];
+      const firmas = { total: 0, deleted: 0, unconfirmed: [] };
       for (const name of TEST_RECORD_NAMES) {
         for (const p of await store.searchPeople(name, { limit: 20, minScore: 0.6 })) {
           const norm = normalize(p.full_name);
           // Only exact matches or the same name plus a trailing id.
           if (!TEST_RECORD_NAMES.some((t) => norm === t || norm.startsWith(t + ' '))) continue;
+          // Mismo orden que el DELETE del ARCO, y por la misma razón: los ids
+          // antes del borrado porque la cascada se los lleva, y las firmas
+          // después, cuando ya no hay ficha que dejar huérfana.
+          const faceIds = await store.faceIdsForPerson(p.id);
           const deleted = await store.deletePerson(p.id);
-          if (deleted) removed.push({ id: p.id, name: p.full_name });
+          if (!deleted) continue;
+          removed.push({ id: p.id, name: p.full_name });
+          const faces = await forgetPersonFaces(matcher, faceIds, p.id);
+          firmas.total += faces.total;
+          firmas.deleted += faces.deleted;
+          firmas.unconfirmed.push(...faces.unconfirmed);
         }
       }
-      res.json({ ok: true, removed_count: removed.length, removed });
+      res.json({ ok: true, removed_count: removed.length, removed, faces: firmas });
     })
   );
 

@@ -210,3 +210,44 @@ test('borrar una persona que no existe no toca la colección', async (t) => {
   assert.equal((await del(base, 999999)).status, 404);
   assert.deepEqual(matcher.deleteCalls, [], 'un 404 no gasta una llamada a Rekognition');
 });
+
+// La purga de datos de prueba es el OTRO camino de borrado, y borraba la ficha
+// dejando la firma en la colección. El radio no cambia —solo puede tocar los
+// nombres de la lista fija del código— pero dentro de ese radio ahora también
+// se lleva la biometría.
+test('la purga de datos de prueba también retira las firmas', async (t) => {
+  const matcher = deletingMatcher();
+  const { server, base, store } = await startApp(matcher);
+  t.after(() => server.close());
+
+  const prueba = await reportedWithFaces(store, 'Prueba Entrega Correo', ['face-prueba']);
+  const real = await reportedWithFaces(store, 'Ana Gómez', ['face-ana']);
+
+  const res = await fetch(`${base}/api/maintenance/purge-test-data`, { method: 'POST' });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+
+  assert.equal(body.removed_count, 1);
+  assert.deepEqual(matcher.deleteCalls.flat(), ['face-prueba']);
+  assert.equal(body.faces.total, 1);
+  assert.equal(body.faces.deleted, 1);
+  assert.equal((await fetch(`${base}/api/people/${prueba.id}`)).status, 404);
+
+  // Y el radio sigue siendo el mismo: una persona real no se toca, ni su ficha
+  // ni su firma. Es lo que hace segura esta ruta sin llave.
+  assert.equal((await fetch(`${base}/api/people/${real.id}`)).status, 200);
+  assert.deepEqual(await store.faceIdsForPerson(real.id), ['face-ana']);
+});
+
+test('purgar cuando no hay nada de prueba no toca la colección', async (t) => {
+  const matcher = deletingMatcher();
+  const { server, base, store } = await startApp(matcher);
+  t.after(() => server.close());
+
+  await reportedWithFaces(store, 'Ana Gómez', ['face-ana']);
+
+  const body = await (await fetch(`${base}/api/maintenance/purge-test-data`, { method: 'POST' })).json();
+  assert.equal(body.removed_count, 0);
+  // Sin llave y sin nada que purgar, no cuesta una llamada a Rekognition.
+  assert.deepEqual(matcher.deleteCalls, []);
+});
