@@ -2,7 +2,7 @@ const crypto = require('crypto');
 const express = require('express');
 const multer = require('multer');
 const env = require('../env');
-const { sendVerificationEmail, sendEmail, avisoEmail, relayEnabled } = require('../notify');
+const { sendVerificationEmail, sendEmail, avisoEmail, relayEnabled, notifySubscribers } = require('../notify');
 const {
   processPhoto,
   identifyRescuedPerson,
@@ -1091,6 +1091,18 @@ ${LOCATION_SCRIPT}`,
       });
       remember(res, REPORTER_COOKIE, phone || contact);
       remember(res, EMAIL_COOKIE, email);
+
+      // POST /api/updates and the WhatsApp bot both fan this out to anyone
+      // already subscribed to this person; this route was the one place a
+      // report could land without them hearing about it — a family whose
+      // subscription came from the bot or the API got no word when the next
+      // update on that same person arrived through the web form instead.
+      // skipAddresses covers both contact fields the form collects, so this
+      // reporter doesn't get their own report echoed back if they happen to
+      // already be subscribed under either address.
+      await notifySubscribers(store, person, update, {
+        skipAddresses: [phone, email.toLowerCase()].filter(Boolean)
+      });
 
       // Each photo is indexed so a rescuer holding this person can find the
       // report; a match also alerts any rescuer already waiting for news.
