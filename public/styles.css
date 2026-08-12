@@ -189,10 +189,50 @@ h1.compact .subtle { font-family: var(--font-sans); font-weight: 400; font-size:
   display: flex;
   align-items: center;
   gap: 0.9rem;
+  /* #65: anchor for the stretched name link — the whole card is tappable. */
+  position: relative;
+}
+.card.person:hover { border-color: var(--accent); }
+.card.person .card-link::after {
+  content: '';
+  position: absolute;
+  inset: 0;
 }
 .person-info { flex: 1; min-width: 0; }
 .person-info h3,
 .person-info p { margin: 0; }
+
+/* #65: the rescuer's action on the card itself, not at the end of the ficha.
+   Sits above the stretched link, as does the photo's "ver foto" button. */
+.card.person .card-cta,
+.card.person .face {
+  position: relative;
+  z-index: 1;
+}
+.card-cta {
+  display: inline-block;
+  margin-top: 0.5rem;
+  padding: 0.55rem 0.9rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--accent-dark);
+  background: rgba(43, 108, 176, 0.08);
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  text-decoration: none;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.card-cta:hover { background: var(--accent); color: #fff; }
+
+/* #65: on a long ficha the action was only reachable after scrolling the whole
+   timeline. Sticky keeps it in view the moment the page moves. */
+.sticky-cta {
+  position: sticky;
+  bottom: 0.8rem;
+  z-index: 5;
+  margin: 1.2rem 0 0.4rem;
+}
+.sticky-cta .big-btn { box-shadow: 0 6px 20px rgba(31, 30, 29, 0.25); }
 
 /* Person page: name and reports on the left, a bigger version of the same face
    spanning both on the right — so it starts level with the title. */
