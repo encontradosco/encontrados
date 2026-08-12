@@ -109,18 +109,40 @@ function createStore(adapter) {
   // Every subscription gets a unique token, used for the unsubscribe link and —
   // for email — the verification link. Email starts unverified; WhatsApp is
   // verified implicitly (the sender messages from their own number).
-  async function subscribe(personId, channel, address) {
+  //
+  // Ese "implícitamente" vale solo para el bot, donde el número lo entrega Meta
+  // y por lo tanto es del que escribe. Un número TECLEADO en un formulario web
+  // no trae esa prueba: puede ser el de cualquiera. Quien lo crea puede decirlo
+  // con `{ verified: false }` en vez de heredar una suposición que ahí es falsa.
+  //
+  // `needsVerification` significa una sola cosa: "hay que mandarle el correo de
+  // verificación a esta dirección". Sin el calificador de canal, un número de
+  // teléfono sin verificar pedía un correo que nunca iba a llegar a ninguna
+  // parte, y la API respondía `pending_verification: true` por algo que no
+  // estaba pendiente sino que era imposible. Un número NO se verifica por
+  // correo: se verifica cuando su dueño escribe desde él.
+  async function subscribe(personId, channel, address, { verified: asVerified } = {}) {
     const addr0 = String(address || '').trim();
     if (!addr0) throw new Error('Address is required');
     const addr = channel === 'email' ? addr0.toLowerCase() : addr0;
     const existing = await adapter.findSubscription(personId, channel, addr);
     if (existing) {
-      return { sub: existing, created: false, needsVerification: channel === 'email' && !existing.verified };
+      return {
+        sub: existing,
+        created: false,
+        needsVerification: channel === 'email' && !existing.verified
+      };
     }
     const token = crypto.randomBytes(16).toString('hex');
-    const verified = channel !== 'email';
+    const verified = asVerified === undefined ? channel !== 'email' : !!asVerified;
     const sub = await adapter.insertSubscription(personId, channel, addr, verified, token);
-    return { sub, created: true, needsVerification: !verified };
+    return { sub, created: true, needsVerification: channel === 'email' && !verified };
+  }
+
+  // El estado del reclamo de rescate, aparte de `verified` (ver el esquema).
+  // state: 'asked' | 'confirmed' | 'reported' | null
+  async function setSubscriptionRescue(id, fields) {
+    return adapter.setSubscriptionRescue(id, fields || {});
   }
 
   async function verifySubscription(token) {
@@ -143,6 +165,16 @@ function createStore(adapter) {
 
   async function getSubscriptions(personId) {
     return adapter.subscriptionsForPerson(personId);
+  }
+
+  // Todas las suscripciones de una dirección o número, sin importar a qué
+  // persona sigan. Es como se responde "¿a este número le preguntamos algo y
+  // sigue esperando respuesta?" cuando llega un mensaje entrante: la única
+  // identidad que trae es el número desde el que escribe.
+  async function subscriptionsForAddress(channel, address) {
+    const addr0 = String(address || '').trim();
+    if (!addr0) return [];
+    return adapter.subscriptionsForAddress(channel, channel === 'email' ? addr0.toLowerCase() : addr0);
   }
 
   async function getSubscriptionById(id) {
@@ -247,7 +279,9 @@ function createStore(adapter) {
     unsubscribe,
     unsubscribeAll,
     getSubscriptions,
+    subscriptionsForAddress,
     getSubscriptionById,
+    setSubscriptionRescue,
     addPhoto,
     setPhotoFaceId,
     setPhotoFaceDetail,
