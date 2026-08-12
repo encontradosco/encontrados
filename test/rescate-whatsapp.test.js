@@ -28,6 +28,11 @@ const BUZON = 'operacion@ejemplo.com';
 const PLANTILLA_PREGUNTA = 'confirmacion_rescatista_encontrados';
 const PLANTILLA_FICHA = 'ficha_fuente_rescatista_encontrados';
 const LOCALE = 'es_CO';
+// El POST del webhook exige la credencial del relevo: Meta no le habla directo,
+// le entrega a un relevo que verifica su firma y reenvía. Sin esta cabecera todo
+// entrante responde 403, que es justo lo que debe pasar en producción.
+const RELAY_SECRET = 'secreto-de-relevo-de-prueba';
+process.env.WHATSAPP_RELAY_SECRET = RELAY_SECRET;
 // Una ficha sintética con la forma exacta que exige el código.
 const FICHA = 'https://colombiatebusca.com/?person=00000000-0000-4000-8000-000000000001';
 const FICHA_2 = 'https://colombiatebusca.com/?person=00000000-0000-4000-8000-000000000002';
@@ -125,7 +130,7 @@ async function inbound(base, { from, text, button }) {
     : { from, type: 'text', text: { body: text } };
   return fetch(`${base}/webhooks/whatsapp`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-Relay-Secret': RELAY_SECRET },
     body: JSON.stringify({ entry: [{ changes: [{ value: { messages: [msg] } }] }] })
   });
 }
