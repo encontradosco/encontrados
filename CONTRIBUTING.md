@@ -134,15 +134,41 @@ real, que no rompa a nadie más, y que sea lo más pequeño que puede ser para
 lograrlo. Vas a recibir preguntas — son sobre el código, no sobre ti.
 
 `main` está protegida: todo entra por PR, con los tests en verde y la aprobación
-de uno de los tres.
+de uno de los tres. **Nadie aprueba su propio PR** — GitHub no lo permite, y
+está bien que no lo permita: todo cambio lo mira alguien distinto de quien lo
+escribió, incluido el de un mantenedor. Esa es la mitad que sostiene la de
+abajo.
 
-**Quién mergea.** Cris mergea lo rutinario — bugs, copy, refactors, docs — para
-que la revisión no se quede esperando a que un humano tenga un rato. **Se
-detiene, y pasa la decisión a una persona, en los tres casos de arriba:** lo que
-cambia comportamiento de cara al usuario, el esquema, o privacidad. El motivo es
-que en este repo **`main` es producción**: mergear *es* desplegar, y esas tres
-categorías son las que pueden hacerle daño a alguien que está buscando a un
-familiar. Es una frontera por consecuencia, no por jerarquía.
+### Qué entra con una revisión y qué espera a una persona
+
+**Con la revisión de un solo mantenedor se mergea lo rutinario:** corrección de
+errores, texto y copy, refactors que no cambian comportamiento observable, y
+documentación. Ahí lo que manda es la velocidad — un arreglo urgente en medio de
+una emergencia no debería esperar a que coincidan dos husos horarios.
+
+**Se detiene, y la decisión la toma una persona, en tres casos** — los mismos
+tres que mandan a issue:
+
+1. **Lo que cambia el comportamiento de cara al usuario** — un texto, un flujo,
+   a dónde lleva un botón.
+2. **El esquema de la base.**
+3. **Privacidad o datos personales**, incluidos la retención y el borrado.
+
+El motivo es que acá **`main` es producción**: Vercel despliega cada merge, así
+que mergear *es* desplegar. De ese hecho sale toda la regla, y no hay cómo
+adivinarlo desde afuera, por eso está escrito.
+
+El corte es **por consecuencia, no por tamaño ni por tipo de archivo**. Un PR de
+una línea que cambia lo que lee una familia espera; un refactor de trescientas
+líneas que no cambia nada observable, no. Lo que no puede hacerle daño a alguien
+que está buscando a un familiar no tiene por qué esperar a que alguien despierte.
+
+### Qué puedes esperar de nosotros
+
+Que te respondamos. Y que si tu PR cae en una de las tres categorías te lo
+digamos con esas palabras — qué falta decidir y quién lo decide — en vez de
+dejarlo callado. Un PR que espera una decisión y un PR olvidado se ven igual
+desde afuera; distinguirlos nos toca a nosotros.
 
 Si un PR se queda quieto más de un par de días, coméntalo. No es desinterés: es
 un proyecto de emergencia y la atención se mueve.
