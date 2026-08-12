@@ -218,6 +218,11 @@ async function createSqliteAdapter(dbPath) {
         )
         .all(limit);
     },
+    async subscriptionsForAddress(channel, address) {
+      return db
+        .prepare('SELECT * FROM subscriptions WHERE channel = ? AND address = ? ORDER BY id DESC')
+        .all(channel, address);
+    },
     async findSubscription(personId, channel, address) {
       return db
         .prepare('SELECT * FROM subscriptions WHERE person_id = ? AND channel = ? AND address = ?')

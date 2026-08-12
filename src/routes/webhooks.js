@@ -42,6 +42,12 @@ function webhookRoutes(store, matcher) {
           let photo = null;
           if (msg.type === 'text') {
             text = msg.text.body;
+          } else if (msg.type === 'button') {
+            // Respuesta rápida de una plantilla: Meta no la manda como texto,
+            // y sin esto un "Sí, está conmigo" pulsado en el botón se caía en
+            // silencio — que es justo la respuesta de la que depende si se
+            // entrega o no el contacto de una familia.
+            text = (msg.button && (msg.button.text || msg.button.payload)) || '';
           } else if (msg.type === 'image') {
             text = msg.image.caption || '';
             try {

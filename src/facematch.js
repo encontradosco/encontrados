@@ -10,16 +10,26 @@
 // comparison.
 
 const env = require('./env');
-const { sendEmail, sendWhatsApp, relayEnabled, relayToOperators } = require('./notify');
+const {
+  sendEmail,
+  sendWhatsApp,
+  relayEnabled,
+  relayToOperators,
+  rescueConfirmTemplate,
+  whatsappTemplateLocale
+} = require('./notify');
 const { storeThumbnail } = require('./thumbs');
 const { toMatchable } = require('./photo');
 
 const MAX_QUERY_PHOTOS = 3;
 
 // Sent to a rescuer when someone reports the person they rescued as missing.
+// `similarity` puede venir vacío: la entrega confirmada por WhatsApp ocurre
+// horas después de la coincidencia y ya nadie guarda el porcentaje.
 function matchText(matchedPerson, similarity, sub, contact) {
+  const pct = similarity == null ? '' : ` (${Math.round(similarity)}% de coincidencia facial)`;
   return [
-    `🔔 encontrados.co — alguien está buscando a la persona que rescataste (${Math.round(similarity)}% de coincidencia facial).`,
+    `🔔 encontrados.co — alguien está buscando a la persona que rescataste${pct}.`,
     `Reportada como desaparecida: *${matchedPerson.full_name}*`,
     contact ? `Contacto de quien la busca: ${contact}` : null,
     `Detalles del reporte: ${env.BASE_URL}/person/${matchedPerson.id}`,
@@ -33,12 +43,22 @@ function matchText(matchedPerson, similarity, sub, contact) {
 
 async function notifyFaceMatch(store, sub, matchedPerson, similarity, contact) {
   if (!sub) return;
-  if (!sub.verified) {
-    console.warn(`[facematch] match found but subscription ${sub.id} is unverified — no alert sent`);
-    return;
-  }
+  // Que la suscripción no esté verificada NO es motivo para tirar el aviso.
+  //
+  // El corte existe para no escribirle a una dirección que quizá no es de quien
+  // la escribió, y eso solo puede pasar en el ENVÍO directo. En modo relevo no
+  // sale nada hacia afuera: el aviso va al buzón del operador para que una
+  // persona decida. Cortar arriba de la bifurcación no protegía a un tercero,
+  // nos tapaba la información a nosotros — la coincidencia se descartaba y ni
+  // el operador se enteraba, justo en los casos que más necesitan un humano.
+  //
+  // Así que el corte baja al camino de envío, y el relevo se entera de que la
+  // suscripción no está verificada, que es un dato que cambia lo que un humano
+  // decide hacer con el aviso.
+  const unverified = !sub.verified;
   console.log(
-    `[facematch] notifying sub ${sub.id} (${sub.channel}) about ${matchedPerson.full_name} @ ${Math.round(similarity)}%`
+    `[facematch] notifying sub ${sub.id} (${sub.channel}${unverified ? ', SIN verificar' : ''}) about ${matchedPerson.full_name}` +
+      (similarity == null ? '' : ` @ ${Math.round(similarity)}%`)
   );
   const text = matchText(matchedPerson, similarity, sub, contact);
   const subject = 'Alguien busca a la persona que rescataste — encontrados.co';
@@ -48,19 +68,32 @@ async function notifyFaceMatch(store, sub, matchedPerson, similarity, contact) {
   // nadie lo haya verificado. En modo relevo no sale solo.
   if (relayEnabled()) {
     await relayToOperators({
-      reason: 'Coincidencia facial con quien dice haber rescatado a esta persona',
+      reason:
+        'Coincidencia facial con quien dice haber rescatado a esta persona' +
+        (unverified ? ' (suscripción SIN verificar)' : ''),
       channel: sub.channel,
       address: sub.address,
       subject,
       text,
       person: matchedPerson,
       details: [
-        `Coincidencia facial: ${Math.round(similarity)}%`,
+        similarity == null ? null : `Coincidencia facial: ${Math.round(similarity)}%`,
+        unverified
+          ? '⚠️ La suscripción NO está verificada: nadie ha comprobado que esa dirección o ese número sean de quien dice haber rescatado a la persona.'
+          : 'La suscripción está verificada por su titular.',
         contact
           ? `Contacto de quien la busca (no entregarlo sin verificar): ${contact}`
           : 'El reporte no trae contacto de quien la busca.'
-      ]
+      ].filter(Boolean)
     });
+    return;
+  }
+
+  // Envío directo: acá sí, nunca a una dirección que su dueño no confirmó.
+  if (unverified) {
+    console.warn(
+      `[facematch] subscription ${sub.id} is unverified — relevado, pero NUNCA enviado directo`
+    );
     return;
   }
 
@@ -69,6 +102,110 @@ async function notifyFaceMatch(store, sub, matchedPerson, similarity, contact) {
   } else if (sub.channel === 'whatsapp') {
     await sendWhatsApp(sub.address, text);
   }
+}
+
+// ------------------------------------------- primer contacto con un rescatista
+//
+// La coincidencia solo existía en la pantalla: si el rescatista cerraba la
+// página, no quedaba forma de volver a llegarle. Ahora también sale por sus
+// canales, y cada uno tiene su propia regla porque lo que prueban es distinto.
+//
+//   Correo   — puede llevar los datos. La dirección la acaba de teclear quien
+//              está viendo ese mismo contacto en pantalla, así que el mensaje
+//              no expone nada nuevo. Igual pasa por notifyFaceMatch: sin
+//              verificar va al relevo, jamás a un envío directo.
+//   WhatsApp — no puede. Un número tecleado no lo comprueba nadie, y mandarle
+//              el teléfono de una familia a un número desconocido es el vector
+//              de extorsión que este servicio no puede abrir. Sale la PLANTILLA
+//              de confirmación, sin un solo dato de la familia, y la entrega
+//              espera a que respondan.
+async function notifyRescuerOfMatches(store, { emailSub, phone, matches }) {
+  if (!matches || !matches.length) return;
+  for (const m of matches) {
+    if (emailSub) {
+      await notifyFaceMatch(store, emailSub, m.person, m.similarity, m.update && m.update.contact);
+    }
+  }
+  // Una sola pregunta, por la coincidencia más fuerte (matches viene ordenado):
+  // preguntar por dos personas distintas convierte un "sí" en una respuesta
+  // ambigua, y de esa respuesta depende a quién se le entrega un teléfono.
+  if (phone && matches[0]) {
+    const top = matches[0];
+    await requestRescueConfirmation(store, phone, top.person, top.update && top.update.contact);
+  }
+}
+
+// Paso 1 de la entrega en dos pasos: preguntar, sin entregar nada.
+//
+// La suscripción nace SIN verificar y esa fila es el estado pendiente: "a este
+// número le preguntamos por esta persona y todavía no responde". El paso 2 no
+// tiene otra forma de saber que la pregunta existió, y sin esa comprobación
+// cualquiera podría escribir "sí" y cosechar el contacto de una familia.
+async function requestRescueConfirmation(store, address, person, contact) {
+  const { sub } = await store.subscribe(person.id, 'whatsapp', address, { verified: false });
+  if (sub.verified) {
+    // Este número ya confirmó antes por esta persona: no hay nada que preguntar
+    // de nuevo, y el aviso sigue el camino de siempre.
+    await notifyFaceMatch(store, sub, person, null, contact);
+    return { asked: false, sub };
+  }
+  const name = rescueConfirmTemplate();
+  if (!name) {
+    console.warn(
+      `[facematch:rescate] WHATSAPP_TEMPLATE_RESCUE_CONFIRM sin configurar — no se le preguntó nada a ${address}`
+    );
+    return { asked: false, sub };
+  }
+  const res = await sendWhatsApp(address, null, {
+    template: { name, locale: whatsappTemplateLocale(), params: [person.full_name] }
+  });
+  if (!res.ok) {
+    console.error(`[facematch:rescate] la plantilla a ${address} no salió: ${res.error || res.status}`);
+  }
+  return { asked: !!res.ok, sub };
+}
+
+// Paso 2: alguien respondió que sí, desde su propio número.
+//
+// Esa respuesta hace dos cosas a la vez — prueba que el número le pertenece y
+// afirma que tiene a la persona consigo — y por eso reemplaza al enlace de
+// verificación que usa el correo, con algo que además confirma el hecho y no
+// solo la dirección.
+//
+// La entrega sale por notifyFaceMatch, no por un camino propio: en modo relevo
+// sigue pasando por un humano, que es la regla de la casa y no cambia porque
+// ahora tengamos una confirmación en banda.
+//
+// Devuelve null si ese número no tenía nada pendiente — ahí "sí" es una palabra
+// cualquiera y el mensaje se procesa como siempre.
+async function deliverConfirmedRescueContacts(store, address, { maxAgeHours = 72 } = {}) {
+  if (typeof store.subscriptionsForAddress !== 'function') return null;
+  const subs = await store.subscriptionsForAddress('whatsapp', address);
+  const cutoff = Date.now() - maxAgeHours * 3600 * 1000;
+  // Una pregunta de hace un mes ya no es una conversación: contestarla no
+  // prueba nada sobre dónde está hoy la persona.
+  const pending = subs.filter((s) => {
+    if (s.verified) return false;
+    const at = Date.parse(s.created_at);
+    return Number.isNaN(at) || at >= cutoff;
+  });
+  if (!pending.length) return null;
+
+  const delivered = [];
+  for (const s of pending) {
+    await store.verifySubscription(s.verify_token);
+    const person = await store.getPerson(s.person_id);
+    const latest = person ? await store.getLatestUpdate(person.id) : null;
+    // El ancla que crea /rescate no tiene reportes: no hay contacto que
+    // entregar, y su suscripción solo existe para avisos futuros.
+    if (!person || !latest) continue;
+    delivered.push(person.full_name);
+    await notifyFaceMatch(store, { ...s, verified: true }, person, null, latest.contact);
+  }
+  console.log(
+    `[facematch:rescate] confirmación de ${address}: ${pending.length} pendiente(s), ${delivered.length} entrega(s)`
+  );
+  return { confirmed: pending.length, delivered };
 }
 
 // Search the collection for a stored photo, index it, and notify on cross-kind
@@ -339,6 +476,9 @@ async function identifyRescuedPerson(store, matcher, { bytes, contentType, perso
 module.exports = {
   processPhoto,
   identifyRescuedPerson,
+  notifyRescuerOfMatches,
+  requestRescueConfirmation,
+  deliverConfirmedRescueContacts,
   backfillUnindexedPhotos,
   backfillPhotoDerivatives,
   MAX_QUERY_PHOTOS

@@ -38,5 +38,16 @@ module.exports = {
 
   WHATSAPP_TOKEN: process.env.WHATSAPP_TOKEN || '',
   WHATSAPP_PHONE_NUMBER_ID: process.env.WHATSAPP_PHONE_NUMBER_ID || '',
-  WHATSAPP_VERIFY_TOKEN: process.env.WHATSAPP_VERIFY_TOKEN || 'encontrados-verify'
+  WHATSAPP_VERIFY_TOKEN: process.env.WHATSAPP_VERIFY_TOKEN || 'encontrados-verify',
+
+  // Meta solo acepta texto libre dentro de la ventana de 24 h que abre un
+  // mensaje ENTRANTE. Todo lo que iniciemos nosotros fuera de esa ventana tiene
+  // que ser una plantilla aprobada, o la API responde 131047 y no llega nada.
+  // Un rescatista llega por la web, no por WhatsApp: su primer mensaje SIEMPRE
+  // lo iniciamos nosotros, así que sin plantilla configurada no sale.
+  //
+  // El nombre no se quema acá porque lo aprueba Meta del lado de la cuenta, y
+  // cambia sin que este código tenga nada que decir al respecto.
+  WHATSAPP_TEMPLATE_RESCUE_CONFIRM: (process.env.WHATSAPP_TEMPLATE_RESCUE_CONFIRM || '').trim(),
+  WHATSAPP_TEMPLATE_LOCALE: (process.env.WHATSAPP_TEMPLATE_LOCALE || 'es').trim()
 };

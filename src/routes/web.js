@@ -6,6 +6,7 @@ const { sendVerificationEmail, sendEmail, avisoEmail, relayEnabled } = require('
 const {
   processPhoto,
   identifyRescuedPerson,
+  notifyRescuerOfMatches,
   backfillPhotoDerivatives,
   MAX_QUERY_PHOTOS
 } = require('../facematch');
@@ -46,6 +47,27 @@ const upload = multer({
 });
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// El bot guarda el número tal como lo entrega Meta en `from`: solo dígitos, con
+// indicativo de país y sin '+'. Un número tecleado en un formulario tiene que
+// quedar en ESA misma forma o sería una dirección distinta para el mismo
+// teléfono, y ni la deduplicación ni la baja volverían a encontrarlo.
+//
+// Diez dígitos se leen como un número colombiano sin indicativo, que es como lo
+// escribe casi todo el mundo acá. Y si no parece un teléfono se ignora en
+// silencio: quien está parado al lado de una persona que acaba de rescatar no
+// se puede quedar trancado en una validación de formato — el resto del
+// formulario sigue funcionando igual.
+const PHONE_DEFAULT_COUNTRY = '57';
+function normalizePhone(raw) {
+  let digits = String(raw || '')
+    .replace(/\D/g, '')
+    .replace(/^00/, '');
+  if (!digits) return null;
+  if (digits.length === 10) digits = PHONE_DEFAULT_COUNTRY + digits;
+  // E.164: 15 dígitos como máximo, contando el indicativo.
+  return digits.length >= 11 && digits.length <= 15 ? digits : null;
+}
 const REPORTER_COOKIE = 'encontrados_reporter';
 const EMAIL_COOKIE = 'encontrados_email';
 // Renamed with the brand. Anyone who used the site before still has the old
@@ -656,6 +678,8 @@ ${
   ${RESCUE_PRIVACY}
   <label class="field-label"><span>Tu correo (opcional — te avisamos si alguien la busca después)</span>
     <input type="email" name="email" value="${esc(rememberedEmail)}" placeholder="tucorreo@ejemplo.com" autocomplete="email"></label>
+  <label class="field-label"><span>Tu WhatsApp (opcional — es por donde te llegamos más rápido)</span>
+    <input name="phone" inputmode="tel" maxlength="40" placeholder="300 123 4567" autocomplete="tel"></label>
   <button>🔎 Ver quién la está buscando</button>
 </form>
 <script>
@@ -694,6 +718,7 @@ ${rescueForm(readCookie(req, EMAIL_COOKIE))}`,
     upload.single('photo'),
     wrap(async (req, res) => {
       const email = (req.body.email || '').trim();
+      const phone = normalizePhone(req.body.phone);
       if (!req.file) {
         return res.status(400).send(
           layout(
@@ -709,14 +734,27 @@ ${rescueForm(email)}`
       const { person } = await store.findOrCreatePerson(
         `Persona rescatada ${crypto.randomBytes(3).toString('hex')}`
       );
-      let sub = null;
+      let emailSub = null;
       let pendingVerification = false;
       if (EMAIL_RE.test(email)) {
         const result = await store.subscribe(person.id, 'email', email);
-        sub = result.sub;
+        emailSub = result.sub;
         pendingVerification = result.needsVerification;
         remember(res, EMAIL_COOKIE, email);
       }
+      let waSub = null;
+      if (phone) {
+        // Nace SIN verificar, a diferencia de la que crea el bot: allá el
+        // número lo entrega Meta y por eso es de quien escribe; acá lo tecleó
+        // alguien y puede ser el de cualquiera. Lo verifica su dueño, y solo
+        // respondiendo.
+        const result = await store.subscribe(person.id, 'whatsapp', phone, { verified: false });
+        waSub = result.sub;
+      }
+      // La firma facial queda atada a una sola suscripción, así que se prefiere
+      // el correo (que es lo que ya venía pasando) y el WhatsApp toma el relevo
+      // cuando es el único canal que dejaron.
+      const sub = emailSub || waSub;
 
       const { available, unreadable, matches } = await identifyRescuedPerson(store, matcher, {
         bytes: req.file.buffer,
@@ -725,8 +763,20 @@ ${rescueForm(email)}`
         subscriptionId: sub ? sub.id : null
       });
 
-      if (sub && pendingVerification) {
-        await sendVerificationEmail(person, sub);
+      if (emailSub && pendingVerification) {
+        await sendVerificationEmail(person, emailSub);
+      }
+
+      // Hasta ahora la coincidencia solo vivía en esta pantalla: si el
+      // rescatista cerraba la página, no quedaba forma de volver a llegarle.
+      // Nunca puede tumbar la respuesta — quien está parado al lado de una
+      // persona necesita ver el resultado, pase lo que pase con los avisos.
+      if (matches && matches.length) {
+        try {
+          await notifyRescuerOfMatches(store, { emailSub, phone, matches });
+        } catch (e) {
+          console.error('[rescate] los avisos al rescatista fallaron:', e.message);
+        }
       }
 
       let body;
@@ -745,11 +795,13 @@ ${rescueForm(email)}`
         body = `<div class="error">
   <p><strong>Nadie ha reportado a esta persona como desaparecida todavía.</strong></p>
   <p>${
-    sub
+    emailSub
       ? `Te avisaremos por correo cuando alguien la busque (confirma tu correo con el enlace que te enviamos).${
           relayEnabled() ? ` ${REVIEWED_NOTE}` : ''
         }`
-      : 'Vuelve a intentarlo más tarde, o déjanos tu correo para avisarte cuando alguien la busque.'
+      : waSub
+        ? `Te avisaremos a tu WhatsApp cuando alguien la busque.${relayEnabled() ? ` ${REVIEWED_NOTE}` : ''}`
+        : 'Vuelve a intentarlo más tarde, o déjanos tu correo o tu WhatsApp para avisarte cuando alguien la busque.'
   }</p>
 </div>`;
       } else {
@@ -866,7 +918,7 @@ ${body}
         'Reporta desaparecido',
         `
 <h1 class="compact">Reporta una persona desaparecida</h1>
-<p class="subtle">Cuando un rescatista tenga a esta persona, verá tus datos de contacto para avisarte.</p>
+<p class="subtle">Cuando un rescatista tenga a esta persona, verá tus datos de contacto y se comunicará contigo directamente. Quien te avisa es esa persona: encontrados.co no te llama ni te escribe por este reporte.</p>
 <form class="stack compact" method="post" action="/report" enctype="multipart/form-data" data-resize-photos data-require-photos>
   <label class="file-label"><span>📷 Fotos de la persona * (1 a 3 — así la reconocen los rescatistas)</span>
     <input type="file" name="photos" accept="image/*" multiple required></label>
@@ -1105,7 +1157,7 @@ ${LOCATION_SCRIPT}`,
         layout(
           person.full_name,
           `
-${req.query.reported ? '<p class="notice">✅ Reporte registrado. Cuando un rescatista tenga a esta persona, verá tus datos de contacto.</p>' : ''}
+${req.query.reported ? '<p class="notice">✅ Reporte registrado. Cuando un rescatista tenga a esta persona, verá tus datos de contacto y se comunicará contigo directamente. El aviso te llega de esa persona, no de nosotros.</p>' : ''}
 ${
   req.query.fotos_ilegibles
     ? `<div class="error">

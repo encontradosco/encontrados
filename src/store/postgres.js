@@ -240,6 +240,12 @@ async function createPostgresAdapter(connectionString) {
         [limit]
       );
     },
+    async subscriptionsForAddress(channel, address) {
+      return all('SELECT * FROM subscriptions WHERE channel = $1 AND address = $2 ORDER BY id DESC', [
+        channel,
+        address
+      ]);
+    },
     async findSubscription(personId, channel, address) {
       return one(
         'SELECT * FROM subscriptions WHERE person_id = $1 AND channel = $2 AND address = $3',

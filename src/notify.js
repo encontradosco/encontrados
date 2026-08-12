@@ -159,30 +159,81 @@ async function sendEmail(to, subject, text) {
   }
 }
 
-async function sendWhatsApp(to, text) {
-  if (!env.WHATSAPP_TOKEN || !env.WHATSAPP_PHONE_NUMBER_ID) {
+// La plantilla del primer contacto. Devuelve null si no está configurada: sin
+// ella no hay forma legítima de abrir conversación, y callar es mejor que
+// mandar un texto plano que Meta va a rechazar.
+function rescueConfirmTemplate() {
+  return (
+    process.env.WHATSAPP_TEMPLATE_RESCUE_CONFIRM ||
+    env.WHATSAPP_TEMPLATE_RESCUE_CONFIRM ||
+    ''
+  ).trim();
+}
+
+function whatsappTemplateLocale() {
+  return (process.env.WHATSAPP_TEMPLATE_LOCALE || env.WHATSAPP_TEMPLATE_LOCALE || 'es').trim();
+}
+
+// Dos formas de mandar, porque Meta acepta dos cosas distintas:
+//
+//   texto plano — solo DENTRO de la ventana de servicio de 24 h que abre un
+//     mensaje entrante. Es lo que se usa para responderle a alguien que acaba
+//     de escribirnos.
+//   `template`  — obligatorio para cualquier mensaje que iniciemos nosotros
+//     fuera de esa ventana. Sin esto, un mensaje a un rescatista que llegó por
+//     la web muere en un 131047 y nadie se entera de que no llegó.
+//
+// Igual que sendEmail, lee la configuración de process.env además del snapshot
+// de env.js, para que aplicarla después de cargar el módulo (y las pruebas)
+// funcione.
+async function sendWhatsApp(to, text, { template } = {}) {
+  const token = (process.env.WHATSAPP_TOKEN || env.WHATSAPP_TOKEN || '').trim();
+  const phoneNumberId = (
+    process.env.WHATSAPP_PHONE_NUMBER_ID ||
+    env.WHATSAPP_PHONE_NUMBER_ID ||
+    ''
+  ).trim();
+  const apiBase = process.env.WHATSAPP_API_BASE || 'https://graph.facebook.com';
+  if (!token || !phoneNumberId) {
     console.log(`[notify:whatsapp skipped — not configured] to=${to}`);
     return { ok: false, error: 'WhatsApp no configurado' };
   }
+  const payload = template
+    ? {
+        messaging_product: 'whatsapp',
+        to,
+        type: 'template',
+        template: {
+          name: template.name,
+          language: { code: template.locale || whatsappTemplateLocale() },
+          components: (template.params || []).length
+            ? [
+                {
+                  type: 'body',
+                  parameters: (template.params || []).map((p) => ({ type: 'text', text: String(p) }))
+                }
+              ]
+            : []
+        }
+      }
+    : { messaging_product: 'whatsapp', to, type: 'text', text: { body: text } };
+
   const res = await fetch(
-    `https://graph.facebook.com/v20.0/${env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
+    `${apiBase}/v20.0/${phoneNumberId}/messages`,
     {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${env.WHATSAPP_TOKEN}`,
+        Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({
-        messaging_product: 'whatsapp',
-        to,
-        type: 'text',
-        text: { body: text }
-      })
+      body: JSON.stringify(payload)
     }
   );
   if (!res.ok) {
     const body = await res.text();
-    console.error(`[notify:whatsapp] FALLÓ ${res.status} to=${to} :: ${body}`);
+    console.error(
+      `[notify:whatsapp] FALLÓ ${res.status} to=${to} tipo=${template ? `plantilla:${template.name}` : 'texto'} :: ${body}`
+    );
     return { ok: false, status: res.status, error: body.slice(0, 500) };
   }
   return { ok: true, status: res.status };
@@ -267,5 +318,7 @@ module.exports = {
   relayEnabled,
   relayToOperators,
   avisoEmail,
+  rescueConfirmTemplate,
+  whatsappTemplateLocale,
   RELAY_SUBJECT_PREFIX
 };

@@ -1,8 +1,12 @@
 // Conversation engine for WhatsApp.
 // Understands Spanish (primary) and English commands; always replies in Spanish.
 const { normalize } = require('./names');
-const { notifySubscribers, STATUS_LABEL } = require('./notify');
-const { processPhoto, MAX_QUERY_PHOTOS } = require('./facematch');
+const { notifySubscribers, relayEnabled, STATUS_LABEL } = require('./notify');
+const {
+  processPhoto,
+  deliverConfirmedRescueContacts,
+  MAX_QUERY_PHOTOS
+} = require('./facematch');
 const { nullMatcher } = require('./faces');
 
 const HELP = [
@@ -55,6 +59,53 @@ function parseMessage(text) {
   return { intent: 'find', name: raw, note: '', location: '' };
 }
 
+// Respuesta afirmativa a la plantilla que pregunta si la persona está con quien
+// recibió el mensaje (paso 1 de la entrega en dos pasos, en src/facematch.js).
+//
+// No es un comando: es lo que contesta alguien que no leyó ningún instructivo.
+// Por eso se mira la frase entera y también su primera palabra ("Sí, está
+// conmigo"). `normalize` ya quitó tildes, mayúsculas y puntuación.
+const AFFIRMATIVE = [
+  'si',
+  'sii',
+  'siii',
+  'sisi',
+  'claro',
+  'correcto',
+  'confirmo',
+  'confirmado',
+  'afirmativo',
+  'esta conmigo',
+  'la tengo',
+  'lo tengo',
+  'yes',
+  'yeah',
+  'yep'
+];
+
+function isAffirmative(text) {
+  const t = normalize(text);
+  if (!t) return false;
+  return AFFIRMATIVE.includes(t) || AFFIRMATIVE.includes(t.split(' ')[0]);
+}
+
+// Lo que se le contesta a quien acaba de confirmar. En modo relevo la entrega
+// no sale sola —esa regla no cambia porque ahora haya una confirmación en
+// banda— así que no se le puede prometer un mensaje que no va a llegar.
+function confirmationReply(result) {
+  const who = result.delivered.length
+    ? `Registramos que ${result.delivered.map((n) => `*${n}*`).join(', ')} está contigo.`
+    : 'Registramos tu confirmación.';
+  return [
+    '✅ Gracias por confirmar.',
+    who,
+    relayEnabled()
+      ? 'Una persona del equipo revisa cada caso antes de entregar los datos de contacto de una familia. Te escribimos apenas quede revisado.'
+      : 'Te enviamos los datos de contacto de quien la busca en un mensaje aparte.',
+    'Si este mensaje te llegó por error, responde BAJA TODO y no te volvemos a escribir.'
+  ].join('\n');
+}
+
 function timeAgo(iso) {
   const mins = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60000));
   if (mins < 60) return `hace ${mins} min`;
@@ -78,6 +129,16 @@ async function personSummary(store, person) {
 // address for that channel). photo: optional { bytes, contentType } attached to
 // the message. Returns the reply text.
 async function handleInbound(store, { channel, from, text, photo, matcher = nullMatcher }) {
+  // Antes que cualquier comando: un "sí" solo significa algo si a este número
+  // le preguntamos algo y sigue esperando respuesta. Si no hay nada pendiente,
+  // "sí" vuelve a ser una palabra cualquiera y el mensaje se procesa como
+  // siempre — de otro modo bastaría escribir "sí" para cosechar el contacto de
+  // una familia.
+  if (channel === 'whatsapp' && isAffirmative(text)) {
+    const confirmed = await deliverConfirmedRescueContacts(store, from);
+    if (confirmed) return confirmationReply(confirmed);
+  }
+
   const parsed = parseMessage(text);
 
   if (parsed.intent === 'help' || (parsed.intent !== 'help' && !parsed.name)) {
@@ -175,4 +236,4 @@ async function handleInbound(store, { channel, from, text, photo, matcher = null
   return HELP;
 }
 
-module.exports = { handleInbound, parseMessage, HELP };
+module.exports = { handleInbound, parseMessage, isAffirmative, HELP };
