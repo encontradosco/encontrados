@@ -125,8 +125,9 @@ hay framework de frontend ni paso de build: lo que se lee es lo que corre.
 - `src/faces.js` — el proveedor de reconocimiento: Rekognition, o `nullMatcher`
   cuando no hay credenciales. Nunca tumba la app; degrada.
 - `src/facematch.js` — la orquestación encima del proveedor: `processPhoto`,
-  `identifyRescuedPerson` (el flujo del rescatista) y los dos barridos,
-  `backfillUnindexedPhotos` y `backfillPhotoDerivatives`.
+  `identifyRescuedPerson` (el flujo del rescatista), `forgetPersonFaces` (el
+  borrado) y los dos barridos, `backfillUnindexedPhotos` y
+  `backfillPhotoDerivatives`.
 - `src/thumbs.js` — el recorte cuadrado sobre el rostro, con `sharp`, en dos
   tamaños (240 para la lista, 480 para la ficha).
 - `src/html.js` — `layout()`, `esc()`, `facePlate()`, `statusBadge()` y los
@@ -150,10 +151,13 @@ Trampas al editar, todas con cicatriz:
   en el `wrap()` que ya está definido en el archivo.
 - El HTML se arma concatenando strings: **todo dato que venga de afuera pasa por
   `esc()`**. No hay nada más protegiéndolo.
-- `matcher.enabled` es un getter sobre un matcher que se construye perezosamente.
-  Hay que `await matcher.ensureReady()` **antes** de leerlo: en un arranque en
-  frío da `false` con Rekognition perfectamente disponible, y ese camino guarda
-  la foto sin indexar.
+- La disponibilidad del reconocimiento facial se pregunta con
+  `await matcher.ready()`, que inicializa y responde en la misma llamada. **No
+  hay un `enabled` que leer**, y esa ausencia es deliberada: era un getter sobre
+  un matcher construido perezosamente, así que en un arranque en frío daba
+  `false` con Rekognition perfectamente disponible — y ese camino guardaba la
+  foto sin indexar. Si alguien reintroduce una lectura síncrona,
+  `test/matcher-lifecycle.test.js` falla antes de que llegue a producción.
 - `src/env.js` es una foto congelada al cargar el módulo, pero de paso vuelca el
   `.env` dentro de `process.env`. Lo que pueda cambiar en caliente —o lo que una
   prueba necesite borrar para ejercitar el camino "sin configurar"— se lee de
@@ -275,7 +279,16 @@ alguien, sí:
   porque solo puede tocar una lista fija de nombres de prueba que está en el
   código. Cualquier otra cosa la ignora.
 - `DELETE /api/people/:id` — **con llave**, y deshabilitado (503) si no hay
-  `API_KEY`. Cumple el borrado que promete la política de privacidad. Ojo: la
-  fila se va en cascada, pero el rostro **sigue en la colección de Rekognition**.
+  `API_KEY`. Cumple el borrado que promete la política de privacidad, y se lleva
+  las dos copias del rastro: la fila (en cascada) y las firmas faciales de sus
+  fotos, que viven en la colección de Rekognition y a las que la cascada no
+  llega (`forgetPersonFaces` en `src/facematch.js`, justo antes del borrado —
+  después ya no hay de dónde leer los ids). Es **best effort a propósito**: un
+  Rekognition caído no puede bloquear un borrado ya prometido, así que la fila
+  se va igual y la respuesta trae `faces.unconfirmed` con lo que quedó, más
+  `faces.face_matching` en `false` si el matcher estaba apagado. Reintentar el
+  DELETE ya no sirve —la persona no existe y sus ids se fueron con ella—, así
+  que esa respuesta y la línea `[facematch:olvido]` del log son el único rastro
+  para limpiarlo a mano.
 - `/fotos/actualizar` y `POST /api/reindex` — ver "Poner al día fotos" arriba:
   la primera es la segura sin llave, la segunda es la que indexa y avisa.

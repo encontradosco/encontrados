@@ -49,15 +49,12 @@ async function findDuplicateCandidates(
     // leads with a group shot where no face is usable, and the portrait that
     // would have matched an existing report sits at #2.
     const usable = (photoBuffers || []).filter((b) => b && b.length);
-    // Wake the lazy matcher before reading `enabled`: POST /api/updates runs
-    // this check BEFORE processPhoto (afterwards the photo would match
-    // itself), so on a cold invocation this is the first face call of the
-    // request. Inside the try on purpose — a failed wake-up degrades to
-    // "no candidates", never a broken report.
-    if (matcher && usable.length && typeof matcher.ensureReady === 'function') {
-      await matcher.ensureReady();
-    }
-    if (matcher && matcher.enabled && usable.length) {
+    // POST /api/updates corre esta revisión ANTES de processPhoto (después la
+    // foto coincidiría consigo misma), así que en una invocación en frío esta
+    // es la primera llamada facial del request: `ready()` la inicializa de
+    // paso. Dentro del try a propósito — que falle degrada a "sin candidatos",
+    // nunca a un reporte roto.
+    if (matcher && usable.length && (await matcher.ready())) {
       for (const bytes of usable) {
         try {
           const hits = await matcher.searchByImage(bytes);

@@ -17,7 +17,9 @@ function fakeMatcher({ blindTo = [] } = {}) {
   const indexed = [];
   const searched = [];
   return {
-    enabled: true,
+    async ready() {
+      return true;
+    },
     status: 'fake',
     searched,
     async indexFace() {
@@ -150,21 +152,18 @@ test('every uploaded photo is searched, not just the first', async (t) => {
 });
 
 // POST /api/updates runs the duplicate check BEFORE the photo is indexed, so
-// on a cold invocation it is the first face call of the request — and
-// `enabled` reads false until something wakes the lazy matcher. The check must
-// wake it itself, or a bulk sync into a fresh instance silently loses every
-// duplicate advisory.
+// on a cold invocation it is the first face call of the request. La revisión
+// tiene que despertarlo ella misma, o una sincronización masiva contra una
+// instancia fresca pierde en silencio cada aviso de duplicado.
 test('the duplicate check wakes a matcher that is still asleep', async (t) => {
   const store = createStore(await createSqliteAdapter(':memory:'));
   t.after(() => store.close());
   const real = fakeMatcher();
-  let awake = false;
+  let asked = false;
   const matcher = {
-    get enabled() {
-      return awake;
-    },
-    async ensureReady() {
-      awake = true;
+    async ready() {
+      asked = true;
+      return true;
     },
     searchByImage: real.searchByImage.bind(real),
     indexFace: real.indexFace.bind(real),
@@ -221,7 +220,9 @@ test('detection never throws, whatever fails underneath', async (t) => {
   t.after(() => store.close());
 
   const brokenMatcher = {
-    enabled: true,
+    async ready() {
+      return true;
+    },
     async searchByImage() {
       throw new Error('Rekognition caído');
     }
@@ -254,7 +255,9 @@ test('detection never throws, whatever fails underneath', async (t) => {
 
 test('a report is still saved when duplicate detection is broken', async (t) => {
   const { server, base, store } = await startApp({
-    enabled: true,
+    async ready() {
+      return true;
+    },
     async searchByImage() {
       throw new Error('Rekognition caído');
     },

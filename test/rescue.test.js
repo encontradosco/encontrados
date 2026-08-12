@@ -23,7 +23,9 @@ function fakeMatcher() {
   let n = 0;
   const key = (b) => b.toString('utf8');
   return {
-    enabled: true,
+    async ready() {
+      return true;
+    },
     calls: { index: 0, search: 0, detect: 0 },
     async indexFace(bytes) {
       this.calls.index++;
@@ -67,6 +69,14 @@ async function photoBytes(label) {
   }
   return jpegCache.get(label);
 }
+
+// Reconocimiento facial apagado. Lo único que hace falta que sepa responder es
+// «no»: los llamadores se devuelven antes de tocar cualquier otro método.
+const matcherOff = () => ({
+  async ready() {
+    return false;
+  }
+});
 
 async function startApp(matcher) {
   const app = await createApp(await createSqliteAdapter(':memory:'), matcher || fakeMatcher());
@@ -351,7 +361,7 @@ test('a photo without detection geometry still gets a centred thumbnail', async 
 test('reindex backfills thumbnails and geometry for photos stored earlier', async (t) => {
   // Face matching down at upload time: the photo is stored unindexed, and gets
   // a centred thumbnail so the listing still has something to show.
-  const { server, base, store } = await startApp({ enabled: false });
+  const { server, base, store } = await startApp(matcherOff());
   t.after(() => server.close());
 
   await reportMissing(base, { name: 'Iván Salazar', contact: '300 555 4444', face: 'ivan' });
@@ -377,7 +387,7 @@ test('reindex backfills thumbnails and geometry for photos stored earlier', asyn
 });
 
 test('/fotos/actualizar brings photos up to date without an API key', async (t) => {
-  const { server, base, store } = await startApp({ enabled: false });
+  const { server, base, store } = await startApp(matcherOff());
   t.after(() => server.close());
 
   await reportMissing(base, { name: 'Iván Salazar', contact: '300 555 4444', face: 'ivan' });
@@ -405,7 +415,7 @@ test('/fotos/actualizar brings photos up to date without an API key', async (t) 
 });
 
 test('existing names get re-capitalized, without touching how they match', async (t) => {
-  const { server, base, store } = await startApp({ enabled: false });
+  const { server, base, store } = await startApp(matcherOff());
   t.after(() => server.close());
 
   // New rows are cased on insert, so write the old shape in directly — that is
@@ -437,7 +447,7 @@ test('existing names get re-capitalized, without touching how they match', async
 });
 
 test('/mantenimiento re-capitalizes names without an API key', async (t) => {
-  const { server, base, store } = await startApp({ enabled: false });
+  const { server, base, store } = await startApp(matcherOff());
   t.after(() => server.close());
 
   const { person } = await store.findOrCreatePerson('Carolina Gutierrez Vasquez');
@@ -454,7 +464,7 @@ test('/mantenimiento re-capitalizes names without an API key', async (t) => {
 });
 
 test('viewing the home page catches old photos up on its own', async (t) => {
-  const { server, base, store } = await startApp({ enabled: false });
+  const { server, base, store } = await startApp(matcherOff());
   t.after(() => server.close());
 
   await reportMissing(base, { name: 'Rosa Gil', contact: '300 555 5555', face: 'rosa' });
@@ -473,19 +483,17 @@ test('viewing the home page catches old photos up on its own', async (t) => {
 });
 
 // A cold serverless invocation used to tell the rescuer "reconocimiento facial
-// no disponible": `enabled` is a getter over the lazily-built real matcher and
-// reads false until something initializes it. The rescue flow must wake it —
-// the very first rescuer to reach a fresh instance is exactly the one who must
-// not be turned away.
+// no disponible": la bandera de disponibilidad daba false hasta que algo
+// inicializara el matcher. El flujo del rescate tiene que despertarlo — el
+// primer rescatista que llega a una instancia fresca es justo el que no puede
+// quedarse sin respuesta.
 test('a rescue photo arriving before the matcher is initialized still finds the match', async (t) => {
   const real = fakeMatcher();
-  let awake = false;
+  let asked = false;
   const lazyMatcher = {
-    get enabled() {
-      return awake;
-    },
-    async ensureReady() {
-      awake = true;
+    async ready() {
+      asked = true;
+      return true;
     },
     indexFace: real.indexFace.bind(real),
     detectFace: real.detectFace.bind(real),
