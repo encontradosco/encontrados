@@ -216,8 +216,10 @@ function matchContactBlock(m) {
   <p><strong>La están buscando, pero el reporte no trae un contacto directo.</strong> Déjanos tu número y dónde está ahora esa persona: nosotros nos encargamos de hacerle llegar el aviso a quien la busca.</p>
   <form class="stack compact" method="post" action="/rescate/aviso">
     <input type="hidden" name="person_id" value="${m.person.id}">
-    <input name="phone" required maxlength="60" inputmode="tel" placeholder="Tu teléfono (WhatsApp si tienes) *" aria-label="Teléfono del rescatista">
-    <input name="location" required maxlength="160" placeholder="¿Dónde está ahora esa persona? *" aria-label="Dónde se encuentra ahora la persona rescatada">
+    <label class="field-label"><span>Tu teléfono (WhatsApp si tienes) *</span>
+      <input name="phone" required maxlength="60" placeholder="Ej. 300 123 4567" autocomplete="tel" inputmode="tel"></label>
+    <label class="field-label"><span>¿Dónde está ahora esa persona? *</span>
+      <input name="location" required maxlength="160" placeholder="Ej. Hospital San Jorge, Pereira — urgencias"></label>
     <p class="subtle">El sitio donde está <strong>la persona que rescataste</strong>, no dónde estás tú. Ejemplo: «Hospital San Jorge, Pereira — urgencias» o «Albergue del coliseo, Quibdó».</p>
     <button class="big-btn report" type="submit">Avisar a quien la busca</button>
   </form>
@@ -646,7 +648,8 @@ ${
   <label class="file-label"><span>📷 Foto de la persona que tienes contigo *</span>
     <input type="file" name="photo" accept="image/*" required></label>
   ${RESCUE_PRIVACY}
-  <input type="email" name="email" value="${esc(rememberedEmail)}" placeholder="Tu correo (opcional — te avisamos si alguien la busca después)" aria-label="Tu correo">
+  <label class="field-label"><span>Tu correo (opcional — te avisamos si alguien la busca después)</span>
+    <input type="email" name="email" value="${esc(rememberedEmail)}" placeholder="tucorreo@ejemplo.com" autocomplete="email"></label>
   <button>🔎 Ver quién la está buscando</button>
 </form>
 <script>
@@ -862,15 +865,20 @@ ${body}
   <label class="file-label"><span>📷 Fotos de la persona * (1 a 3 — así la reconocen los rescatistas)</span>
     <input type="file" name="photos" accept="image/*" multiple required></label>
   ${REPORT_PRIVACY}
-  <input name="name" required value="${esc(req.query.name || '')}" placeholder="Nombre completo de la persona *" aria-label="Nombre completo">
-  <span id="location-field">
-    <input name="location" id="location" list="location-options" autocomplete="off" placeholder="Dónde crees que estaba *" aria-label="Ubicación" required>
-    <datalist id="location-options"></datalist>
-  </span>
-  <input name="contact_phone" inputmode="tel" maxlength="120" value="${esc(remembered.phone)}" placeholder="Tu teléfono para que te contacten" aria-label="Teléfono de contacto">
-  <input name="contact_email" inputmode="email" maxlength="120" value="${esc(remembered.email)}" placeholder="Tu correo" aria-label="Correo de contacto">
+  <label class="field-label"><span>Nombre completo de la persona *</span>
+    <input name="name" required value="${esc(req.query.name || '')}" placeholder="Ej. María Fernanda López" autocomplete="off"></label>
+  <label class="field-label"><span>Dónde crees que estaba *</span>
+    <span id="location-field">
+      <input name="location" id="location" list="location-options" autocomplete="off" placeholder="Ej. Barrio San José, Armenia" required>
+      <datalist id="location-options"></datalist>
+    </span></label>
+  <label class="field-label"><span>Tu teléfono para que te contacten</span>
+    <input name="contact_phone" inputmode="tel" autocomplete="tel" maxlength="120" value="${esc(remembered.phone)}" placeholder="Ej. 300 123 4567"></label>
+  <label class="field-label"><span>Tu correo</span>
+    <input name="contact_email" type="email" inputmode="email" autocomplete="email" maxlength="120" value="${esc(remembered.email)}" placeholder="tucorreo@ejemplo.com"></label>
   <p class="subtle contact-note">Con uno basta. Si dejas los dos, tu reporte también puede publicarse en otros registros de desaparecidos, que piden teléfono y correo.</p>
-  <textarea name="message" rows="2" placeholder="Otros datos que ayuden a reconocerla (opcional)" aria-label="Datos adicionales"></textarea>
+  <label class="field-label"><span>Otros datos que ayuden a reconocerla (opcional)</span>
+    <textarea name="message" rows="2" placeholder="Señas, ropa, edad, dónde suele estar…"></textarea></label>
   ${CTB_CHECKBOX}
   <button>Reporta desaparecido</button>
 </form>
@@ -1191,8 +1199,10 @@ ${updates.length ? updates.map((u) => updateCard(u)).join('') : '<p class="subtl
   function feedbackForm(kind, values = {}) {
     const k = FEEDBACK[kind];
     return `<form class="stack compact" method="post" action="/${kind}">
-  <input name="summary" required maxlength="${SUMMARY_MAX}" value="${esc(values.summary || '')}" placeholder="${esc(k.summaryPlaceholder)} *" aria-label="Resumen">
-  <textarea name="details" rows="5" maxlength="${DETAILS_MAX}" placeholder="${esc(k.detailsPlaceholder)}" aria-label="Detalles">${esc(values.details || '')}</textarea>
+  <label class="field-label"><span>Resumen *</span>
+    <input name="summary" required maxlength="${SUMMARY_MAX}" value="${esc(values.summary || '')}" placeholder="${esc(k.summaryPlaceholder)}"></label>
+  <label class="field-label"><span>Detalles (opcional)</span>
+    <textarea name="details" rows="5" maxlength="${DETAILS_MAX}" placeholder="${esc(k.detailsPlaceholder)}">${esc(values.details || '')}</textarea></label>
   ${HONEYPOT}
   <button>${esc(k.submit)}</button>
 </form>`;
