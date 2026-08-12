@@ -4,6 +4,7 @@ const http = require('node:http');
 const { createSqliteAdapter } = require('../src/store/sqlite');
 const { createApp } = require('../src/server');
 const { nullMatcher } = require('../src/faces');
+const { fakeWhatsApp } = require('./helpers');
 
 // Stand-in for SendGrid so we can assert a real HTTP send happened.
 async function fakeSendgrid() {
@@ -157,6 +158,56 @@ test('POST /report does not echo the update back to the reporter if they are als
   await fetch(`${app.base}/report`, { method: 'POST', body: fd, redirect: 'manual' });
 
   assert.equal(sg.received.length, 0, 'no debe recibir su propio reporte de vuelta');
+});
+
+// The same self-echo guard, but for a WhatsApp subscriber — the channel the
+// bot already protects via skipAddress. A web report typing that same number
+// as its contact_phone must not echo back to it either.
+//
+// Trade-off worth naming: this skip matches by exact address, with no proof
+// that the person filing THIS report is the same person who owns that
+// address — a household sharing one WhatsApp number could have one member
+// report while another is the actual subscriber, and that subscriber would
+// miss this one notification. Same shape of trade-off the bot already accepts
+// for skipAddress; not something this test changes.
+test('POST /report does not echo the update back to a WhatsApp subscriber sharing the contact_phone', async (t) => {
+  const wa = await fakeWhatsApp();
+  const app = await startApp();
+  t.after(() => {
+    wa.stop();
+    app.server.close();
+    delete process.env.NOTIFY_MODE;
+  });
+  process.env.NOTIFY_MODE = 'direct';
+
+  const { person } = await app.store.findOrCreatePerson('Fabián Torres Lemus');
+  // Whatsapp subscriptions auto-verify (the bot proves ownership by which
+  // number sent the message); subscribing straight through the store is the
+  // equivalent of the bot having already done that.
+  await app.store.subscribe(person.id, 'whatsapp', '573145556677');
+  wa.received.length = 0;
+
+  const fd = new FormData();
+  fd.set('name', 'Fabián Torres Lemus');
+  fd.set('location', 'Barrio Centro');
+  fd.set('contact_phone', '573145556677');
+  fd.append('photos', new File([Buffer.from('foto')], 'f.jpg', { type: 'image/jpeg' }));
+  await fetch(`${app.base}/report`, { method: 'POST', body: fd, redirect: 'manual' });
+
+  assert.equal(wa.received.length, 0, 'no debe recibir su propio reporte de vuelta por WhatsApp');
+
+  // Control: a DIFFERENT subscriber on a different number must still get it.
+  await app.store.subscribe(person.id, 'whatsapp', '573200001111');
+  wa.received.length = 0;
+  const fd2 = new FormData();
+  fd2.set('name', 'Fabián Torres Lemus');
+  fd2.set('location', 'Barrio Centro');
+  fd2.set('message', 'Fue visto de nuevo cerca del parque');
+  fd2.set('contact_phone', '573145556677');
+  fd2.append('photos', new File([Buffer.from('foto')], 'f2.jpg', { type: 'image/jpeg' }));
+  await fetch(`${app.base}/report`, { method: 'POST', body: fd2, redirect: 'manual' });
+
+  assert.equal(wa.received.length, 1, 'un suscriptor distinto sí debe recibir el aviso');
 });
 
 test('a SendGrid rejection is surfaced, not swallowed', async (t) => {
