@@ -75,11 +75,12 @@ async function startApp(matcher) {
   return { server, base: `http://127.0.0.1:${server.address().port}`, store: app.locals.store };
 }
 
-async function rescate(base, { face, email, phone }) {
+async function rescate(base, { face, email, phone, searchOnly }) {
   const fd = new FormData();
   fd.set('photo', new File([await photoBytes(face)], 'r.jpg', { type: 'image/jpeg' }));
   if (email) fd.set('email', email);
   if (phone) fd.set('phone', phone);
+  if (searchOnly) fd.set('solo_busqueda', '1');
   return fetch(`${base}/rescate`, { method: 'POST', body: fd });
 }
 
@@ -190,6 +191,103 @@ test('un número que no parece teléfono se ignora en silencio, sin trancar el f
   assert.equal(res.status, 200, 'el rescate no se puede caer por el formato de un campo opcional');
   assert.match(await res.text(), /Camila Prueba Rojas/, 'la coincidencia se muestra igual');
   assert.equal((await app.store.counts()).subscriptions, 0, 'no se guardó ninguna dirección inservible');
+});
+
+// ------------------------------------------------------ modo solo búsqueda
+
+test('la casilla de solo búsqueda viene apagada y dice lo que cuesta antes de marcarla', async (t) => {
+  const app = await startApp();
+  t.after(() => app.server.close());
+
+  const html = await (await fetch(`${app.base}/rescate`)).text();
+  assert.match(html, /name="solo_busqueda"/);
+  // Apagada: sin `checked` en ninguna parte de esa casilla.
+  assert.doesNotMatch(html, /name="solo_busqueda"[^>]*checked/);
+  // Y el costo se lee ahí mismo, no después de haber consultado.
+  assert.match(html, /no vamos a poder avisarte si alguien reporta a esta persona/i);
+});
+
+test('solo búsqueda: encuentra la coincidencia y no deja ancla, ni foto, ni firma indexada', async (t) => {
+  const matcher = fakeMatcher();
+  let indexadas = 0;
+  const indexFace = matcher.indexFace.bind(matcher);
+  matcher.indexFace = async (...args) => {
+    indexadas++;
+    return indexFace(...args);
+  };
+  const app = await startApp(matcher);
+  t.after(() => app.server.close());
+
+  await reportar(app.base, { name: 'Rosa Elvira Prueba', contact: '300 000 0000', face: 'nn' });
+  const antes = await app.store.counts();
+  indexadas = 0;
+
+  const html = await (
+    await rescate(app.base, { face: 'nn', email: 'rescatista@ejemplo.com', phone: '311 222 3344', searchOnly: true })
+  ).text();
+
+  // La consulta sirve: la coincidencia se ve y el contacto también.
+  assert.match(html, /Rosa Elvira Prueba/);
+  assert.match(html, /300 000 0000/);
+
+  const despues = await app.store.counts();
+  assert.equal(despues.people, antes.people, 'no se crea la persona ancla');
+  assert.equal(despues.photos, antes.photos, 'no queda fila de foto');
+  assert.equal(despues.subscriptions, 0, 'ni correo ni WhatsApp dejan suscripción');
+  assert.equal(indexadas, 0, 'nada nuevo entra a la colección facial');
+  // Y se lo decimos, para que nadie crea que quedó esperando un aviso.
+  assert.match(html, /no vamos a poder avisarte/i);
+});
+
+test('solo búsqueda sin coincidencias dice que no quedó nada esperando', async (t) => {
+  const app = await startApp();
+  t.after(() => app.server.close());
+
+  const html = await (
+    await rescate(app.base, { face: 'desconocido', email: 'rescatista@ejemplo.com', searchOnly: true })
+  ).text();
+
+  assert.match(html, /Nadie ha reportado a esta persona/);
+  assert.match(html, /no vamos a poder avisarte/i);
+  assert.doesNotMatch(html, /Te avisaremos/, 'no se puede prometer un aviso que no va a existir');
+  assert.equal((await app.store.counts()).subscriptions, 0);
+});
+
+test('solo búsqueda no manda nada por WhatsApp ni por correo', async (t) => {
+  const wa = await fakeWhatsApp();
+  const sg = await fakeSendgrid();
+  process.env.AVISO_EMAIL = BUZON;
+  process.env.WHATSAPP_TEMPLATE_RESCUE_CONFIRM = PLANTILLA;
+  const app = await startApp();
+  t.after(() => {
+    wa.stop();
+    sg.stop();
+    app.server.close();
+    delete process.env.AVISO_EMAIL;
+    delete process.env.WHATSAPP_TEMPLATE_RESCUE_CONFIRM;
+  });
+
+  await reportar(app.base, { name: 'Rosa Elvira Prueba', contact: '300 000 0000', face: 'nn' });
+  sg.received.length = 0;
+
+  await rescate(app.base, { face: 'nn', email: 'rescatista@ejemplo.com', phone: '311 222 3344', searchOnly: true });
+
+  assert.equal(wa.received.length, 0, 'la plantilla también deja una fila: en este modo no sale');
+  assert.equal(sg.received.length, 0, 'sin suscripción no hay verificación ni aviso que relevar');
+});
+
+test('la consulta normal sigue indexando: el modo efímero es opt-in, no el nuevo default', async (t) => {
+  const app = await startApp();
+  t.after(() => app.server.close());
+
+  await reportar(app.base, { name: 'Rosa Elvira Prueba', contact: '300 000 0000', face: 'nn' });
+  const antes = await app.store.counts();
+
+  await rescate(app.base, { face: 'nn', email: 'rescatista@ejemplo.com' });
+
+  const despues = await app.store.counts();
+  assert.equal(despues.photos_query, antes.photos_query + 1, 'sin marcar la casilla, la firma se sigue guardando');
+  assert.equal(despues.subscriptions, 1);
 });
 
 // -------------------------------------------------- primer contacto por WhatsApp

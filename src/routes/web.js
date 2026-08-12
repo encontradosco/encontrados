@@ -203,6 +203,18 @@ async function relayToColombiaTeBusca({ person, update, photos, contact, locatio
 
 const RESCUE_PRIVACY = `<p class="privacy">🔒 <strong>La foto no se guarda.</strong> Se compara al instante contra las fotos de las personas reportadas como desaparecidas y se borra de inmediato: no queda almacenada en ningún servidor. Solo conservamos su <em>firma facial</em> (un código que no permite reconstruir la imagen) para poder avisarte si alguien empieza a buscar a esta persona.</p>`;
 
+// Opción de consulta efímera. Va APAGADA y el costo se lee ANTES de marcarla,
+// porque lo que quita no es un detalle: sin firma facial indexada, esta
+// consulta no puede recibir después el aviso de que alguien reportó a esa
+// persona — que es lo más útil que hace la app para quien la está buscando.
+// Escribirlo suave sería venderle privacidad a alguien que en realidad está
+// renunciando al aviso sin darse cuenta.
+const SEARCH_ONLY_CHECKBOX = `<label class="share-check">
+    <input type="checkbox" name="solo_busqueda" value="1">
+    Solo consultar ahora: no guarden nada de esta foto
+  </label>
+  <p class="subtle share-note"><strong>Ojo con lo que esto implica:</strong> no guardamos la firma facial, así que <strong>no vamos a poder avisarte si alguien reporta a esta persona más adelante</strong>. Esta consulta sirve solo para lo que veas ahora en pantalla, y el correo y el WhatsApp de arriba quedan sin efecto. Si la dejas sin marcar, la firma queda guardada y podemos avisarte.</p>`;
+
 // One small line under the listing heading. Kept honest — the data flows from
 // Encontrados.co's own reports and from Colombia Te Busca, the public photo
 // registry families use to publish and search (and to which the Red Cross
@@ -680,6 +692,7 @@ ${
     <input type="email" name="email" value="${esc(rememberedEmail)}" placeholder="tucorreo@ejemplo.com" autocomplete="email"></label>
   <label class="field-label"><span>Tu WhatsApp (opcional — es por donde te llegamos más rápido)</span>
     <input name="phone" inputmode="tel" maxlength="40" placeholder="300 123 4567" autocomplete="tel"></label>
+  ${SEARCH_ONLY_CHECKBOX}
   <button>🔎 Ver quién la está buscando</button>
 </form>
 <script>
@@ -719,6 +732,8 @@ ${rescueForm(readCookie(req, EMAIL_COOKIE))}`,
     wrap(async (req, res) => {
       const email = (req.body.email || '').trim();
       const phone = normalizePhone(req.body.phone);
+      // Opt-in por consulta, nunca por tipo de usuario ni por omisión.
+      const searchOnly = !!req.body.solo_busqueda;
       if (!req.file) {
         return res.status(400).send(
           layout(
@@ -731,19 +746,26 @@ ${rescueForm(email)}`
       }
 
       // An anchor person for this rescue, so an email alert can be attached.
-      const { person } = await store.findOrCreatePerson(
-        `Persona rescatada ${crypto.randomBytes(3).toString('hex')}`
-      );
+      // En modo solo-búsqueda no se crea: no hay firma que sostener, así que no
+      // habría ningún aviso futuro que colgarle, y una fila que no sirve para
+      // nada es exactamente lo que esta opción viene a no dejar.
+      const person = searchOnly
+        ? null
+        : (
+            await store.findOrCreatePerson(
+              `Persona rescatada ${crypto.randomBytes(3).toString('hex')}`
+            )
+          ).person;
       let emailSub = null;
       let pendingVerification = false;
-      if (EMAIL_RE.test(email)) {
+      if (person && EMAIL_RE.test(email)) {
         const result = await store.subscribe(person.id, 'email', email);
         emailSub = result.sub;
         pendingVerification = result.needsVerification;
         remember(res, EMAIL_COOKIE, email);
       }
       let waSub = null;
-      if (phone) {
+      if (person && phone) {
         // Nace SIN verificar, a diferencia de la que crea el bot: allá el
         // número lo entrega Meta y por eso es de quien escribe; acá lo tecleó
         // alguien y puede ser el de cualquiera. Lo verifica su dueño, y solo
@@ -759,8 +781,9 @@ ${rescueForm(email)}`
       const { available, unreadable, matches } = await identifyRescuedPerson(store, matcher, {
         bytes: req.file.buffer,
         contentType: req.file.mimetype,
-        personId: person.id,
-        subscriptionId: sub ? sub.id : null
+        personId: person ? person.id : null,
+        subscriptionId: sub ? sub.id : null,
+        searchOnly
       });
 
       if (emailSub && pendingVerification) {
@@ -771,7 +794,9 @@ ${rescueForm(email)}`
       // rescatista cerraba la página, no quedaba forma de volver a llegarle.
       // Nunca puede tumbar la respuesta — quien está parado al lado de una
       // persona necesita ver el resultado, pase lo que pase con los avisos.
-      if (matches && matches.length) {
+      // En modo solo-búsqueda no sale ninguno: la confirmación por WhatsApp
+      // también deja una fila, y acá lo que se prometió es no dejar nada.
+      if (!searchOnly && matches && matches.length) {
         try {
           await notifyRescuerOfMatches(store, { emailSub, phone, matches });
         } catch (e) {
@@ -795,13 +820,15 @@ ${rescueForm(email)}`
         body = `<div class="error">
   <p><strong>Nadie ha reportado a esta persona como desaparecida todavía.</strong></p>
   <p>${
-    emailSub
-      ? `Te avisaremos por correo cuando alguien la busque (confirma tu correo con el enlace que te enviamos).${
-          relayEnabled() ? ` ${REVIEWED_NOTE}` : ''
-        }`
-      : waSub
-        ? `Te avisaremos a tu WhatsApp cuando alguien la busque.${relayEnabled() ? ` ${REVIEWED_NOTE}` : ''}`
-        : 'Vuelve a intentarlo más tarde, o déjanos tu correo o tu WhatsApp para avisarte cuando alguien la busque.'
+    searchOnly
+      ? 'Pediste que no guardáramos nada, así que no quedó ninguna firma facial: <strong>no vamos a poder avisarte</strong> si alguien la reporta más adelante. Vuelve a consultar cuando quieras, o repite la consulta sin marcar esa casilla para que sí podamos avisarte.'
+      : emailSub
+        ? `Te avisaremos por correo cuando alguien la busque (confirma tu correo con el enlace que te enviamos).${
+            relayEnabled() ? ` ${REVIEWED_NOTE}` : ''
+          }`
+        : waSub
+          ? `Te avisaremos a tu WhatsApp cuando alguien la busque.${relayEnabled() ? ` ${REVIEWED_NOTE}` : ''}`
+          : 'Vuelve a intentarlo más tarde, o déjanos tu correo o tu WhatsApp para avisarte cuando alguien la busque.'
   }</p>
 </div>`;
       } else {
@@ -825,7 +852,11 @@ ${rescueForm(email)}`
           'Resultado',
           `<h1 class="compact">Resultado</h1>
 ${body}
-<p class="notice">🔒 La foto que subiste ya fue borrada. No quedó almacenada en ningún servidor.</p>
+<p class="notice">🔒 La foto que subiste ya fue borrada. No quedó almacenada en ningún servidor.${
+            searchOnly
+              ? ' Tampoco guardamos su firma facial, como pediste: de esta consulta no quedó nada, y por eso no vamos a poder avisarte si alguien reporta a esta persona después.'
+              : ''
+          }</p>
 <p><a class="big-btn report" href="/rescate">🔍 Consultar otra persona</a></p>`
         )
       );

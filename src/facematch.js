@@ -406,7 +406,21 @@ async function backfillPhotoDerivatives(store, matcher, limit = 100) {
 // The rescuer flow: identify who is looking for the person in front of you.
 // The photo is NEVER stored — it is compared, its face signature is indexed so
 // future reports can reach this rescuer, and the bytes are dropped immediately.
-async function identifyRescuedPerson(store, matcher, { bytes, contentType, personId, subscriptionId }) {
+//
+// `searchOnly` apaga esa indexación: compara contra la colección, devuelve las
+// coincidencias y NO deja nada — ni firma facial en Rekognition, ni fila de
+// foto, ni la persona ancla que las sostiene.
+//
+// El costo es exactamente la funcionalidad más valiosa: sin firma indexada, esa
+// consulta NUNCA va a recibir el aviso posterior de "alguien reportó a esta
+// persona". La opción que da más privacidad quita la que más sirve, y por eso
+// no es el comportamiento por omisión de nadie: es una casilla que alguien
+// marca a sabiendas, con el costo escrito al lado.
+async function identifyRescuedPerson(
+  store,
+  matcher,
+  { bytes, contentType, personId, subscriptionId, searchOnly = false }
+) {
   // Same cold-start trap as processPhoto: `enabled` is a getter over the
   // lazily-built real matcher and reads false on a fresh serverless invocation
   // — which would tell the very first rescuer to reach this instance that the
@@ -435,23 +449,28 @@ async function identifyRescuedPerson(store, matcher, { bytes, contentType, perso
   const bySimilarity = new Map(matches.map((m) => [m.faceId, m.similarity]));
 
   // Index the face so a later missing-person report can alert this rescuer,
-  // then immediately drop the image bytes.
-  const photo = await store.addPhoto({
-    personId,
-    kind: 'query',
-    subscriptionId,
-    content: Buffer.alloc(0),
-    contentType: usable.contentType
-  });
-  try {
-    const { faceId } = await matcher.indexFace(usable.bytes, photo.id);
-    if (faceId) await store.setPhotoFaceId(photo.id, faceId);
-    // No geometry is stored for a rescuer's photo: the image is dropped on the
-    // next line, so there would be nothing to draw it over.
-  } catch (e) {
-    console.error('[facematch:rescue] index failed:', e.message);
+  // then immediately drop the image bytes. En modo solo-búsqueda esto es
+  // justamente lo que no pasa: la consulta se resuelve con lo que ya está
+  // indexado y no agrega nada a la colección.
+  let photo = null;
+  if (!searchOnly) {
+    photo = await store.addPhoto({
+      personId,
+      kind: 'query',
+      subscriptionId,
+      content: Buffer.alloc(0),
+      contentType: usable.contentType
+    });
+    try {
+      const { faceId } = await matcher.indexFace(usable.bytes, photo.id);
+      if (faceId) await store.setPhotoFaceId(photo.id, faceId);
+      // No geometry is stored for a rescuer's photo: the image is dropped on
+      // the next line, so there would be nothing to draw it over.
+    } catch (e) {
+      console.error('[facematch:rescue] index failed:', e.message);
+    }
+    await store.clearPhotoContent(photo.id);
   }
-  await store.clearPhotoContent(photo.id);
 
   // Which missing-person reports does this face correspond to?
   const found = [];
@@ -470,7 +489,7 @@ async function identifyRescuedPerson(store, matcher, { bytes, contentType, perso
     });
   }
   found.sort((a, b) => b.similarity - a.similarity);
-  return { available: true, matches: found, photoId: photo.id };
+  return { available: true, matches: found, photoId: photo ? photo.id : null, indexed: !!photo };
 }
 
 module.exports = {
