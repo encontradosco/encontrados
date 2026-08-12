@@ -337,19 +337,23 @@ async function sendVerificationEmail(person, sub) {
 }
 
 // Notify all VERIFIED subscribers of a person about a new update.
-// skipAddress: don't echo the update back to whoever reported it.
+// skipAddress / skipAddresses: don't echo the update back to whoever reported
+// it. Two forms because a WhatsApp reporter has exactly one address to skip
+// (their own number), while a web report can carry a phone AND an email —
+// either one might already be a subscriber's address.
 // Every alert carries that subscriber's personal unsubscribe link.
 //
 // En modo relevo cada aviso se convierte en un correo al operador — uno por
 // destinatario previsto, porque cada uno es una decisión distinta de a quién
 // se le entrega qué.
-async function notifySubscribers(store, person, update, { skipAddress } = {}) {
+async function notifySubscribers(store, person, update, { skipAddress, skipAddresses } = {}) {
+  const skip = new Set([skipAddress, ...(skipAddresses || [])].filter(Boolean));
   const subs = await store.getSubscriptions(person.id);
   const baseText = `🔔 Actualización en encontrados.co:\n${updateText(person, update)}`;
   const subject = `Actualización sobre ${person.full_name} — encontrados.co`;
   const relay = relayEnabled();
   const jobs = subs
-    .filter((s) => s.verified && !(skipAddress && s.address === skipAddress))
+    .filter((s) => s.verified && !skip.has(s.address))
     .map((s) => {
       if (s.channel !== 'email' && s.channel !== 'whatsapp') return Promise.resolve(false);
       const text = `${baseText}\n\nPara dejar de recibir estos avisos: ${unsubscribeLink(s)}`;

@@ -88,6 +88,77 @@ test('in direct mode, update alerts reach verified subscribers before the respon
   assert.match(sg.received[0].body.content[0].value, /unsubscribe\?token=/);
 });
 
+// #87: POST /api/updates and the WhatsApp bot both fan a new update out to
+// anyone already subscribed to that person; POST /report (the web form) used
+// to skip this entirely, so whether a family got word of a follow-up report
+// depended on which channel it happened to arrive through.
+test('POST /report notifies an existing subscriber, same as POST /api/updates', async (t) => {
+  const sg = await fakeSendgrid();
+  const app = await startApp();
+  t.after(() => {
+    sg.server.close();
+    app.server.close();
+    delete process.env.SENDGRID_API_KEY;
+    delete process.env.SENDGRID_API_BASE;
+  });
+  process.env.SENDGRID_API_KEY = 'test-key';
+  process.env.SENDGRID_API_BASE = sg.base;
+  process.env.NOTIFY_MODE = 'direct';
+
+  const { person } = await app.store.findOrCreatePerson('Rosa Elena Duarte');
+  const { sub } = await app.store.subscribe(person.id, 'email', 'hermano@ejemplo.com');
+  await app.store.verifySubscription(sub.verify_token);
+  sg.received.length = 0;
+
+  const fd = new FormData();
+  fd.set('name', 'Rosa Elena Duarte');
+  fd.set('location', 'Barrio Centro');
+  fd.set('contact_phone', '300 111 2222');
+  fd.append('photos', new File([Buffer.from('foto')], 'f.jpg', { type: 'image/jpeg' }));
+  const res = await fetch(`${app.base}/report`, { method: 'POST', body: fd, redirect: 'manual' });
+  assert.equal(res.status, 303, 'el reporte se guarda y redirige, igual que siempre');
+
+  assert.equal(sg.received.length, 1, 'el suscriptor existente debe enterarse de este reporte también');
+  assert.match(sg.received[0].body.content[0].value, /DESAPARECID/i);
+
+  delete process.env.NOTIFY_MODE;
+});
+
+// A web reporter typing their own phone/email into the form must not get their
+// own report echoed back just because they happen to already be subscribed
+// under that same address — same courtesy the WhatsApp bot already has via
+// skipAddress.
+test('POST /report does not echo the update back to the reporter if they are also a subscriber', async (t) => {
+  const sg = await fakeSendgrid();
+  const app = await startApp();
+  t.after(() => {
+    sg.server.close();
+    app.server.close();
+    delete process.env.SENDGRID_API_KEY;
+    delete process.env.SENDGRID_API_BASE;
+    delete process.env.NOTIFY_MODE;
+  });
+  process.env.SENDGRID_API_KEY = 'test-key';
+  process.env.SENDGRID_API_BASE = sg.base;
+  process.env.NOTIFY_MODE = 'direct';
+
+  const { person } = await app.store.findOrCreatePerson('Iván Mauricio Salas');
+  const { sub } = await app.store.subscribe(person.id, 'email', 'reportante@ejemplo.com');
+  await app.store.verifySubscription(sub.verify_token);
+  sg.received.length = 0;
+
+  const fd = new FormData();
+  fd.set('name', 'Iván Mauricio Salas');
+  fd.set('location', 'Barrio Centro');
+  // Same address as the subscription, on purpose, and mixed case — the store
+  // lowercases email on subscribe, so the skip has to match case-insensitively.
+  fd.set('contact_email', 'Reportante@Ejemplo.com');
+  fd.append('photos', new File([Buffer.from('foto')], 'f.jpg', { type: 'image/jpeg' }));
+  await fetch(`${app.base}/report`, { method: 'POST', body: fd, redirect: 'manual' });
+
+  assert.equal(sg.received.length, 0, 'no debe recibir su propio reporte de vuelta');
+});
+
 test('a SendGrid rejection is surfaced, not swallowed', async (t) => {
   const server = http.createServer((req, res) => {
     res.writeHead(403, { 'Content-Type': 'application/json' });
