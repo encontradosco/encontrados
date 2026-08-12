@@ -81,3 +81,128 @@ test('POST /api/diag/test-email requires the API key and sends when authorized',
   const body = await okAuth.json();
   assert.ok('test' in body.email);
 });
+
+// ---- POST /webhooks/whatsapp: credencial del relevo ----
+//
+// El POST escribe en la base (crea personas, updates y suscripciones), así que
+// exige la credencial del relevo. El GET del handshake es una lectura y sigue
+// abierto.
+
+const RELAY_SECRET = 'secreto-de-relevo-de-prueba';
+
+function inboundBody(name) {
+  return JSON.stringify({
+    entry: [
+      {
+        changes: [
+          {
+            value: {
+              messages: [{ type: 'text', from: '573000000000', text: { body: `BIEN ${name}` } }]
+            }
+          }
+        ]
+      }
+    ]
+  });
+}
+
+test('POST /webhooks/whatsapp rejects a request without the relay credential', async (t) => {
+  const { server, base } = await startApp();
+  t.after(() => {
+    server.close();
+    delete process.env.WHATSAPP_RELAY_SECRET;
+  });
+  process.env.WHATSAPP_RELAY_SECRET = RELAY_SECRET;
+
+  const res = await fetch(`${base}/webhooks/whatsapp`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: inboundBody('Camila Restrepo')
+  });
+  assert.equal(res.status, 403);
+
+  // And nothing reached the database.
+  await new Promise((r) => setTimeout(r, 150));
+  const { results } = await (await fetch(`${base}/api/people?q=camila restrepo`)).json();
+  assert.equal(results.length, 0);
+});
+
+test('POST /webhooks/whatsapp rejects a wrong relay credential', async (t) => {
+  const { server, base } = await startApp();
+  t.after(() => {
+    server.close();
+    delete process.env.WHATSAPP_RELAY_SECRET;
+  });
+  process.env.WHATSAPP_RELAY_SECRET = RELAY_SECRET;
+
+  const res = await fetch(`${base}/webhooks/whatsapp`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Relay-Secret': 'credencial-equivocada' },
+    body: inboundBody('Camila Restrepo')
+  });
+  assert.equal(res.status, 403);
+
+  await new Promise((r) => setTimeout(r, 150));
+  const { results } = await (await fetch(`${base}/api/people?q=camila restrepo`)).json();
+  assert.equal(results.length, 0);
+});
+
+test('POST /webhooks/whatsapp accepts the relay credential and processes the message', async (t) => {
+  const { server, base } = await startApp();
+  t.after(() => {
+    server.close();
+    delete process.env.WHATSAPP_RELAY_SECRET;
+  });
+  process.env.WHATSAPP_RELAY_SECRET = RELAY_SECRET;
+
+  const res = await fetch(`${base}/webhooks/whatsapp`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Relay-Secret': RELAY_SECRET },
+    body: inboundBody('Camila Restrepo')
+  });
+  assert.equal(res.status, 200);
+
+  // 200 alone would also be the answer to a body that failed downstream, so
+  // check that the message actually landed.
+  await new Promise((r) => setTimeout(r, 150));
+  const { results } = await (await fetch(`${base}/api/people?q=camila restrepo`)).json();
+  assert.equal(results.length, 1);
+  assert.equal(results[0].latest_update.source, 'whatsapp');
+});
+
+test('POST /webhooks/whatsapp rejects everything when no relay secret is configured', async (t) => {
+  const { server, base } = await startApp();
+  t.after(() => server.close());
+  delete process.env.WHATSAPP_RELAY_SECRET;
+
+  // Unconfigured fails CLOSED: not even a request carrying a credential gets in,
+  // because there is nothing to compare it against.
+  const noHeader = await fetch(`${base}/webhooks/whatsapp`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: inboundBody('Camila Restrepo')
+  });
+  assert.equal(noHeader.status, 403);
+
+  const withHeader = await fetch(`${base}/webhooks/whatsapp`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Relay-Secret': RELAY_SECRET },
+    body: inboundBody('Camila Restrepo')
+  });
+  assert.equal(withHeader.status, 403);
+
+  await new Promise((r) => setTimeout(r, 150));
+  const { results } = await (await fetch(`${base}/api/people?q=camila restrepo`)).json();
+  assert.equal(results.length, 0);
+});
+
+test('GET /webhooks/whatsapp handshake stays open without the relay credential', async (t) => {
+  const { server, base } = await startApp();
+  t.after(() => server.close());
+
+  const res = await fetch(
+    `${base}/webhooks/whatsapp?hub.mode=subscribe&hub.verify_token=${env.WHATSAPP_VERIFY_TOKEN}&hub.challenge=reto-123`
+  );
+  assert.equal(res.status, 200);
+  assert.equal(await res.text(), 'reto-123');
+});

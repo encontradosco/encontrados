@@ -148,7 +148,9 @@ hay framework de frontend ni paso de build: lo que se lee es lo que corre.
   `/mantenimiento` ≡ `/fotos/actualizar`. Es el archivo más grande del repo.
 - `src/routes/api.js` — el JSON: `/api/people`, `/api/updates`,
   `/api/people/:id/subscriptions`, `/api/reindex` y los `/api/diag*`.
-- `src/routes/webhooks.js` — WhatsApp (Meta Cloud API), dormido.
+- `src/routes/webhooks.js` — WhatsApp (Meta Cloud API), dormido. El `GET` es el
+  handshake y es una lectura; el `POST` escribe en la base y exige la
+  credencial del relevo (`WHATSAPP_RELAY_SECRET`, cabecera `X-Relay-Secret`).
 - `src/privacy.js` — `publicUpdate()` y `maskReporter()`: la única puerta por
   la que una fila de `updates` sale a una respuesta pública.
 - `src/duplicates.js` — detección de reportes repetidos. Siempre consultiva.
@@ -257,6 +259,7 @@ presencia y huella, nunca el valor).
 | `FACE_MATCH_THRESHOLD` | 90. |
 | `WHATSAPP_TOKEN` / `WHATSAPP_PHONE_NUMBER_ID` | El canal queda dormido (que es su estado actual). |
 | `WHATSAPP_VERIFY_TOKEN` | `encontrados-verify`. Es el handshake del webhook de Meta. |
+| `WHATSAPP_RELAY_SECRET` | `POST /webhooks/whatsapp` responde **403 a todo**. Es la única variable que al faltar cierra en vez de abrir: ese POST escribe en la base, y su único cliente legítimo es el relevo que verifica la firma de Meta y reenvía. El `GET` del handshake no la usa. Se genera con `openssl rand -hex 32`. |
 
 `SENDGRID_API_BASE` y `GITHUB_API_BASE` existen solo para que las pruebas
 apunten a sus servidores falsos. No se definen en producción.
