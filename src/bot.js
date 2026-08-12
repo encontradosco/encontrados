@@ -1,8 +1,12 @@
 // Conversation engine for WhatsApp.
 // Understands Spanish (primary) and English commands; always replies in Spanish.
 const { normalize } = require('./names');
-const { notifySubscribers, STATUS_LABEL } = require('./notify');
-const { processPhoto, MAX_QUERY_PHOTOS } = require('./facematch');
+const { notifySubscribers, relayEnabled, STATUS_LABEL } = require('./notify');
+const {
+  processPhoto,
+  resolveRescueAnswer,
+  MAX_QUERY_PHOTOS
+} = require('./facematch');
 const { nullMatcher } = require('./faces');
 
 const HELP = [
@@ -55,6 +59,53 @@ function parseMessage(text) {
   return { intent: 'find', name: raw, note: '', location: '' };
 }
 
+// Respuesta a la plantilla `confirmacion_rescatista_encontrados` (paso 1 de la
+// entrega en dos pasos, en src/facematch.js). Esa plantilla pide dos respuestas
+// concretas, escritas: **SÍ** o **REPORTE**.
+//
+// Se exigen EXACTAS, y no como prefijo de una frase. Mirar solo la primera
+// palabra convertía "Claro que no es ella" y "Si la veo te aviso" en
+// confirmaciones — dos frases que dicen justo lo contrario— y encima se tragaba
+// el mensaje: la búsqueda que la persona quería hacer nunca corría. Un mensaje
+// que no es una de las dos respuestas no se consume: sigue de largo y se
+// procesa como cualquier otro.
+//
+// `normalize` ya quitó tildes, mayúsculas y puntuación, así que "SÍ", "Sí." y
+// "si" son la misma palabra, y "Sí, está conmigo" no lo es.
+const ANSWERS = { si: 'si', reporte: 'reporte' };
+
+function rescueAnswer(text) {
+  return ANSWERS[normalize(text)] || null;
+}
+
+// Lo que se le contesta a quien acaba de responder. Nunca lleva el contacto de
+// una familia: por WhatsApp eso no sale, y prometerlo sería mentir dos veces
+// —una sobre lo que va a llegar y otra sobre lo que tenemos.
+function rescueAnswerReply(result) {
+  if (result.answer === 'reporte') {
+    return [
+      '✅ Gracias por aclararlo.',
+      `Entonces quedas anotado como quien busca a *${result.person}*, no como quien la tiene consigo.`,
+      'Te avisamos si hay novedades. Para dejar de recibir mensajes, responde BAJA TODO.'
+    ].join('\n');
+  }
+  if (result.sent) {
+    return [
+      '✅ Gracias por confirmar.',
+      `Te acabamos de enviar el enlace de la ficha de *${result.person}* en el registro donde su familia la está buscando.`,
+      'Márcala como localizada ahí: es lo que hace que su familia se entere. Nosotros no tenemos su contacto, ellos sí.'
+    ].join('\n');
+  }
+  return [
+    '✅ Gracias por confirmar.',
+    `Registramos que *${result.person}* está contigo.`,
+    relayEnabled()
+      ? 'Una persona del equipo revisa cada caso y se encarga de que el aviso le llegue a quien la busca. Puede tomar un momento.'
+      : 'Una persona del equipo se encarga de que el aviso le llegue a quien la busca.',
+    'Si este mensaje te llegó por error, responde BAJA TODO y no te volvemos a escribir.'
+  ].join('\n');
+}
+
 function timeAgo(iso) {
   const mins = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60000));
   if (mins < 60) return `hace ${mins} min`;
@@ -78,6 +129,18 @@ async function personSummary(store, person) {
 // address for that channel). photo: optional { bytes, contentType } attached to
 // the message. Returns the reply text.
 async function handleInbound(store, { channel, from, text, photo, matcher = nullMatcher }) {
+  // Antes que cualquier comando: SÍ y REPORTE solo significan algo si a este
+  // número le preguntamos algo y sigue esperando respuesta. Si no hay nada
+  // pendiente, vuelven a ser palabras cualesquiera y el mensaje se procesa como
+  // siempre — nada se consume por parecerse a una confirmación.
+  if (channel === 'whatsapp') {
+    const answer = rescueAnswer(text);
+    if (answer) {
+      const resolved = await resolveRescueAnswer(store, from, { answer });
+      if (resolved) return rescueAnswerReply(resolved);
+    }
+  }
+
   const parsed = parseMessage(text);
 
   if (parsed.intent === 'help' || (parsed.intent !== 'help' && !parsed.name)) {
@@ -175,4 +238,4 @@ async function handleInbound(store, { channel, from, text, photo, matcher = null
   return HELP;
 }
 
-module.exports = { handleInbound, parseMessage, HELP };
+module.exports = { handleInbound, parseMessage, rescueAnswer, HELP };

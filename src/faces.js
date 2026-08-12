@@ -197,17 +197,35 @@ async function createMatcher() {
 function createLazyMatcher() {
   let real = null;
   let lastTry = 0;
+  let pending = null;
   const RETRY_MS = 60000;
 
   async function get(now) {
     if (real && real.enabled) return real;
+    // A cold instance often gets several requests at once, and each one calls
+    // ensureReady(). Without this, the request that happens to run first
+    // stamps `lastTry` before it awaits anything, so every request arriving
+    // while it is still in flight reads `now - lastTry < RETRY_MS` as true and
+    // falls back to nullMatcher instead of waiting for the attempt already
+    // under way — the exact rescuer or report that triggered the wake-up is
+    // told matching is unavailable, seconds before it comes back for everyone
+    // after. Sharing the in-flight promise means every concurrent caller sees
+    // the same outcome as the one that started it.
+    if (pending) return pending;
     if (now - lastTry < RETRY_MS) return real || nullMatcher;
     lastTry = now;
+    pending = (async () => {
+      try {
+        return await createMatcher();
+      } catch (e) {
+        console.error('[faces] init failed:', e.message);
+        return nullMatcher;
+      }
+    })();
     try {
-      real = await createMatcher();
-    } catch (e) {
-      console.error('[faces] init failed:', e.message);
-      real = nullMatcher;
+      real = await pending;
+    } finally {
+      pending = null;
     }
     return real;
   }

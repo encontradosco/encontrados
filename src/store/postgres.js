@@ -91,6 +91,23 @@ async function createPostgresAdapter(connectionString) {
   await pool.query('ALTER TABLE photos ADD COLUMN IF NOT EXISTS thumb_type TEXT');
   await pool.query('ALTER TABLE photos ADD COLUMN IF NOT EXISTS thumb_large BYTEA');
 
+  // El reclamo de rescate NO es lo mismo que la propiedad del número, y venían
+  // compartiendo el booleano `verified`. Una suscripción que el bot verificó
+  // con SUSCRIBIR prueba que el número es de quien escribe; no dice nada sobre
+  // si esa persona tiene a alguien al lado. Se separan:
+  //   rescue_state      null | 'asked' | 'confirmed' | 'reported'
+  //   rescue_similarity el % de la coincidencia que originó la pregunta, para
+  //                     que el relevo no llegue sin el único dato que distingue
+  //                     un rescate real de un parecido.
+  await pool.query('ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS rescue_state TEXT');
+  await pool.query('ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS rescue_similarity DOUBLE PRECISION');
+  // TEXTO ISO a propósito, igual que en SQLite: la ventana de 72 h se calcula
+  // en JS y un TIMESTAMPTZ volvería como Date acá y como string allá — dos
+  // formas del mismo dato es lo que se cuela en producción y no en las pruebas.
+  // `created_at` no sirve: una fila de seguidor creada la semana pasada puede
+  // recibir la pregunta hoy.
+  await pool.query('ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS rescue_asked_at TEXT');
+
   // Integration seam for an external aggregator: external_id lets a caller
   // re-POST the same update idempotently (see insertUpdate below), and
   // 'aggregator' is a real source distinct from the app's own web/whatsapp/api.
@@ -240,6 +257,12 @@ async function createPostgresAdapter(connectionString) {
         [limit]
       );
     },
+    async subscriptionsForAddress(channel, address) {
+      return all('SELECT * FROM subscriptions WHERE channel = $1 AND address = $2 ORDER BY id DESC', [
+        channel,
+        address
+      ]);
+    },
     async findSubscription(personId, channel, address) {
       return one(
         'SELECT * FROM subscriptions WHERE person_id = $1 AND channel = $2 AND address = $3',
@@ -254,6 +277,17 @@ async function createPostgresAdapter(connectionString) {
         [personId, channel, address, !!verified, verifyToken || null]
       );
       return this.findSubscription(personId, channel, address);
+    },
+    async setSubscriptionRescue(id, { state, similarity, askedAt } = {}) {
+      return one(
+        `UPDATE subscriptions
+            SET rescue_state = $2,
+                rescue_similarity = COALESCE($3, rescue_similarity),
+                rescue_asked_at = COALESCE($4, rescue_asked_at)
+          WHERE id = $1
+          RETURNING *`,
+        [id, state || null, similarity == null ? null : Number(similarity), askedAt || null]
+      );
     },
     async verifySubscriptionByToken(token) {
       return one('UPDATE subscriptions SET verified = true WHERE verify_token = $1 RETURNING *', [

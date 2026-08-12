@@ -61,7 +61,12 @@ const CHANNEL_LABEL = { email: 'correo', whatsapp: 'WhatsApp' };
 // Le manda al operador un aviso que NO se entregó, con todo lo que hace falta
 // para enrutarlo sin abrir la base de datos. Nunca lanza: un fallo acá no puede
 // tumbar el reporte ni la coincidencia que lo originó.
-async function relayToOperators({ reason, channel, address, subject, text, person, details = [] }) {
+// `delivered` = el aviso SÍ salió a su destinatario y esta copia existe por
+// otra razón: el texto que salió no lleva el contacto de la familia, así que el
+// caso sigue abierto y necesita a un humano. La primera línea del cuerpo tiene
+// que decir cuál de los dos casos es — un operador que lee "no se envió" cuando
+// sí se envió va a mandar el mismo aviso dos veces.
+async function relayToOperators({ reason, channel, address, subject, text, person, details = [], delivered = false }) {
   const to = avisoEmail();
   const ficha = person ? `${env.BASE_URL}/person/${person.id}` : null;
   const trace =
@@ -74,16 +79,29 @@ async function relayToOperators({ reason, channel, address, subject, text, perso
     // y encima cuando la configuración ya está rota — así que no sale nada.
     // Este log es la ÚNICA copia que queda del aviso, por eso lleva el texto
     // completo: perderlo es peor que tenerlo en el log del operador.
-    console.error(`[notify:relevo] PERDIDO — relevo activo y AVISO_EMAIL sin configurar. ${trace}\n${text}`);
+    console.error(
+      `[notify:relevo] PERDIDO — ${delivered ? 'copia de seguimiento' : 'relevo activo'} y AVISO_EMAIL sin configurar. ${trace}\n${text}`
+    );
     return { ok: false, relayed: false, error: 'AVISO_EMAIL no configurada' };
   }
 
   const body = [
-    'Este aviso NO se envió a su destinatario.',
-    '',
-    'encontrados.co está en modo relevo: los avisos que iban a terceros se',
-    'centralizan en este buzón para que una persona verifique a quién se le',
-    'está entregando el dato antes de que salga.',
+    ...(delivered
+      ? [
+          'Este aviso SÍ se envió a su destinatario, pero SIN el contacto de la familia.',
+          '',
+          'El texto que salió no lleva ese dato y nunca lo lleva, en ningún canal.',
+          'Esta copia existe porque el caso queda abierto: alguien dice saber dónde',
+          'está una persona y quien la busca todavía no lo sabe. Cerrarlo es un acto',
+          'humano.'
+        ]
+      : [
+          'Este aviso NO se envió a su destinatario.',
+          '',
+          'encontrados.co está en modo relevo: los avisos que iban a terceros se',
+          'centralizan en este buzón para que una persona verifique a quién se le',
+          'está entregando el dato antes de que salga.'
+        ]),
     '',
     `Iba dirigido a: ${address}`,
     `Canal: ${CHANNEL_LABEL[channel] || channel}`,
@@ -97,8 +115,16 @@ async function relayToOperators({ reason, channel, address, subject, text, perso
     text,
     '--- fin del texto ---',
     '',
-    'Siguiente paso: verificar la identidad del destinatario y, si corresponde,',
-    'hacerle llegar el texto de arriba. De aquí no sale nada solo.'
+    ...(delivered
+      ? [
+          'Siguiente paso: verificar quién es esa persona y decidir si el contacto de',
+          'arriba se le entrega, o si a la familia le avisa alguien del equipo. El',
+          'texto ya salió; el dato no.'
+        ]
+      : [
+          'Siguiente paso: verificar la identidad del destinatario y, si corresponde,',
+          'hacerle llegar el texto de arriba. De aquí no sale nada solo.'
+        ])
   ]
     .filter((l) => l !== null)
     .join('\n');
@@ -159,33 +185,130 @@ async function sendEmail(to, subject, text) {
   }
 }
 
-async function sendWhatsApp(to, text) {
-  if (!env.WHATSAPP_TOKEN || !env.WHATSAPP_PHONE_NUMBER_ID) {
+// ------------------------------------------------- las plantillas aprobadas
+//
+// Meta aprueba una plantilla por su nombre, su idioma y su texto exacto. Lo que
+// dicen esas dos plantillas ES el contrato del flujo, y el código se ajusta a
+// ellas y no al revés:
+//
+//   confirmacion_rescatista_encontrados  {{1}} = nombre de la persona.
+//     Pregunta si quien recibe está con esa persona (o sabe dónde ubicarla) o
+//     si lo que hizo fue reportarla como desaparecida, y pide responder SÍ o
+//     REPORTE escribiéndolo.
+//   ficha_fuente_rescatista_encontrados  {{1}} = nombre, {{2}} = URL de la
+//     ficha en el registro público de origen. Dice que nosotros NO tenemos el
+//     contacto de la familia y que ellos sí, y manda a marcar a la persona como
+//     localizada en ese registro — "solo si la viste tú o hablaste con ella".
+//
+// De ahí sale la regla más importante de todo el flujo: **por WhatsApp nunca
+// sale el contacto de una familia.** Lo más que entrega un "sí" falsificado es
+// un enlace a un registro público.
+//
+// Los nombres son configurables porque quien los aprueba es Meta del lado de la
+// cuenta, pero el valor por omisión es el aprobado: sin configurar nada, el
+// código manda exactamente lo que Meta ya revisó. Poner la variable en vacío
+// apaga ese envío a propósito.
+const DEFAULT_TEMPLATE_RESCUE_CONFIRM = 'confirmacion_rescatista_encontrados';
+const DEFAULT_TEMPLATE_RESCUE_SOURCE = 'ficha_fuente_rescatista_encontrados';
+// Meta trata `es` y `es_CO` como idiomas DISTINTOS: pedir `es` para una
+// plantilla aprobada en `es_CO` es un rechazo, no una aproximación.
+const DEFAULT_TEMPLATE_LOCALE = 'es_CO';
+
+function readTemplate(name, fallback) {
+  const raw = process.env[name] !== undefined ? process.env[name] : env[name];
+  return String(raw === undefined || raw === null ? fallback : raw).trim();
+}
+
+// Paso 1: la pregunta. Nunca lleva un dato de la familia.
+function rescueConfirmTemplate() {
+  return readTemplate('WHATSAPP_TEMPLATE_RESCUE_CONFIRM', DEFAULT_TEMPLATE_RESCUE_CONFIRM);
+}
+
+// Paso 2: la ficha del registro de origen. Tampoco lleva un dato de la familia.
+function rescueSourceTemplate() {
+  return readTemplate('WHATSAPP_TEMPLATE_RESCUE_SOURCE', DEFAULT_TEMPLATE_RESCUE_SOURCE);
+}
+
+function whatsappTemplateLocale() {
+  return readTemplate('WHATSAPP_TEMPLATE_LOCALE', DEFAULT_TEMPLATE_LOCALE) || DEFAULT_TEMPLATE_LOCALE;
+}
+
+// Dos formas de mandar, porque Meta acepta dos cosas distintas:
+//
+//   texto plano — solo DENTRO de la ventana de servicio de 24 h que abre un
+//     mensaje entrante. Es lo que se usa para responderle a alguien que acaba
+//     de escribirnos.
+//   `template`  — obligatorio para cualquier mensaje que iniciemos nosotros
+//     fuera de esa ventana. Sin esto, un mensaje a un rescatista que llegó por
+//     la web muere en un 131047 y nadie se entera de que no llegó.
+//
+// Igual que sendEmail, lee la configuración de process.env además del snapshot
+// de env.js, para que aplicarla después de cargar el módulo (y las pruebas)
+// funcione.
+async function sendWhatsApp(to, text, { template } = {}) {
+  const token = (process.env.WHATSAPP_TOKEN || env.WHATSAPP_TOKEN || '').trim();
+  const phoneNumberId = (
+    process.env.WHATSAPP_PHONE_NUMBER_ID ||
+    env.WHATSAPP_PHONE_NUMBER_ID ||
+    ''
+  ).trim();
+  const apiBase = process.env.WHATSAPP_API_BASE || 'https://graph.facebook.com';
+  if (!token || !phoneNumberId) {
     console.log(`[notify:whatsapp skipped — not configured] to=${to}`);
     return { ok: false, error: 'WhatsApp no configurado' };
   }
-  const res = await fetch(
-    `https://graph.facebook.com/v20.0/${env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
-    {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${env.WHATSAPP_TOKEN}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
+  const payload = template
+    ? {
         messaging_product: 'whatsapp',
         to,
-        type: 'text',
-        text: { body: text }
-      })
+        type: 'template',
+        template: {
+          name: template.name,
+          language: { code: template.locale || whatsappTemplateLocale() },
+          components: (template.params || []).length
+            ? [
+                {
+                  type: 'body',
+                  parameters: (template.params || []).map((p) => ({ type: 'text', text: String(p) }))
+                }
+              ]
+            : []
+        }
+      }
+    : { messaging_product: 'whatsapp', to, type: 'text', text: { body: text } };
+
+  // Devuelve el fallo en vez de lanzarlo, igual que sendEmail. Quien llama
+  // decide qué hacer con un envío que no salió —y en el flujo de rescate esa
+  // decisión es cargada: la fila del estado pendiente solo se escribe si la
+  // pregunta salió de verdad. Una excepción que sube y la atrapa un catch
+  // genérico convierte "no salió" en "no sé", que es peor.
+  try {
+    const res = await fetch(
+      `${apiBase}/v20.0/${phoneNumberId}/messages`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(payload)
+      }
+    );
+    if (!res.ok) {
+      const body = await res.text();
+      console.error(
+        `[notify:whatsapp] FALLÓ ${res.status} to=${to} tipo=${template ? `plantilla:${template.name}` : 'texto'} :: ${body}`
+      );
+      return { ok: false, status: res.status, error: body.slice(0, 500) };
     }
-  );
-  if (!res.ok) {
-    const body = await res.text();
-    console.error(`[notify:whatsapp] FALLÓ ${res.status} to=${to} :: ${body}`);
-    return { ok: false, status: res.status, error: body.slice(0, 500) };
+    return { ok: true, status: res.status };
+  } catch (e) {
+    console.error(
+      `[notify:whatsapp] LANZÓ to=${to} tipo=${template ? `plantilla:${template.name}` : 'texto'}`,
+      e
+    );
+    return { ok: false, error: e.message };
   }
-  return { ok: true, status: res.status };
 }
 
 function unsubscribeLink(sub) {
@@ -267,5 +390,8 @@ module.exports = {
   relayEnabled,
   relayToOperators,
   avisoEmail,
+  rescueConfirmTemplate,
+  rescueSourceTemplate,
+  whatsappTemplateLocale,
   RELAY_SUBJECT_PREFIX
 };

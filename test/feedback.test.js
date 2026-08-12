@@ -31,7 +31,7 @@ test('both links live in the footer of every page, to the left of Github', async
     const html = await (await fetch(`${base}${path}`)).text();
     const ideas = html.indexOf('href="/ideas"');
     const bug = html.indexOf('href="/bug"');
-    const github = html.indexOf('https://github.com/torrenegra/encontrados"');
+    const github = html.indexOf('https://github.com/encontradosco/encontrados"');
     assert.ok(ideas > 0 && bug > 0, `faltan los enlaces en ${path}`);
     assert.ok(ideas < bug && bug < github, `van a la izquierda de Github en ${path}`);
     assert.match(html.slice(ideas, github), /💡 Ideas/);
@@ -61,7 +61,7 @@ test('an idea and a bug each become a labelled GitHub issue', async (t) => {
   assert.match(await bug.text(), /issues\/2/);
 
   assert.equal(gh.received.length, 2);
-  assert.equal(gh.received[0].url, '/repos/torrenegra/encontrados/issues');
+  assert.equal(gh.received[0].url, '/repos/encontradosco/encontrados/issues');
   assert.equal(gh.received[0].auth, 'Bearer ghp_test');
   assert.deepEqual(gh.received[0].body.labels, ['idea']);
   assert.equal(gh.received[0].body.title, 'Un mapa con los albergues');

@@ -216,11 +216,18 @@ test('web: a name reporter renders masked on the person page', async (t) => {
 
 test('webhook: whatsapp inbound message is processed', async (t) => {
   const { server, base } = await startApp();
-  t.after(() => server.close());
+  t.after(() => {
+    server.close();
+    delete process.env.WHATSAPP_RELAY_SECRET;
+  });
+  process.env.WHATSAPP_RELAY_SECRET = 'secreto-de-relevo-de-prueba';
 
   const res = await fetch(`${base}/webhooks/whatsapp`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Relay-Secret': 'secreto-de-relevo-de-prueba'
+    },
     body: JSON.stringify({
       entry: [
         {

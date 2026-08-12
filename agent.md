@@ -26,7 +26,29 @@ ayuda a nadie.
   - El contacto de quien reporta solo se muestra a un rescatista tras una
     coincidencia facial; nunca en páginas públicas.
 - Toda la interfaz y los mensajes al usuario son **en español**.
-- Canales activos: web y API REST. WhatsApp está implementado pero dormido (sin credenciales aún) — no mostrar referencias a WhatsApp en la interfaz hasta que se active. (Telegram fue retirado.)
+- Canales activos: web, API REST y **WhatsApp** (activo desde el 12-ago-2026;
+  antes estaba implementado pero dormido y la interfaz no podía nombrarlo).
+  (Telegram fue retirado.)
+- WhatsApp — la regla que manda sobre todas las demás en ese canal:
+  **por WhatsApp NUNCA sale el contacto de una familia.** Ni en texto libre
+  dentro de la ventana de 24 h, ni en ningún modo de envío. Un aviso con
+  contacto que iba a un número se convierte en relevo al buzón del operador
+  (`notifyFaceMatch` en `src/facematch.js`).
+  - Meta solo entrega **plantillas aprobadas** para lo que iniciamos nosotros, y
+    lo que dicen esas plantillas ES el contrato del flujo: el código se ajusta a
+    ellas, no al revés. No inventes plantillas ni cambies sus parámetros.
+    - `confirmacion_rescatista_encontrados` (`es_CO`, `{{1}}` = nombre) —
+      pregunta si la persona está con quien recibe el mensaje o si lo que hizo
+      fue reportarla. Se responde **SÍ** o **REPORTE**, escrito, exacto.
+    - `ficha_fuente_rescatista_encontrados` (`es_CO`, `{{1}}` = nombre,
+      `{{2}}` = URL de la ficha) — lo único que sale tras un SÍ: manda a marcar
+      a la persona como localizada en el registro público de origen, que es
+      quien sí tiene el contacto de la familia.
+  - Una ficha reportada por la web no tiene registro de origen y **no hay
+    plantilla aprobada para ese caso**: ahí no se le manda nada al rescatista y
+    decide el operador.
+  - `es` y `es_CO` son idiomas distintos para Meta: pedir el que no es equivale
+    a que no llegue nada.
 - Fotos — dos reglas distintas según quién las sube:
   - **Rescatista** (`kind='query'`): la foto NUNCA se guarda ni se muestra. Se
     compara, se indexa su firma facial y los bytes se borran de inmediato. Solo
@@ -69,6 +91,17 @@ ayuda a nadie.
   Solo el nombre de quien reporta se guarda (en `reporter`, que sale público
   reducido por `maskReporter()`); el desglose de ubicación no tiene columna
   porque su único consumidor es ese correo.
+- **Aviso de rescatista** (`matchContactBlock()` + `POST /rescate/aviso`): cuando
+  la ficha que coincide no trae contacto de la familia —las importadas de
+  registros públicos no lo traen— el rescatista deja su teléfono y dónde está la
+  persona. El aviso entra a la línea de tiempo con estado `missing` a propósito
+  (un avistamiento sin verificar no puede sacar a nadie de la lista) y el dato
+  viaja en `contact`, que nunca sale público. De ahí en adelante **no hay nada
+  automático**: se tría, se le pregunta al rescatista si está con la persona o si
+  la estaba reportando, y si confirma se le pasa la ficha del registro de origen
+  para que la actualice allá — ese registro es quien tiene el contacto de la
+  familia, nosotros no. El flujo completo y el criterio de triage aplicable a
+  mano: [`docs/avisos-de-rescatista.md`](docs/avisos-de-rescatista.md).
 - El contacto de quien reporta se pide en DOS casillas, teléfono y correo, con
   la misma obligación de siempre: al menos una. Se juntan en la columna
   `contact` (`composeContact()` en `src/routes/web.js`), que sigue siendo texto
@@ -138,7 +171,9 @@ hay framework de frontend ni paso de build: lo que se lee es lo que corre.
   `/mantenimiento` ≡ `/fotos/actualizar`. Es el archivo más grande del repo.
 - `src/routes/api.js` — el JSON: `/api/people`, `/api/updates`,
   `/api/people/:id/subscriptions`, `/api/reindex` y los `/api/diag*`.
-- `src/routes/webhooks.js` — WhatsApp (Meta Cloud API), dormido.
+- `src/routes/webhooks.js` — WhatsApp (Meta Cloud API), dormido. El `GET` es el
+  handshake y es una lectura; el `POST` escribe en la base y exige la
+  credencial del relevo (`WHATSAPP_RELAY_SECRET`, cabecera `X-Relay-Secret`).
 - `src/privacy.js` — `publicUpdate()` y `maskReporter()`: la única puerta por
   la que una fila de `updates` sale a una respuesta pública.
 - `src/duplicates.js` — detección de reportes repetidos. Siempre consultiva.
@@ -240,13 +275,14 @@ presencia y huella, nunca el valor).
 | `AVISO_EMAIL` | El aviso del rescatista y el relevo a Colombia Te Busca no se mandan. Falla en silencio: quien reportó ve su página de éxito igual. Y con `NOTIFY_MODE=relay` (el modo por omisión) tampoco sale ningún aviso a terceros: quedan en el log como `[notify:relevo] PERDIDO`. |
 | `NOTIFY_MODE` | `relay`. Los avisos a terceros se retienen y se relevan a `AVISO_EMAIL`; `direct` los manda derecho al destinatario. Cualquier otro valor cae a `relay`: el interruptor falla cerrado. |
 | `GITHUB_TOKEN` | `/ideas` y `/bug` siguen funcionando pero caen a correo a `AVISO_EMAIL`. El síntoma es un tracker vacío, que se parece mucho a que nadie escribió. |
-| `GITHUB_REPO` | `torrenegra/encontrados`. |
+| `GITHUB_REPO` | `encontradosco/encontrados`. |
 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | Sin reconocimiento facial: las fotos se guardan pero no se indexan ni coinciden. Las miniaturas igual se generan, centradas. `POST /api/reindex` las recoge después. |
 | `AWS_REGION` | `us-east-1`. |
 | `FACE_COLLECTION_ID` | `aqui-faces` — el nombre anterior al cambio de marca, a propósito. **No lo renombres**: apuntaría a una colección nueva y vacía y rompería el matching de todos los que ya están indexados. |
 | `FACE_MATCH_THRESHOLD` | 90. |
 | `WHATSAPP_TOKEN` / `WHATSAPP_PHONE_NUMBER_ID` | El canal queda dormido (que es su estado actual). |
 | `WHATSAPP_VERIFY_TOKEN` | `encontrados-verify`. Es el handshake del webhook de Meta. |
+| `WHATSAPP_RELAY_SECRET` | `POST /webhooks/whatsapp` responde **403 a todo**. Es la única variable que al faltar cierra en vez de abrir: ese POST escribe en la base, y su único cliente legítimo es el relevo que verifica la firma de Meta y reenvía. El `GET` del handshake no la usa. Se genera con `openssl rand -hex 32`. |
 
 `SENDGRID_API_BASE` y `GITHUB_API_BASE` existen solo para que las pruebas
 apunten a sus servidores falsos. No se definen en producción.

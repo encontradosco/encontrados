@@ -10,22 +10,60 @@
 // comparison.
 
 const env = require('./env');
-const { sendEmail, sendWhatsApp, relayEnabled, relayToOperators } = require('./notify');
+const {
+  sendEmail,
+  sendWhatsApp,
+  relayEnabled,
+  relayToOperators,
+  rescueConfirmTemplate,
+  rescueSourceTemplate,
+  whatsappTemplateLocale
+} = require('./notify');
 const { storeThumbnail } = require('./thumbs');
 const { toMatchable } = require('./photo');
+const { hasGeometry, derivativeAction } = require('./report-photo');
 
 const MAX_QUERY_PHOTOS = 3;
 
-// Sent to a rescuer when someone reports the person they rescued as missing.
-function matchText(matchedPerson, similarity, sub, contact) {
+// El texto que puede llegarle a un rescatista cuando alguien reporta como
+// desaparecida a la persona que dice haber rescatado.
+//
+// NO lleva el contacto de la familia, y ese es el punto: este texto es el único
+// que se ENVÍA a un tercero, así que la forma de garantizar que el contacto no
+// viaje en un mensaje es que no exista acá. La copia que un humano necesita
+// para cerrar el caso va aparte, en el bloque `details` del relevo al operador,
+// junto a la advertencia de no entregarla sin verificar.
+//
+// Alcance, para no leer de más: esto cubre lo que se manda. La pantalla del
+// resultado de /rescate es otra superficie —`matchContactBlock()` en
+// routes/web.js— y este cambio no la toca.
+//
+// Antes el contacto sí venía en esta cadena, y no salía por WhatsApp solo
+// porque `notifyFaceMatch` desviaba ese canal al relevo. Eso hacía que la
+// garantía dependiera de una rama del código: cualquier camino de envío nuevo
+// —o el que ya existía para correo— la reabría sin tocar esta función. Sacarlo
+// de acá convierte la regla en una propiedad del texto, que no tiene ramas.
+//
+// `similarity` puede venir vacío en avisos viejos, anteriores a que el puntaje
+// se guardara junto con la pregunta (`subscriptions.rescue_similarity`). En los
+// nuevos siempre viene: sin él, un humano aprueba una entrega sin el único dato
+// que distingue un rescate real de un parecido.
+function matchText(matchedPerson, similarity, sub) {
+  const pct = similarity == null ? '' : ` (${Math.round(similarity)}% de coincidencia facial)`;
+  // Sin suscripción no hay a quién dar de baja, y un enlace de baja con el
+  // token vacío es un enlace roto en el buzón de un operador.
+  const token = sub && sub.verify_token;
   return [
-    `🔔 encontrados.co — alguien está buscando a la persona que rescataste (${Math.round(similarity)}% de coincidencia facial).`,
+    `🔔 encontrados.co — alguien está buscando a la persona que rescataste${pct}.`,
     `Reportada como desaparecida: *${matchedPerson.full_name}*`,
-    contact ? `Contacto de quien la busca: ${contact}` : null,
     `Detalles del reporte: ${env.BASE_URL}/person/${matchedPerson.id}`,
     '',
+    'No damos el contacto de su familia por este medio. Si sabes dónde está,',
+    'respóndenos por aquí y una persona del equipo sigue el caso: la noticia',
+    'de que alguien apareció la tiene que dar alguien que la verificó.',
+    '',
     '🔒 Privacidad: la foto que subiste nunca se guardó; solo conservamos su firma facial para poder avisarte.',
-    `Para dejar de recibir estos avisos: ${env.BASE_URL}/unsubscribe?token=${sub.verify_token}`
+    token ? `Para dejar de recibir estos avisos: ${env.BASE_URL}/unsubscribe?token=${token}` : null
   ]
     .filter(Boolean)
     .join('\n');
@@ -33,42 +71,338 @@ function matchText(matchedPerson, similarity, sub, contact) {
 
 async function notifyFaceMatch(store, sub, matchedPerson, similarity, contact) {
   if (!sub) return;
-  if (!sub.verified) {
-    console.warn(`[facematch] match found but subscription ${sub.id} is unverified — no alert sent`);
-    return;
-  }
+  // Que la suscripción no esté verificada NO es motivo para tirar el aviso.
+  //
+  // El corte existe para no escribirle a una dirección que quizá no es de quien
+  // la escribió, y eso solo puede pasar en el ENVÍO directo. En modo relevo no
+  // sale nada hacia afuera: el aviso va al buzón del operador para que una
+  // persona decida. Cortar arriba de la bifurcación no protegía a un tercero,
+  // nos tapaba la información a nosotros — la coincidencia se descartaba y ni
+  // el operador se enteraba, justo en los casos que más necesitan un humano.
+  //
+  // Así que el corte baja al camino de envío, y el relevo se entera de que la
+  // suscripción no está verificada, que es un dato que cambia lo que un humano
+  // decide hacer con el aviso.
+  const unverified = !sub.verified;
   console.log(
-    `[facematch] notifying sub ${sub.id} (${sub.channel}) about ${matchedPerson.full_name} @ ${Math.round(similarity)}%`
+    `[facematch] notifying sub ${sub.id} (${sub.channel}${unverified ? ', SIN verificar' : ''}) about ${matchedPerson.full_name}` +
+      (similarity == null ? '' : ` @ ${Math.round(similarity)}%`)
   );
-  const text = matchText(matchedPerson, similarity, sub, contact);
+  const text = matchText(matchedPerson, similarity, sub);
   const subject = 'Alguien busca a la persona que rescataste — encontrados.co';
 
-  // El aviso más sensible de la app: su cuerpo lleva el contacto de la familia
-  // y su destinatario es alguien que dice haber rescatado a la persona, sin que
-  // nadie lo haya verificado. En modo relevo no sale solo.
-  if (relayEnabled()) {
-    await relayToOperators({
-      reason: 'Coincidencia facial con quien dice haber rescatado a esta persona',
+  // El contacto de una familia no sale por NINGÚN canal, y ya no depende de
+  // esta rama: `matchText` no lo contiene (ver su nota). Lo que queda acá es
+  // otra razón, que sigue en pie por su cuenta.
+  //
+  // Una suscripción de WhatsApp nace sin verificar —el número lo teclea quien
+  // llena el formulario y nadie comprueba que sea suyo— y un texto libre solo
+  // se entrega dentro de la ventana de 24 h, que abre una palabra escrita
+  // desde ese teléfono. O sea: el canal por el que menos sabemos a quién le
+  // estamos hablando. Su primer contacto va por plantilla aprobada
+  // (`askRescueConfirmation`), no por este camino; si un aviso de coincidencia
+  // llega igual acá, lo enruta una persona.
+  const byWhatsApp = sub.channel === 'whatsapp';
+
+  // El aviso más sensible de la app: su destinatario es alguien que dice haber
+  // rescatado a la persona, sin que nadie lo haya verificado. En modo relevo no
+  // sale solo.
+  const alOperador = (delivered) =>
+    relayToOperators({
+      reason:
+        'Coincidencia facial con quien dice haber rescatado a esta persona' +
+        (unverified ? ' (suscripción SIN verificar)' : ''),
       channel: sub.channel,
       address: sub.address,
       subject,
       text,
       person: matchedPerson,
+      delivered,
       details: [
-        `Coincidencia facial: ${Math.round(similarity)}%`,
+        similarity == null
+          ? '⚠️ Sin puntaje de coincidencia facial guardado para este aviso.'
+          : `Coincidencia facial: ${Math.round(similarity)}%`,
+        unverified
+          ? '⚠️ La suscripción NO está verificada: nadie ha comprobado que esa dirección o ese número sean de quien dice haber rescatado a la persona.'
+          : 'La suscripción está verificada por su titular.',
+        byWhatsApp
+          ? 'Este aviso iba a un WhatsApp: el primer contacto por ahí va por plantilla aprobada, no por texto libre, así que se enruta a mano en cualquier modo de envío.'
+          : null,
         contact
           ? `Contacto de quien la busca (no entregarlo sin verificar): ${contact}`
           : 'El reporte no trae contacto de quien la busca.'
-      ]
+      ].filter(Boolean)
     });
+
+  if (relayEnabled() || byWhatsApp) {
+    await alOperador(false);
+    return;
+  }
+
+  // Envío directo: acá sí, nunca a una dirección que su dueño no confirmó.
+  if (unverified) {
+    console.warn(
+      `[facematch] subscription ${sub.id} is unverified — relevado, pero NUNCA enviado directo`
+    );
     return;
   }
 
   if (sub.channel === 'email') {
     await sendEmail(sub.address, subject, text);
-  } else if (sub.channel === 'whatsapp') {
-    await sendWhatsApp(sub.address, text);
+    // El texto que acaba de salir NO lleva el contacto de la familia, así que
+    // el caso queda abierto: alguien sabe dónde está una persona y nadie puede
+    // avisarle a quien la busca. Por eso el operador recibe igual su copia, con
+    // el dato — si no, el mensaje le promete al rescatista un seguimiento que
+    // nadie iba a hacer, que es la única mentira que este sistema puede contar
+    // y que hace daño de verdad.
+    await alOperador(true);
   }
+}
+
+// ------------------------------------------- primer contacto con un rescatista
+//
+// La coincidencia solo existía en la pantalla: si el rescatista cerraba la
+// página, no quedaba forma de volver a llegarle. Ahora también sale por sus
+// canales, y cada uno tiene su propia regla porque lo que prueban es distinto.
+//
+//   Correo   — puede llevar los datos. La dirección la acaba de teclear quien
+//              está viendo ese mismo contacto en pantalla, así que el mensaje
+//              no expone nada nuevo. Igual pasa por notifyFaceMatch: sin
+//              verificar va al relevo, jamás a un envío directo.
+//   WhatsApp — no puede. Un número tecleado no lo comprueba nadie, y mandarle
+//              el teléfono de una familia a un número desconocido es el vector
+//              de extorsión que este servicio no puede abrir. Sale la PLANTILLA
+//              de confirmación, sin un solo dato de la familia, y la entrega
+//              espera a que respondan.
+async function notifyRescuerOfMatches(store, { emailSub, phone, matches }) {
+  if (!matches || !matches.length) return;
+  for (const m of matches) {
+    if (emailSub) {
+      await notifyFaceMatch(store, emailSub, m.person, m.similarity, m.update && m.update.contact);
+    }
+  }
+  // Una sola pregunta, por la coincidencia más fuerte (matches viene ordenado):
+  // preguntar por dos personas distintas convierte un "sí" en una respuesta
+  // ambigua, y de esa respuesta depende qué se entrega.
+  if (phone && matches[0]) {
+    const top = matches[0];
+    await requestRescueConfirmation(store, phone, top.person, {
+      contact: top.update && top.update.contact,
+      similarity: top.similarity
+    });
+  }
+}
+
+// ------------------------------------------------ el estado de la pregunta
+//
+// Una pregunta de hace un mes ya no es una conversación: contestarla no prueba
+// nada sobre dónde está hoy la persona.
+const RESCUE_ASK_TTL_HOURS = 72;
+
+function askedAt(sub) {
+  const v = Date.parse(sub.rescue_asked_at || sub.created_at);
+  return Number.isNaN(v) ? 0 : v;
+}
+
+// Las preguntas de rescate vivas para un número, la más reciente primero.
+//
+// Se filtra por `rescue_state`, NUNCA por `verified`. Son dos hechos distintos
+// que antes compartían el mismo booleano: `verified` dice "este número es de
+// quien escribe" (lo prueba el bot cuando alguien manda SUSCRIBIR desde él);
+// `rescue_state = 'asked'` dice "a este número le preguntamos si tiene consigo
+// a esta persona y todavía no responde". Confundirlos hacía que la suscripción
+// de un seguidor —verificada, pero que nunca reclamó ningún rescate— se saltara
+// la confirmación entera.
+async function pendingRescueAsks(store, address, { maxAgeHours = RESCUE_ASK_TTL_HOURS } = {}) {
+  if (typeof store.subscriptionsForAddress !== 'function') return [];
+  const subs = await store.subscriptionsForAddress('whatsapp', address);
+  const cutoff = Date.now() - maxAgeHours * 3600 * 1000;
+  return subs
+    .filter((s) => s.rescue_state === 'asked' && askedAt(s) >= cutoff)
+    .sort((a, b) => askedAt(b) - askedAt(a) || Number(b.id) - Number(a.id));
+}
+
+// Paso 1 de la entrega en dos pasos: preguntar, sin entregar nada.
+//
+// Manda `confirmacion_rescatista_encontrados`, que nombra a UNA persona y pide
+// responder SÍ o REPORTE. Devuelve `{ asked, reason, sub }`.
+//
+// Dos cosas que el orden de este código sostiene:
+//
+//   1. La fila se escribe DESPUÉS de un envío exitoso. Escribirla antes dejaba
+//      un estado "pendiente de confirmación" para una pregunta que nunca salió
+//      —por ejemplo con la plantilla sin configurar— y entonces bastaba subir
+//      una foto pública con el número propio y escribirle "sí" al bot.
+//   2. Una sola pregunta viva por número. La plantilla nombra a una persona; si
+//      hubiera dos preguntas abiertas, un "SÍ" no diría por cuál de las dos.
+async function requestRescueConfirmation(store, address, person, { contact, similarity } = {}) {
+  const name = rescueConfirmTemplate();
+  if (!name) {
+    console.warn(
+      `[facematch:rescate] plantilla de confirmación apagada — no se le preguntó nada a ${address}`
+    );
+    return { asked: false, reason: 'sin-plantilla' };
+  }
+
+  const subs =
+    typeof store.subscriptionsForAddress === 'function'
+      ? await store.subscriptionsForAddress('whatsapp', address)
+      : [];
+  const mine = subs.find((s) => String(s.person_id) === String(person.id));
+
+  // Este número ya confirmó por ESTA persona: no hay nada que volver a
+  // preguntar, y el aviso sigue el camino de siempre (que para WhatsApp es el
+  // relevo). Ojo: la condición es el reclamo confirmado, no `verified` — un
+  // número verificado por el bot no reclamó ningún rescate.
+  if (mine && mine.rescue_state === 'confirmed') {
+    await notifyFaceMatch(store, mine, person, similarity, contact);
+    return { asked: false, reason: 'ya-confirmado', sub: mine };
+  }
+
+  const pending = await pendingRescueAsks(store, address);
+  if (mine && pending.some((s) => String(s.id) === String(mine.id))) {
+    // Ya le preguntamos por esta misma persona y sigue sin responder.
+    return { asked: false, reason: 'ya-preguntado', sub: mine };
+  }
+  if (pending.length) {
+    console.warn(
+      `[facematch:rescate] ${address} ya tiene una pregunta abierta — no se le pregunta por ${person.full_name}`
+    );
+    await relayToOperators({
+      reason: 'Segunda coincidencia para un número que ya tiene una pregunta de rescate abierta',
+      channel: 'whatsapp',
+      address,
+      subject: 'Coincidencia sin preguntar — encontrados.co',
+      text: matchText(person, similarity, null),
+      person,
+      details: [
+        'No se le mandó la plantilla: ese número ya tiene otra pregunta de rescate sin responder, y dos preguntas abiertas vuelven ambiguo el "SÍ".',
+        similarity == null ? null : `Coincidencia facial: ${Math.round(similarity)}%`,
+        // El contacto ya no viaja dentro del texto (ver matchText), así que
+        // tiene que venir acá o el operador se queda sin él justo en el caso
+        // que más necesita a un humano.
+        contact
+          ? `Contacto de quien la busca (no entregarlo sin verificar): ${contact}`
+          : 'El reporte no trae contacto de quien la busca.'
+      ].filter(Boolean)
+    });
+    return { asked: false, reason: 'otra-pregunta-abierta' };
+  }
+
+  const res = await sendWhatsApp(address, null, {
+    template: { name, locale: whatsappTemplateLocale(), params: [person.full_name] }
+  });
+  if (!res.ok) {
+    console.error(`[facematch:rescate] la plantilla a ${address} no salió: ${res.error || res.status}`);
+    return { asked: false, reason: 'envio-fallido' };
+  }
+
+  const { sub } = await store.subscribe(person.id, 'whatsapp', address, { verified: false });
+  // El puntaje se guarda ACÁ porque acá es donde existe. La respuesta llega
+  // horas después y para entonces ya nadie lo tiene, así que el relevo salía
+  // sin el único dato que distingue un rescate real de un parecido.
+  await store.setSubscriptionRescue(sub.id, {
+    state: 'asked',
+    similarity,
+    askedAt: new Date().toISOString()
+  });
+  return { asked: true, sub };
+}
+
+// La ficha en el registro público de origen, que es lo ÚNICO que se le manda a
+// un rescatista que confirma. Sale de `updates.external_id` de las fichas que
+// entraron por un agregador; se exige la forma exacta porque el texto de la
+// plantilla manda a marcar a la persona como localizada allá, y mandar a
+// alguien a un enlace que no es ese registro es peor que no mandarlo.
+const SOURCE_FICHA_RE = /^https?:\/\/(www\.)?colombiatebusca\.com\/\?person=[0-9a-fA-F-]{36}$/;
+
+async function sourceFichaUrl(store, personId) {
+  if (typeof store.getUpdates !== 'function') return null;
+  for (const u of await store.getUpdates(personId)) {
+    const ext = String(u.external_id || '').trim();
+    if (u.source === 'aggregator' && SOURCE_FICHA_RE.test(ext)) return ext;
+  }
+  return null;
+}
+
+// Paso 2: contestaron la pregunta, desde su propio número.
+//
+// Lo que sale de acá hacia el rescatista NO es el contacto de la familia — por
+// WhatsApp eso no sale nunca. Sale `ficha_fuente_rescatista_encontrados`, que
+// le dice que nosotros no tenemos ese contacto y que la familia sí, y lo manda
+// a marcar a la persona como localizada en el registro donde ellos la buscan.
+// Por eso un "sí" falsificado o ambiguo cuesta, como mucho, un enlace a un
+// registro público.
+//
+// Una respuesta resuelve UNA pregunta: la última que le llegó a ese teléfono.
+// Antes resolvía TODAS las pendientes del número, así que dos usos de /rescate
+// el mismo día entregaban las dos personas con un solo "sí".
+//
+// Devuelve null si ese número no tenía nada pendiente — ahí "sí" es una palabra
+// cualquiera y el mensaje se procesa como siempre.
+async function resolveRescueAnswer(store, address, { answer, maxAgeHours = RESCUE_ASK_TTL_HOURS } = {}) {
+  const pending = await pendingRescueAsks(store, address, { maxAgeHours });
+  if (!pending.length) return null;
+
+  const [sub, ...rest] = pending;
+  if (rest.length) {
+    console.warn(
+      `[facematch:rescate] ${address} tiene ${pending.length} preguntas abiertas — se resuelve solo la última (sub ${sub.id})`
+    );
+  }
+  const person = await store.getPerson(sub.person_id);
+  if (!person) return null;
+
+  // Responder desde el propio número prueba que el número le pertenece. Eso, y
+  // nada más: el reclamo de rescate vive aparte, en rescue_state.
+  await store.verifySubscription(sub.verify_token);
+
+  if (answer === 'reporte') {
+    // Dijo que lo que hizo fue reportarla, no que la tenga consigo. No es un
+    // rescatista: no se le manda ninguna ficha ni se le entrega nada.
+    await store.setSubscriptionRescue(sub.id, { state: 'reported' });
+    console.log(`[facematch:rescate] ${address} respondió REPORTE por ${person.full_name}`);
+    return { answer: 'reporte', person: person.full_name, sent: false };
+  }
+
+  await store.setSubscriptionRescue(sub.id, { state: 'confirmed' });
+  const latest = await store.getLatestUpdate(person.id);
+  const similarity = sub.rescue_similarity == null ? null : Number(sub.rescue_similarity);
+
+  // El operador recibe el cuadro completo: el contacto de la familia y el
+  // puntaje de la coincidencia que originó la pregunta.
+  await notifyFaceMatch(
+    store,
+    { ...sub, verified: true },
+    person,
+    similarity,
+    latest && latest.contact
+  );
+
+  const ficha = await sourceFichaUrl(store, person.id);
+  const template = rescueSourceTemplate();
+  if (!ficha || !template) {
+    // Una ficha reportada por la web no tiene registro de origen a donde
+    // mandarlo, y no hay ninguna plantilla aprobada para ese caso. Inventar una
+    // no es una opción: Meta solo entrega lo aprobado, y el texto de un mensaje
+    // en este flujo es una decisión de privacidad, no de redacción. Queda en
+    // manos del operador, que ya recibió el relevo de arriba.
+    console.log(
+      `[facematch:rescate] confirmación de ${address} por ${person.full_name} sin ficha de origen — solo relevo`
+    );
+    return { answer: 'si', person: person.full_name, ficha: null, sent: false };
+  }
+  const res = await sendWhatsApp(address, null, {
+    template: {
+      name: template,
+      locale: whatsappTemplateLocale(),
+      params: [person.full_name, ficha]
+    }
+  });
+  if (!res.ok) {
+    console.error(`[facematch:rescate] la ficha a ${address} no salió: ${res.error || res.status}`);
+  }
+  return { answer: 'si', person: person.full_name, ficha, sent: !!res.ok };
 }
 
 // Search the collection for a stored photo, index it, and notify on cross-kind
@@ -211,18 +545,16 @@ async function backfillPhotoDerivatives(store, matcher, limit = 100) {
   let noFace = 0;
 
   for (const photo of pending) {
-    const hasBox = !!(photo.face_detail && photo.face_detail.box);
-    const hasThumb = !!(photo.thumb && photo.thumb.length);
     // Already thumbnailed, and only Rekognition could add what's missing.
     // Redoing the centred crop would change nothing, so leave it for later —
     // otherwise this photo looks "pending" forever while matching is down.
-    if (hasThumb && !hasBox && !matcher.enabled) {
+    if (derivativeAction(photo, matcher.enabled) === 'skip') {
       waiting++;
       continue;
     }
     try {
       const bytes = Buffer.isBuffer(photo.content) ? photo.content : Buffer.from(photo.content);
-      let geometry = hasBox ? photo.face_detail : null;
+      let geometry = hasGeometry(photo) ? photo.face_detail : null;
       if (!geometry && matcher.enabled) {
         geometry = await matcher.detectFace(bytes);
         if (geometry) geometries++;
@@ -269,7 +601,21 @@ async function backfillPhotoDerivatives(store, matcher, limit = 100) {
 // The rescuer flow: identify who is looking for the person in front of you.
 // The photo is NEVER stored — it is compared, its face signature is indexed so
 // future reports can reach this rescuer, and the bytes are dropped immediately.
-async function identifyRescuedPerson(store, matcher, { bytes, contentType, personId, subscriptionId }) {
+//
+// `searchOnly` apaga esa indexación: compara contra la colección, devuelve las
+// coincidencias y NO deja nada — ni firma facial en Rekognition, ni fila de
+// foto, ni la persona ancla que las sostiene.
+//
+// El costo es exactamente la funcionalidad más valiosa: sin firma indexada, esa
+// consulta NUNCA va a recibir el aviso posterior de "alguien reportó a esta
+// persona". La opción que da más privacidad quita la que más sirve, y por eso
+// no es el comportamiento por omisión de nadie: es una casilla que alguien
+// marca a sabiendas, con el costo escrito al lado.
+async function identifyRescuedPerson(
+  store,
+  matcher,
+  { bytes, contentType, personId, subscriptionId, searchOnly = false }
+) {
   // Same cold-start trap as processPhoto: `enabled` is a getter over the
   // lazily-built real matcher and reads false on a fresh serverless invocation
   // — which would tell the very first rescuer to reach this instance that the
@@ -298,23 +644,28 @@ async function identifyRescuedPerson(store, matcher, { bytes, contentType, perso
   const bySimilarity = new Map(matches.map((m) => [m.faceId, m.similarity]));
 
   // Index the face so a later missing-person report can alert this rescuer,
-  // then immediately drop the image bytes.
-  const photo = await store.addPhoto({
-    personId,
-    kind: 'query',
-    subscriptionId,
-    content: Buffer.alloc(0),
-    contentType: usable.contentType
-  });
-  try {
-    const { faceId } = await matcher.indexFace(usable.bytes, photo.id);
-    if (faceId) await store.setPhotoFaceId(photo.id, faceId);
-    // No geometry is stored for a rescuer's photo: the image is dropped on the
-    // next line, so there would be nothing to draw it over.
-  } catch (e) {
-    console.error('[facematch:rescue] index failed:', e.message);
+  // then immediately drop the image bytes. En modo solo-búsqueda esto es
+  // justamente lo que no pasa: la consulta se resuelve con lo que ya está
+  // indexado y no agrega nada a la colección.
+  let photo = null;
+  if (!searchOnly) {
+    photo = await store.addPhoto({
+      personId,
+      kind: 'query',
+      subscriptionId,
+      content: Buffer.alloc(0),
+      contentType: usable.contentType
+    });
+    try {
+      const { faceId } = await matcher.indexFace(usable.bytes, photo.id);
+      if (faceId) await store.setPhotoFaceId(photo.id, faceId);
+      // No geometry is stored for a rescuer's photo: the image is dropped on
+      // the next line, so there would be nothing to draw it over.
+    } catch (e) {
+      console.error('[facematch:rescue] index failed:', e.message);
+    }
+    await store.clearPhotoContent(photo.id);
   }
-  await store.clearPhotoContent(photo.id);
 
   // Which missing-person reports does this face correspond to?
   const found = [];
@@ -333,7 +684,7 @@ async function identifyRescuedPerson(store, matcher, { bytes, contentType, perso
     });
   }
   found.sort((a, b) => b.similarity - a.similarity);
-  return { available: true, matches: found, photoId: photo.id };
+  return { available: true, matches: found, photoId: photo ? photo.id : null, indexed: !!photo };
 }
 
 // Retira de la colección las firmas faciales de una persona, justo antes de
@@ -388,6 +739,9 @@ module.exports = {
   processPhoto,
   identifyRescuedPerson,
   forgetPersonFaces,
+  notifyRescuerOfMatches,
+  requestRescueConfirmation,
+  resolveRescueAnswer,
   backfillUnindexedPhotos,
   backfillPhotoDerivatives,
   MAX_QUERY_PHOTOS

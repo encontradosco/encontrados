@@ -48,7 +48,7 @@ async function fakeGithub() {
       res.end(
         JSON.stringify({
           number: received.length,
-          html_url: `https://github.com/torrenegra/encontrados/issues/${received.length}`
+          html_url: `https://github.com/encontradosco/encontrados/issues/${received.length}`
         })
       );
     });
@@ -56,7 +56,7 @@ async function fakeGithub() {
   await new Promise((r) => server.listen(0, r));
   process.env.GITHUB_API_BASE = `http://127.0.0.1:${server.address().port}`;
   process.env.GITHUB_TOKEN = 'ghp_test';
-  process.env.GITHUB_REPO = 'torrenegra/encontrados';
+  process.env.GITHUB_REPO = 'encontradosco/encontrados';
   return {
     received,
     // Make only the NEXT request fail — flipping a flag races the request that
@@ -73,4 +73,33 @@ async function fakeGithub() {
   };
 }
 
-module.exports = { fakeSendgrid, fakeGithub };
+// Stand-in Meta Cloud API, so the WhatsApp tests exercise the real "message
+// actually sent" path and can leer exactly what payload salió — que es donde
+// vive la diferencia entre una plantilla y un texto plano.
+async function fakeWhatsApp() {
+  const received = [];
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => (body += c));
+    req.on('end', () => {
+      received.push({ url: req.url, auth: req.headers.authorization, body: JSON.parse(body || '{}') });
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ messages: [{ id: `wamid.test.${received.length}` }] }));
+    });
+  });
+  await new Promise((r) => server.listen(0, r));
+  process.env.WHATSAPP_API_BASE = `http://127.0.0.1:${server.address().port}`;
+  process.env.WHATSAPP_TOKEN = 'wa-test-token';
+  process.env.WHATSAPP_PHONE_NUMBER_ID = '1234567890';
+  return {
+    received,
+    stop() {
+      server.close();
+      delete process.env.WHATSAPP_API_BASE;
+      delete process.env.WHATSAPP_TOKEN;
+      delete process.env.WHATSAPP_PHONE_NUMBER_ID;
+    }
+  };
+}
+
+module.exports = { fakeSendgrid, fakeGithub, fakeWhatsApp };

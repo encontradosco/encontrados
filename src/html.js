@@ -3,6 +3,7 @@
 const env = require('./env');
 const { STATUS_LABEL } = require('./notify');
 const { maskReporter } = require('./privacy');
+const { isReadyToShow, toCropSpace } = require('./report-photo');
 
 const DEFAULT_DESCRIPTION =
   'Si rescataste a alguien, sube su foto y te decimos quién la está buscando; la foto se borra de inmediato. También puedes reportar a una persona desaparecida. Terremoto en Colombia, 10 de agosto.';
@@ -43,32 +44,11 @@ function pct(n) {
   return `${(Number.isFinite(v) ? v * 100 : 0).toFixed(3)}%`;
 }
 
-// The overlay coordinates are ratios of the ORIGINAL photo, and the thumbnail
-// is a crop of it — so they have to be moved into the crop's own coordinate
-// space before they land anywhere near the right pixel.
-function toCropSpace(detail) {
-  const c = detail.crop;
-  if (!c || !c.w || !c.h) return detail;
-  const mapX = (x) => (x - c.l) / c.w;
-  const mapY = (y) => (y - c.t) / c.h;
-  return {
-    ...detail,
-    box: detail.box
-      ? { l: mapX(detail.box.l), t: mapY(detail.box.t), w: detail.box.w / c.w, h: detail.box.h / c.h }
-      : null,
-    // A landmark can fall outside the crop on an off-centre face; pinning it to
-    // the edge would be a lie, so drop it.
-    points: (detail.points || [])
-      .map((p) => ({ ...p, x: mapX(p.x), y: mapY(p.y) }))
-      .filter((p) => p.x >= 0 && p.x <= 1 && p.y >= 0 && p.y <= 1)
-  };
-}
-
 // The listing loads the face thumbnail, never the full photo, and only once
 // PHOTO_SCRIPT decides the visitor's connection can afford it. Without
 // JavaScript the <noscript> copy loads normally.
 function facePlate(photo, personName, { large = false } = {}) {
-  if (!photo || !photo.thumb_type) return '';
+  if (!isReadyToShow(photo)) return '';
   const detail = photo.face_detail ? toCropSpace(photo.face_detail) : null;
   const alt = `Foto del reporte de ${personName}`;
   const src = `/photo/${photo.id}/${large ? 'face' : 'thumb'}`;
@@ -253,6 +233,25 @@ const WRITE_US = `<a href="https://x.com/ni500" target="_blank" rel="noopener">E
 const OUTREACH = `<p class="outreach">¿Deseas contribuir? Puedes usar tu agente de AI para hacer crawling de redes sociales y encontrar reportes de desaparecidos. ${WRITE_US}.</p>
   <p class="outreach">¿Eres parte del equipo de ColombiaTeBusca? Puedes integrar nuestra tech directamente o podemos integrarla por Uds. ${WRITE_US}.</p>`;
 
+// Money, last of all. People do ask where to donate, and the honest answer is
+// "not here" — so the line says that first and then hands over three labelled
+// destinations on Vaki, the crowdfunding platform, named in plain text so
+// nobody clicks without knowing where they land.
+//
+// Three constraints shaped it, in this order:
+//   1. It must never compete with "Reporta desaparecido". Someone looking for
+//      their sister cannot meet a money button first, so this sits at the very
+//      bottom, under the credits and under the two asks, in the same quiet
+//      .outreach style — no new CSS, no new weight, nothing to notice unless
+//      you were looking for it.
+//   2. The country is LABELLED, never detected. Geolocation breaks on a VPN
+//      and, worse, on the diaspora — a good share of the people reporting from
+//      this site do it from +34 and +54 numbers, and guessing would send them
+//      to the wrong door with no way back.
+//   3. One paragraph, three links, zero JavaScript. Same budget as everything
+//      else here.
+const GIVE = `<p class="outreach">Este sitio no recibe donaciones. Si quieres aportar dinero, estos enlaces llevan a Vaki, una plataforma de recaudo colectivo cofundada por uno de los mantenedores de este sitio: <a href="https://vaki.co/explorar" target="_blank" rel="noopener">ver campañas abiertas en Colombia</a> · <a href="https://helpcolombia.vaki.org" target="_blank" rel="noopener">donar desde Estados Unidos, con Vaki Foundation</a> · <a href="https://vaki.co/crear" target="_blank" rel="noopener">crear una vaki para ayudar a alguien en particular</a>.</p>`;
+
 function layout(title, body, meta = {}) {
   const fullTitle = meta.fullTitle || `${title} — encontrados.co · Personas y terremoto en Colombia`;
   const description = meta.description || DEFAULT_DESCRIPTION;
@@ -290,8 +289,9 @@ function layout(title, body, meta = {}) {
 ${body}
 </main>
 <footer>
-  <p><span class="credit">Hecho con 💙 por <a href="https://x.com/ni500" target="_blank" rel="noopener">Ni500</a> y <a href="https://me.torrenegra.com" target="_blank" rel="noopener">Torrenegra</a></span> · <a href="/ideas">💡 Ideas</a> · <a href="/bug">🐛 Reporta bug</a> · <a href="https://github.com/torrenegra/encontrados" target="_blank" rel="noopener">Github</a> · <a href="/privacidad">Privacidad</a> · <a href="/terminos">Términos</a></p>
+  <p><span class="credit">Hecho con 💙 por <a href="https://x.com/ni500" target="_blank" rel="noopener">Ni500</a> y <a href="https://me.torrenegra.com" target="_blank" rel="noopener">Torrenegra</a></span> · <a href="/ideas">💡 Ideas</a> · <a href="/bug">🐛 Reporta bug</a> · <a href="https://github.com/encontradosco/encontrados" target="_blank" rel="noopener">Github</a> · <a href="/privacidad">Privacidad</a> · <a href="/terminos">Términos</a></p>
 ${OUTREACH}
+${GIVE}
 </footer>
 ${RESIZE_SCRIPT}
 ${TIME_SCRIPT}
@@ -351,6 +351,16 @@ function mapLink(u) {
   return ` · <a href="https://www.openstreetmap.org/?mlat=${u.lat}&amp;mlon=${u.lng}#map=16/${u.lat}/${u.lng}" target="_blank" rel="noopener">ver en mapa</a>`;
 }
 
+// `source` is an enum for the database, not for a family reading the ficha —
+// "Fuente: aggregator" is developer jargon on the most human page of the site.
+const SOURCE_LABEL = {
+  web: 'sitio web',
+  whatsapp: 'WhatsApp',
+  api: 'API',
+  aggregator: 'registro externo',
+  rescate: 'rescatista'
+};
+
 function updateCard(u, personName) {
   // Never render the raw `reporter` — it may be a phone number or email
   // (see src/privacy.js). Only the masked public label is safe to show.
@@ -360,7 +370,7 @@ function updateCard(u, personName) {
   <p>${statusBadge(u.status)} ${timeTag(u.created_at)}</p>
   ${u.message ? `<p class="msg">${esc(u.message)}</p>` : ''}
   ${u.location ? `<p class="loc">📍 ${esc(u.location)}${mapLink(u)}</p>` : u.lat != null && u.lng != null ? `<p class="loc">📍 Ubicación GPS${mapLink(u)}</p>` : ''}
-  <p class="meta">Fuente: ${esc(u.source)}${reporterLabel ? ` · Reportado por: ${esc(reporterLabel)}` : ''}</p>
+  <p class="meta">Fuente: ${esc(SOURCE_LABEL[u.source] || u.source)}${reporterLabel ? ` · Reportado por: ${esc(reporterLabel)}` : ''}</p>
 </article>`;
 }
 

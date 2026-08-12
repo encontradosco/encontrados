@@ -34,6 +34,11 @@ body {
 
 header {
   display: flex;
+  /* wrap: on a 375px phone the brand and the two buttons don't share a row.
+     Without this the nav squeezed next to the brand and "Reporta
+     desaparecido" broke onto two lines ON TOP of the logo — the first thing
+     every visitor saw. Wrapped, the nav simply takes its own full row. */
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
   gap: 0.5rem;
@@ -41,11 +46,20 @@ header {
   background: var(--paper);
   border-bottom: 1px solid var(--border);
 }
-header a { color: var(--ink); text-decoration: none; margin-left: 0.6rem; font-size: 0.95rem; }
+header a { color: var(--ink); text-decoration: none; font-size: 0.95rem; }
+header nav {
+  display: flex;
+  flex-wrap: wrap; /* on a 320px phone the two buttons stack instead of overflowing */
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-left: auto; /* right-aligned beside the brand, and when wrapped too */
+}
 header nav a {
   background: var(--accent);
   color: #fff;
-  padding: 0.4rem 0.8rem;
+  /* A finger-sized target (~40px tall), and never broken mid-label. */
+  padding: 0.55rem 0.9rem;
+  white-space: nowrap;
   border-radius: 8px;
   font-weight: 600;
 }
@@ -57,6 +71,7 @@ header nav a:hover { background: var(--accent-dark); color: #fff; }
   margin-left: 0;
   letter-spacing: -0.01em;
   color: var(--accent);
+  white-space: nowrap; /* the ❤️‍🩹 stays glued to the name */
 }
 .brand:hover { color: var(--accent-dark); }
 nav .cta {
@@ -160,8 +175,10 @@ h1.compact .subtle { font-family: var(--font-sans); font-weight: 400; font-size:
 .card h3 { margin: 0 0 0.3rem; font-size: 1.05rem; }
 .card h3 a { color: var(--ink); text-decoration: none; }
 .card h3 a:hover { color: var(--accent-dark); }
-.card .meta { color: var(--muted); font-size: 0.78rem; margin-bottom: 0; }
-.card time { color: var(--muted); font-size: 0.82rem; }
+/* 0.85rem ≈ 13.6px — the floor for the timestamps and source lines that get
+   read on one bar of signal, squinting, outdoors. */
+.card .meta { color: var(--muted); font-size: 0.85rem; margin-bottom: 0; }
+.card time { color: var(--muted); font-size: 0.85rem; }
 .card p { margin: 0.3rem 0; }
 
 /* Report photo with the face-detection geometry drawn over it. Every marker is
@@ -172,10 +189,50 @@ h1.compact .subtle { font-family: var(--font-sans); font-weight: 400; font-size:
   display: flex;
   align-items: center;
   gap: 0.9rem;
+  /* #65: anchor for the stretched name link — the whole card is tappable. */
+  position: relative;
+}
+.card.person:hover { border-color: var(--accent); }
+.card.person .card-link::after {
+  content: '';
+  position: absolute;
+  inset: 0;
 }
 .person-info { flex: 1; min-width: 0; }
 .person-info h3,
 .person-info p { margin: 0; }
+
+/* #65: the rescuer's action on the card itself, not at the end of the ficha.
+   Sits above the stretched link, as does the photo's "ver foto" button. */
+.card.person .card-cta,
+.card.person .face {
+  position: relative;
+  z-index: 1;
+}
+.card-cta {
+  display: inline-block;
+  margin-top: 0.5rem;
+  padding: 0.55rem 0.9rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--accent-dark);
+  background: rgba(43, 108, 176, 0.08);
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  text-decoration: none;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.card-cta:hover { background: var(--accent); color: #fff; }
+
+/* #65: on a long ficha the action was only reachable after scrolling the whole
+   timeline. Sticky keeps it in view the moment the page moves. */
+.sticky-cta {
+  position: sticky;
+  bottom: 0.8rem;
+  z-index: 5;
+  margin: 1.2rem 0 0.4rem;
+}
+.sticky-cta .big-btn { box-shadow: 0 6px 20px rgba(31, 30, 29, 0.25); }
 
 /* Person page: name and reports on the left, a bigger version of the same face
    spanning both on the right — so it starts level with the title. */
@@ -300,8 +357,14 @@ h1.compact .subtle { font-family: var(--font-sans); font-weight: 400; font-size:
 
 form.stack { display: grid; gap: 0.6rem; margin: 1rem 0; }
 form.stack.compact { gap: 0.5rem; margin: 0.6rem 0; }
-.file-label { display: flex; flex-direction: column; gap: 0.2rem; }
-.file-label span { font-weight: 400; font-size: 0.85rem; color: var(--muted); }
+/* .field-label: same anatomy as .file-label, for every text field. The label
+   stays visible while typing — a placeholder vanishes exactly when a stressed
+   reporter needs to double-check what goes where — and the placeholder is
+   demoted to an example. */
+.file-label,
+.field-label { display: flex; flex-direction: column; gap: 0.2rem; }
+.file-label span,
+.field-label > span:first-child { font-weight: 400; font-size: 0.85rem; color: var(--muted); }
 
 input, select, textarea, button {
   font: inherit;
@@ -313,7 +376,9 @@ input, select, textarea, button {
   background: var(--surface);
   color: var(--ink);
 }
-input::placeholder, textarea::placeholder { color: #9a978d; }
+/* Was #9a978d — 2.9:1 on white, below the 4.5:1 AA floor. Now that visible
+   labels carry the meaning, placeholders are just examples, but still legible. */
+input::placeholder, textarea::placeholder { color: var(--muted); }
 input:focus, select:focus, textarea:focus {
   outline: none;
   border-color: var(--accent);

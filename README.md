@@ -7,6 +7,8 @@ Conecta a quien **rescata** a una persona con quien la **busca** — tras el ter
 
 El contacto de quien reporta **solo** se revela a un rescatista cuando el rostro coincide; nunca aparece en páginas públicas.
 
+Cuando la ficha que coincide **no trae** contacto de la familia —pasa con las importadas de registros públicos— la app invierte la pregunta: el rescatista deja su teléfono y dónde está la persona, y ese **aviso de rescatista** lo trabaja un humano, paso por paso y sin automatismos. El camino completo, con el criterio de triage: [**docs/avisos-de-rescatista.md**](docs/avisos-de-rescatista.md).
+
 Las fotos siguen dos reglas opuestas según quién las suba. La de un **rescatista** no se guarda ni se muestra jamás: se compara, se indexa su firma facial y los bytes se borran. La de un **reporte de desaparecido** sí se guarda y sí se publica —recortada al rostro, con los puntos de detección facial dibujados encima— porque de eso se trata: que un rescatista reconozca a la persona que tiene al lado. La lista carga solo la miniatura, y ni siquiera esa si la conexión es mala.
 
 Diseño ultraliviano a propósito: HTML renderizado en el servidor, un CSS pequeño, sin frameworks — funciona en teléfonos viejos y conexiones débiles.
@@ -28,8 +30,9 @@ npm test
 ### WhatsApp (Meta Cloud API) — pendiente de credenciales; el canal está implementado pero sin referencias en la interfaz hasta activarlo
 
 1. En [Meta for Developers](https://developers.facebook.com), crea una app con el producto WhatsApp y toma `WHATSAPP_TOKEN` y `WHATSAPP_PHONE_NUMBER_ID`.
-2. Configura el webhook: URL `https://encontrados.co/webhooks/whatsapp`, verify token = `WHATSAPP_VERIFY_TOKEN`, suscrito al campo `messages`.
-3. Comandos: `AYUDA`, `BUSCAR <nombre>`, `BIEN|HERIDO|DESAPARECIDO <nombre>: <nota> @ <lugar>`, `SUSCRIBIR <nombre>`, `BAJA <nombre>` / `BAJA TODO`. Un mensaje sin comando se trata como búsqueda.
+2. Configura el webhook apuntando al **relevo** que verifica la firma HMAC de Meta, no a este servidor: el relevo reenvía el cuerpo intacto a `https://encontrados.co/webhooks/whatsapp` agregando la cabecera `X-Relay-Secret`. Verify token = `WHATSAPP_VERIFY_TOKEN`, suscrito al campo `messages`.
+3. Define `WHATSAPP_RELAY_SECRET` con el mismo valor en los dos lados (`openssl rand -hex 32`). El `POST` del webhook escribe en la base, así que **sin esa variable responde 403 a todo**: falla cerrado a propósito.
+4. Comandos: `AYUDA`, `BUSCAR <nombre>`, `BIEN|HERIDO|DESAPARECIDO <nombre>: <nota> @ <lugar>`, `SUSCRIBIR <nombre>`, `BAJA <nombre>` / `BAJA TODO`. Un mensaje sin comando se trata como búsqueda.
 
 ## API
 
@@ -75,3 +78,23 @@ Al llegar un reporte nuevo se notifica a todos los suscriptores **verificados** 
 - **Correo**: la suscripción nace sin verificar; se envía un correo con enlace `/verify?token=…`. No se manda ninguna alerta hasta confirmar.
 - **WhatsApp**: verificadas implícitamente (la persona escribe desde su propio número).
 - **Baja**: toda alerta (correo y WhatsApp) incluye un enlace personal `/unsubscribe?token=…` de un clic. En el bot también funciona `BAJA <nombre>` / `BAJA TODO`.
+
+## Contribuir
+
+El proyecto es abierto y se corre local en dos comandos, **sin credenciales de
+nada**:
+
+```bash
+npm install
+npm run dev     # SQLite local, http://localhost:3000
+```
+
+- [**CONTRIBUTING.md**](CONTRIBUTING.md) — cómo mandar un cambio, qué conviene
+  conversar antes de construirlo, y las reglas duras sobre datos personales.
+- [**SECURITY.md**](SECURITY.md) — un hallazgo de seguridad o privacidad **no va
+  en un issue público**.
+- [**CODE_OF_CONDUCT.md**](CODE_OF_CONDUCT.md).
+
+Buenos puntos de entrada: los issues marcados
+[`good first issue`](https://github.com/encontradosco/encontrados/labels/good%20first%20issue)
+y [`help wanted`](https://github.com/encontradosco/encontrados/labels/help%20wanted).
