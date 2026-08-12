@@ -114,18 +114,35 @@ function createStore(adapter) {
   // y por lo tanto es del que escribe. Un número TECLEADO en un formulario web
   // no trae esa prueba: puede ser el de cualquiera. Quien lo crea puede decirlo
   // con `{ verified: false }` en vez de heredar una suposición que ahí es falsa.
+  //
+  // `needsVerification` significa una sola cosa: "hay que mandarle el correo de
+  // verificación a esta dirección". Sin el calificador de canal, un número de
+  // teléfono sin verificar pedía un correo que nunca iba a llegar a ninguna
+  // parte, y la API respondía `pending_verification: true` por algo que no
+  // estaba pendiente sino que era imposible. Un número NO se verifica por
+  // correo: se verifica cuando su dueño escribe desde él.
   async function subscribe(personId, channel, address, { verified: asVerified } = {}) {
     const addr0 = String(address || '').trim();
     if (!addr0) throw new Error('Address is required');
     const addr = channel === 'email' ? addr0.toLowerCase() : addr0;
     const existing = await adapter.findSubscription(personId, channel, addr);
     if (existing) {
-      return { sub: existing, created: false, needsVerification: !existing.verified };
+      return {
+        sub: existing,
+        created: false,
+        needsVerification: channel === 'email' && !existing.verified
+      };
     }
     const token = crypto.randomBytes(16).toString('hex');
     const verified = asVerified === undefined ? channel !== 'email' : !!asVerified;
     const sub = await adapter.insertSubscription(personId, channel, addr, verified, token);
-    return { sub, created: true, needsVerification: !verified };
+    return { sub, created: true, needsVerification: channel === 'email' && !verified };
+  }
+
+  // El estado del reclamo de rescate, aparte de `verified` (ver el esquema).
+  // state: 'asked' | 'confirmed' | 'reported' | null
+  async function setSubscriptionRescue(id, fields) {
+    return adapter.setSubscriptionRescue(id, fields || {});
   }
 
   async function verifySubscription(token) {
@@ -264,6 +281,7 @@ function createStore(adapter) {
     getSubscriptions,
     subscriptionsForAddress,
     getSubscriptionById,
+    setSubscriptionRescue,
     addPhoto,
     setPhotoFaceId,
     setPhotoFaceDetail,

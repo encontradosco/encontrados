@@ -4,7 +4,7 @@ const { normalize } = require('./names');
 const { notifySubscribers, relayEnabled, STATUS_LABEL } = require('./notify');
 const {
   processPhoto,
-  deliverConfirmedRescueContacts,
+  resolveRescueAnswer,
   MAX_QUERY_PHOTOS
 } = require('./facematch');
 const { nullMatcher } = require('./faces');
@@ -59,49 +59,49 @@ function parseMessage(text) {
   return { intent: 'find', name: raw, note: '', location: '' };
 }
 
-// Respuesta afirmativa a la plantilla que pregunta si la persona está con quien
-// recibió el mensaje (paso 1 de la entrega en dos pasos, en src/facematch.js).
+// Respuesta a la plantilla `confirmacion_rescatista_encontrados` (paso 1 de la
+// entrega en dos pasos, en src/facematch.js). Esa plantilla pide dos respuestas
+// concretas, escritas: **SÍ** o **REPORTE**.
 //
-// No es un comando: es lo que contesta alguien que no leyó ningún instructivo.
-// Por eso se mira la frase entera y también su primera palabra ("Sí, está
-// conmigo"). `normalize` ya quitó tildes, mayúsculas y puntuación.
-const AFFIRMATIVE = [
-  'si',
-  'sii',
-  'siii',
-  'sisi',
-  'claro',
-  'correcto',
-  'confirmo',
-  'confirmado',
-  'afirmativo',
-  'esta conmigo',
-  'la tengo',
-  'lo tengo',
-  'yes',
-  'yeah',
-  'yep'
-];
+// Se exigen EXACTAS, y no como prefijo de una frase. Mirar solo la primera
+// palabra convertía "Claro que no es ella" y "Si la veo te aviso" en
+// confirmaciones — dos frases que dicen justo lo contrario— y encima se tragaba
+// el mensaje: la búsqueda que la persona quería hacer nunca corría. Un mensaje
+// que no es una de las dos respuestas no se consume: sigue de largo y se
+// procesa como cualquier otro.
+//
+// `normalize` ya quitó tildes, mayúsculas y puntuación, así que "SÍ", "Sí." y
+// "si" son la misma palabra, y "Sí, está conmigo" no lo es.
+const ANSWERS = { si: 'si', reporte: 'reporte' };
 
-function isAffirmative(text) {
-  const t = normalize(text);
-  if (!t) return false;
-  return AFFIRMATIVE.includes(t) || AFFIRMATIVE.includes(t.split(' ')[0]);
+function rescueAnswer(text) {
+  return ANSWERS[normalize(text)] || null;
 }
 
-// Lo que se le contesta a quien acaba de confirmar. En modo relevo la entrega
-// no sale sola —esa regla no cambia porque ahora haya una confirmación en
-// banda— así que no se le puede prometer un mensaje que no va a llegar.
-function confirmationReply(result) {
-  const who = result.delivered.length
-    ? `Registramos que ${result.delivered.map((n) => `*${n}*`).join(', ')} está contigo.`
-    : 'Registramos tu confirmación.';
+// Lo que se le contesta a quien acaba de responder. Nunca lleva el contacto de
+// una familia: por WhatsApp eso no sale, y prometerlo sería mentir dos veces
+// —una sobre lo que va a llegar y otra sobre lo que tenemos.
+function rescueAnswerReply(result) {
+  if (result.answer === 'reporte') {
+    return [
+      '✅ Gracias por aclararlo.',
+      `Entonces quedas anotado como quien busca a *${result.person}*, no como quien la tiene consigo.`,
+      'Te avisamos si hay novedades. Para dejar de recibir mensajes, responde BAJA TODO.'
+    ].join('\n');
+  }
+  if (result.sent) {
+    return [
+      '✅ Gracias por confirmar.',
+      `Te acabamos de enviar el enlace de la ficha de *${result.person}* en el registro donde su familia la está buscando.`,
+      'Márcala como localizada ahí: es lo que hace que su familia se entere. Nosotros no tenemos su contacto, ellos sí.'
+    ].join('\n');
+  }
   return [
     '✅ Gracias por confirmar.',
-    who,
+    `Registramos que *${result.person}* está contigo.`,
     relayEnabled()
-      ? 'Una persona del equipo revisa cada caso antes de entregar los datos de contacto de una familia. Te escribimos apenas quede revisado.'
-      : 'Te enviamos los datos de contacto de quien la busca en un mensaje aparte.',
+      ? 'Una persona del equipo revisa cada caso y se encarga de que el aviso le llegue a quien la busca. Puede tomar un momento.'
+      : 'Una persona del equipo se encarga de que el aviso le llegue a quien la busca.',
     'Si este mensaje te llegó por error, responde BAJA TODO y no te volvemos a escribir.'
   ].join('\n');
 }
@@ -129,14 +129,16 @@ async function personSummary(store, person) {
 // address for that channel). photo: optional { bytes, contentType } attached to
 // the message. Returns the reply text.
 async function handleInbound(store, { channel, from, text, photo, matcher = nullMatcher }) {
-  // Antes que cualquier comando: un "sí" solo significa algo si a este número
-  // le preguntamos algo y sigue esperando respuesta. Si no hay nada pendiente,
-  // "sí" vuelve a ser una palabra cualquiera y el mensaje se procesa como
-  // siempre — de otro modo bastaría escribir "sí" para cosechar el contacto de
-  // una familia.
-  if (channel === 'whatsapp' && isAffirmative(text)) {
-    const confirmed = await deliverConfirmedRescueContacts(store, from);
-    if (confirmed) return confirmationReply(confirmed);
+  // Antes que cualquier comando: SÍ y REPORTE solo significan algo si a este
+  // número le preguntamos algo y sigue esperando respuesta. Si no hay nada
+  // pendiente, vuelven a ser palabras cualesquiera y el mensaje se procesa como
+  // siempre — nada se consume por parecerse a una confirmación.
+  if (channel === 'whatsapp') {
+    const answer = rescueAnswer(text);
+    if (answer) {
+      const resolved = await resolveRescueAnswer(store, from, { answer });
+      if (resolved) return rescueAnswerReply(resolved);
+    }
   }
 
   const parsed = parseMessage(text);
@@ -236,4 +238,4 @@ async function handleInbound(store, { channel, from, text, photo, matcher = null
   return HELP;
 }
 
-module.exports = { handleInbound, parseMessage, isAffirmative, HELP };
+module.exports = { handleInbound, parseMessage, rescueAnswer, HELP };

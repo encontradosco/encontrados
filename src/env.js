@@ -46,8 +46,12 @@ module.exports = {
   // Un rescatista llega por la web, no por WhatsApp: su primer mensaje SIEMPRE
   // lo iniciamos nosotros, así que sin plantilla configurada no sale.
   //
-  // El nombre no se quema acá porque lo aprueba Meta del lado de la cuenta, y
-  // cambia sin que este código tenga nada que decir al respecto.
-  WHATSAPP_TEMPLATE_RESCUE_CONFIRM: (process.env.WHATSAPP_TEMPLATE_RESCUE_CONFIRM || '').trim(),
-  WHATSAPP_TEMPLATE_LOCALE: (process.env.WHATSAPP_TEMPLATE_LOCALE || 'es').trim()
+  // Los nombres y el idioma por omisión son los YA APROBADOS (ver
+  // src/notify.js). Se dejan configurables porque quien los aprueba es Meta del
+  // lado de la cuenta; `undefined` toma el aprobado y vacío apaga el envío.
+  WHATSAPP_TEMPLATE_RESCUE_CONFIRM: process.env.WHATSAPP_TEMPLATE_RESCUE_CONFIRM,
+  WHATSAPP_TEMPLATE_RESCUE_SOURCE: process.env.WHATSAPP_TEMPLATE_RESCUE_SOURCE,
+  // `es` y `es_CO` son idiomas distintos para Meta: pedir el que no es equivale
+  // a que no llegue nada.
+  WHATSAPP_TEMPLATE_LOCALE: process.env.WHATSAPP_TEMPLATE_LOCALE
 };

@@ -85,6 +85,25 @@ async function createSqliteAdapter(dbPath) {
       db.exec(`ALTER TABLE photos ADD COLUMN ${col}`);
     } catch { /* already exists */ }
   }
+  // El reclamo de rescate NO es lo mismo que la propiedad del número, y venían
+  // compartiendo el booleano `verified`. Una suscripción que el bot verificó
+  // con SUSCRIBIR prueba que el número es de quien escribe; no dice nada sobre
+  // si esa persona tiene a alguien al lado. Se separan:
+  //   rescue_state      null | 'asked' | 'confirmed' | 'reported'
+  //   rescue_similarity el % de la coincidencia que originó la pregunta, para
+  //                     que el relevo no llegue sin el único dato que distingue
+  //                     un rescate real de un parecido.
+  // `rescue_asked_at` va como TEXTO ISO en los dos motores a propósito: la
+  // ventana de 72 h se calcula en JS, y un TIMESTAMPTZ en Postgres volvería
+  // como Date mientras SQLite devuelve string — dos formas del mismo dato es
+  // exactamente la clase de diferencia que se cuela en producción y no en las
+  // pruebas. `created_at` no sirve para esto: una fila de seguidor creada la
+  // semana pasada puede recibir la pregunta hoy.
+  for (const col of ['rescue_state TEXT', 'rescue_similarity REAL', 'rescue_asked_at TEXT']) {
+    try {
+      db.exec(`ALTER TABLE subscriptions ADD COLUMN ${col}`);
+    } catch { /* already exists */ }
+  }
   // Older dev databases: add external_id if missing. Note: SQLite can't widen
   // an existing CHECK constraint via ALTER TABLE, so a pre-existing local
   // ./data/encontrados.db still rejects source='aggregator' until it's recreated
@@ -233,6 +252,16 @@ async function createSqliteAdapter(dbPath) {
         'INSERT OR IGNORE INTO subscriptions (person_id, channel, address, verified, verify_token) VALUES (?, ?, ?, ?, ?)'
       ).run(personId, channel, address, verified ? 1 : 0, verifyToken || null);
       return this.findSubscription(personId, channel, address);
+    },
+    async setSubscriptionRescue(id, { state, similarity, askedAt } = {}) {
+      db.prepare(
+        `UPDATE subscriptions
+            SET rescue_state = ?,
+                rescue_similarity = COALESCE(?, rescue_similarity),
+                rescue_asked_at = COALESCE(?, rescue_asked_at)
+          WHERE id = ?`
+      ).run(state || null, similarity == null ? null : Number(similarity), askedAt || null, id);
+      return db.prepare('SELECT * FROM subscriptions WHERE id = ?').get(id);
     },
     async verifySubscriptionByToken(token) {
       const sub = db.prepare('SELECT * FROM subscriptions WHERE verify_token = ?').get(token);

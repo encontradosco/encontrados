@@ -209,8 +209,12 @@ const RESCUE_PRIVACY = `<p class="privacy">🔒 <strong>La foto no se guarda.</s
 // persona — que es lo más útil que hace la app para quien la está buscando.
 // Escribirlo suave sería venderle privacidad a alguien que en realidad está
 // renunciando al aviso sin darse cuenta.
-const SEARCH_ONLY_CHECKBOX = `<label class="share-check">
-    <input type="checkbox" name="solo_busqueda" value="1">
+// Función y no constante: el reintento tiene que poder devolverla MARCADA, y
+// parchar una plantilla de texto con un `replace` deja de funcionar en silencio
+// el día que alguien reordene los atributos. Acá lo que está en juego es el
+// consentimiento de alguien sobre su propia firma facial.
+const searchOnlyCheckbox = (checked = false) => `<label class="share-check">
+    <input type="checkbox" name="solo_busqueda" value="1"${checked ? ' checked' : ''}>
     Solo consultar ahora: no guarden nada de esta foto
   </label>
   <p class="subtle share-note"><strong>Ojo con lo que esto implica:</strong> no guardamos la firma facial, así que <strong>no vamos a poder avisarte si alguien reporta a esta persona más adelante</strong>. Esta consulta sirve solo para lo que veas ahora en pantalla, y el correo y el WhatsApp de arriba quedan sin efecto. Si la dejas sin marcar, la firma queda guardada y podemos avisarte.</p>`;
@@ -682,17 +686,26 @@ ${
   );
 
   // ------------------------------------------------------------- rescuer
-  function rescueForm(rememberedEmail = '') {
+  //
+  // El formulario se vuelve a pintar en los caminos de error, y tiene que
+  // volver con TODO lo que la persona ya había puesto — el correo, el teléfono
+  // y, sobre todo, la casilla de «no guarden nada».
+  //
+  // Esa casilla perdiéndose no era una molestia de usabilidad: quien la había
+  // marcado pidió expresamente que no guardáramos su firma facial, y el
+  // reintento sobre un formulario en blanco la indexaba en silencio. Es
+  // exactamente lo contrario de lo que esa persona pidió.
+  function rescueForm({ email = '', phone = '', searchOnly = false } = {}) {
     return `
 <form class="stack compact" method="post" action="/rescate" enctype="multipart/form-data" data-resize-photos data-require-photo>
   <label class="file-label"><span>📷 Foto de la persona que tienes contigo *</span>
     <input type="file" name="photo" accept="image/*" required></label>
   ${RESCUE_PRIVACY}
   <label class="field-label"><span>Tu correo (opcional — te avisamos si alguien la busca después)</span>
-    <input type="email" name="email" value="${esc(rememberedEmail)}" placeholder="tucorreo@ejemplo.com" autocomplete="email"></label>
+    <input type="email" name="email" value="${esc(email)}" placeholder="tucorreo@ejemplo.com" autocomplete="email"></label>
   <label class="field-label"><span>Tu WhatsApp (opcional — es por donde te llegamos más rápido)</span>
-    <input name="phone" inputmode="tel" maxlength="40" placeholder="300 123 4567" autocomplete="tel"></label>
-  ${SEARCH_ONLY_CHECKBOX}
+    <input name="phone" value="${esc(phone)}" inputmode="tel" maxlength="40" placeholder="300 123 4567" autocomplete="tel"></label>
+  ${searchOnlyCheckbox(searchOnly)}
   <button>🔎 Ver quién la está buscando</button>
 </form>
 <script>
@@ -715,7 +728,7 @@ document.addEventListener('submit', function (ev) {
         `
 <h1 class="compact">¿Rescataste a alguien? Mira quién la está buscando</h1>
 <p class="subtle">Sube una foto de la persona que tienes contigo. La comparamos con las fotos de las personas reportadas como desaparecidas y te mostramos los datos de contacto de quien la busca.</p>
-${rescueForm(readCookie(req, EMAIL_COOKIE))}`,
+${rescueForm({ email: readCookie(req, EMAIL_COOKIE) })}`,
         {
           fullTitle: 'Mira quién está buscando a la persona que rescataste — encontrados.co',
           description:
@@ -731,16 +744,19 @@ ${rescueForm(readCookie(req, EMAIL_COOKIE))}`,
     upload.single('photo'),
     wrap(async (req, res) => {
       const email = (req.body.email || '').trim();
+      const typedPhone = String(req.body.phone || '').trim().slice(0, 40);
       const phone = normalizePhone(req.body.phone);
       // Opt-in por consulta, nunca por tipo de usuario ni por omisión.
       const searchOnly = !!req.body.solo_busqueda;
+      // Lo que la persona ya escribió, para devolvérselo en cualquier reintento.
+      const typed = { email, phone: typedPhone, searchOnly };
       if (!req.file) {
         return res.status(400).send(
           layout(
             'Mira quién la está buscando',
             `<h1 class="compact">¿Rescataste a alguien?</h1>
 <div class="error"><p>Sube una foto de la persona: es lo que permite reconocerla.</p></div>
-${rescueForm(email)}`
+${rescueForm(typed)}`
           )
         );
       }
@@ -809,11 +825,25 @@ ${rescueForm(email)}`
         // Say what happened and what to do about it. This used to be a bare
         // "Error interno del servidor" — a dead end for someone standing next
         // to the person they just pulled out.
+        const retry = rescueForm(typed);
+        // El formulario de arriba se construye acá mismo, pero lo que está en
+        // juego es el consentimiento de alguien sobre su propia firma facial,
+        // así que no se da por hecho: se comprueba sobre el HTML que realmente
+        // va a salir. Si la casilla no volvió marcada, la persona tiene que
+        // enterarse ANTES de volver a subir la foto, no después.
+        const keptSearchOnly = /name="solo_busqueda"[^>]*checked/.test(retry);
         body =
           `<div class="error">
   <p><strong>No pudimos leer esa foto.</strong> El archivo llegó en un formato que no podemos procesar.</p>
   <p>Vuelve a intentarlo tomando la foto <strong>directamente con la cámara</strong> desde esta página, o guárdala como JPG antes de subirla.</p>
-</div>` + rescueForm(email);
+  ${
+    searchOnly
+      ? keptSearchOnly
+        ? '<p>Dejamos marcada tu casilla de <strong>«no guarden nada»</strong> y tu contacto tal como los escribiste: al reintentar sigue sin guardarse ninguna firma facial.</p>'
+        : '<p>⚠️ <strong>Ojo:</strong> no pudimos conservar tu casilla de «no guarden nada». <strong>Vuelve a marcarla</strong> antes de reintentar, o esta foto sí dejará una firma facial guardada.</p>'
+      : '<p>Dejamos tu contacto tal como lo escribiste.</p>'
+  }
+</div>` + retry;
       } else if (!available) {
         body = `<div class="error"><p>El reconocimiento facial no está disponible en este momento. Inténtalo de nuevo en unos minutos.</p></div>`;
       } else if (!matches.length) {
@@ -827,7 +857,15 @@ ${rescueForm(email)}`
             relayEnabled() ? ` ${REVIEWED_NOTE}` : ''
           }`
         : waSub
-          ? `Te avisaremos a tu WhatsApp cuando alguien la busque.${relayEnabled() ? ` ${REVIEWED_NOTE}` : ''}`
+          ? // Acá NO se puede prometer un aviso automático, y esto es lo que
+            // cambió: el número quedó guardado pero nadie lo confirmó, y sin
+            // coincidencia no hay ninguna pregunta que mandarle para que su
+            // dueño lo confirme. Un mensaje automático a un número sin dueño
+            // comprobado es justo lo que este servicio no puede hacer. Así que
+            // la fila queda —le sirve a una persona del equipo para ubicarte—
+            // y la promesa se cae, en vez de dejar el copy prometiendo algo que
+            // el código no tiene forma de cumplir.
+            'Guardamos tu número, pero <strong>no podemos confirmarlo</strong>, así que no te vamos a escribir solos: si alguien reporta a esta persona, una persona del equipo revisa el caso y te contacta por ahí. Si quieres el aviso por un canal que sí podemos confirmar de una vez, déjanos también tu correo.'
           : 'Vuelve a intentarlo más tarde, o déjanos tu correo o tu WhatsApp para avisarte cuando alguien la busque.'
   }</p>
 </div>`;

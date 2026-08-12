@@ -159,19 +159,52 @@ async function sendEmail(to, subject, text) {
   }
 }
 
-// La plantilla del primer contacto. Devuelve null si no está configurada: sin
-// ella no hay forma legítima de abrir conversación, y callar es mejor que
-// mandar un texto plano que Meta va a rechazar.
+// ------------------------------------------------- las plantillas aprobadas
+//
+// Meta aprueba una plantilla por su nombre, su idioma y su texto exacto. Lo que
+// dicen esas dos plantillas ES el contrato del flujo, y el código se ajusta a
+// ellas y no al revés:
+//
+//   confirmacion_rescatista_encontrados  {{1}} = nombre de la persona.
+//     Pregunta si quien recibe está con esa persona (o sabe dónde ubicarla) o
+//     si lo que hizo fue reportarla como desaparecida, y pide responder SÍ o
+//     REPORTE escribiéndolo.
+//   ficha_fuente_rescatista_encontrados  {{1}} = nombre, {{2}} = URL de la
+//     ficha en el registro público de origen. Dice que nosotros NO tenemos el
+//     contacto de la familia y que ellos sí, y manda a marcar a la persona como
+//     localizada en ese registro — "solo si la viste tú o hablaste con ella".
+//
+// De ahí sale la regla más importante de todo el flujo: **por WhatsApp nunca
+// sale el contacto de una familia.** Lo más que entrega un "sí" falsificado es
+// un enlace a un registro público.
+//
+// Los nombres son configurables porque quien los aprueba es Meta del lado de la
+// cuenta, pero el valor por omisión es el aprobado: sin configurar nada, el
+// código manda exactamente lo que Meta ya revisó. Poner la variable en vacío
+// apaga ese envío a propósito.
+const DEFAULT_TEMPLATE_RESCUE_CONFIRM = 'confirmacion_rescatista_encontrados';
+const DEFAULT_TEMPLATE_RESCUE_SOURCE = 'ficha_fuente_rescatista_encontrados';
+// Meta trata `es` y `es_CO` como idiomas DISTINTOS: pedir `es` para una
+// plantilla aprobada en `es_CO` es un rechazo, no una aproximación.
+const DEFAULT_TEMPLATE_LOCALE = 'es_CO';
+
+function readTemplate(name, fallback) {
+  const raw = process.env[name] !== undefined ? process.env[name] : env[name];
+  return String(raw === undefined || raw === null ? fallback : raw).trim();
+}
+
+// Paso 1: la pregunta. Nunca lleva un dato de la familia.
 function rescueConfirmTemplate() {
-  return (
-    process.env.WHATSAPP_TEMPLATE_RESCUE_CONFIRM ||
-    env.WHATSAPP_TEMPLATE_RESCUE_CONFIRM ||
-    ''
-  ).trim();
+  return readTemplate('WHATSAPP_TEMPLATE_RESCUE_CONFIRM', DEFAULT_TEMPLATE_RESCUE_CONFIRM);
+}
+
+// Paso 2: la ficha del registro de origen. Tampoco lleva un dato de la familia.
+function rescueSourceTemplate() {
+  return readTemplate('WHATSAPP_TEMPLATE_RESCUE_SOURCE', DEFAULT_TEMPLATE_RESCUE_SOURCE);
 }
 
 function whatsappTemplateLocale() {
-  return (process.env.WHATSAPP_TEMPLATE_LOCALE || env.WHATSAPP_TEMPLATE_LOCALE || 'es').trim();
+  return readTemplate('WHATSAPP_TEMPLATE_LOCALE', DEFAULT_TEMPLATE_LOCALE) || DEFAULT_TEMPLATE_LOCALE;
 }
 
 // Dos formas de mandar, porque Meta acepta dos cosas distintas:
@@ -218,25 +251,38 @@ async function sendWhatsApp(to, text, { template } = {}) {
       }
     : { messaging_product: 'whatsapp', to, type: 'text', text: { body: text } };
 
-  const res = await fetch(
-    `${apiBase}/v20.0/${phoneNumberId}/messages`,
-    {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(payload)
-    }
-  );
-  if (!res.ok) {
-    const body = await res.text();
-    console.error(
-      `[notify:whatsapp] FALLÓ ${res.status} to=${to} tipo=${template ? `plantilla:${template.name}` : 'texto'} :: ${body}`
+  // Devuelve el fallo en vez de lanzarlo, igual que sendEmail. Quien llama
+  // decide qué hacer con un envío que no salió —y en el flujo de rescate esa
+  // decisión es cargada: la fila del estado pendiente solo se escribe si la
+  // pregunta salió de verdad. Una excepción que sube y la atrapa un catch
+  // genérico convierte "no salió" en "no sé", que es peor.
+  try {
+    const res = await fetch(
+      `${apiBase}/v20.0/${phoneNumberId}/messages`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(payload)
+      }
     );
-    return { ok: false, status: res.status, error: body.slice(0, 500) };
+    if (!res.ok) {
+      const body = await res.text();
+      console.error(
+        `[notify:whatsapp] FALLÓ ${res.status} to=${to} tipo=${template ? `plantilla:${template.name}` : 'texto'} :: ${body}`
+      );
+      return { ok: false, status: res.status, error: body.slice(0, 500) };
+    }
+    return { ok: true, status: res.status };
+  } catch (e) {
+    console.error(
+      `[notify:whatsapp] LANZÓ to=${to} tipo=${template ? `plantilla:${template.name}` : 'texto'}`,
+      e
+    );
+    return { ok: false, error: e.message };
   }
-  return { ok: true, status: res.status };
 }
 
 function unsubscribeLink(sub) {
@@ -319,6 +365,7 @@ module.exports = {
   relayToOperators,
   avisoEmail,
   rescueConfirmTemplate,
+  rescueSourceTemplate,
   whatsappTemplateLocale,
   RELAY_SUBJECT_PREFIX
 };
