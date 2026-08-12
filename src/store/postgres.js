@@ -393,6 +393,14 @@ async function createPostgresAdapter(connectionString) {
         [faceIds]
       );
     },
+    // Metadatos de toda foto con firma facial — sin contenido ni derivados:
+    // esto alimenta un conteo, no una pantalla.
+    async indexedPhotos() {
+      return all(
+        'SELECT id, person_id, kind, face_id FROM photos WHERE face_id IS NOT NULL ORDER BY id',
+        []
+      );
+    },
     async deletePerson(id) {
       return one('DELETE FROM people WHERE id = $1 RETURNING *', [id]);
     },

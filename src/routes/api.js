@@ -12,6 +12,7 @@ const {
   processPhoto,
   backfillUnindexedPhotos,
   backfillPhotoDerivatives,
+  computeMatchStats,
   MAX_QUERY_PHOTOS
 } = require('../facematch');
 const { publicUpdate } = require('../privacy');
@@ -310,6 +311,29 @@ function apiRoutes(store, matcher) {
       const indexed = await backfillUnindexedPhotos(store, matcher, limit);
       const derivatives = await backfillPhotoDerivatives(store, matcher, limit);
       res.json({ ...indexed, derivatives });
+    })
+  );
+
+  // GET /api/match-stats — recomputa el cruce facial histórico contra la
+  // colección y devuelve SOLO cifras agregadas (parte 1 de #116). No escribe
+  // nada y no notifica a nadie.
+  //
+  // Va detrás de la API key aunque sea una lectura. La regla de "las lecturas
+  // quedan abiertas" existe porque la información de emergencia quiere ser
+  // encontrada — y esto no es eso: son cifras de operación, y cada llamada
+  // dispara decenas de búsquedas en Rekognition (cuestan plata y tienen tope
+  // por segundo), así que dejarla abierta regala un botón de gasto.
+  router.get(
+    '/match-stats',
+    requireKey,
+    wrap(async (req, res) => {
+      const stats = await computeMatchStats(store, matcher);
+      if (!stats) {
+        return res
+          .status(503)
+          .json({ error: `El matcher facial no está disponible: ${matcher.status}` });
+      }
+      res.json(stats);
     })
   );
 
