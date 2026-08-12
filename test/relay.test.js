@@ -162,7 +162,7 @@ test('relevo activo: la coincidencia facial no llega al rescatista, y el contact
   assert.match(body, /alguien está buscando a la persona que rescataste/i, 'el texto original, íntegro');
 });
 
-test('relevo apagado (NOTIFY_MODE=direct): la coincidencia facial le llega al rescatista, como antes', async (t) => {
+test('relevo apagado (NOTIFY_MODE=direct): el aviso le llega al rescatista SIN el contacto, y el operador recibe su copia CON el contacto', async (t) => {
   const sg = await fakeSendgrid();
   process.env.NOTIFY_MODE = 'direct';
   process.env.AVISO_EMAIL = BUZON;
@@ -189,12 +189,31 @@ test('relevo apagado (NOTIFY_MODE=direct): la coincidencia facial le llega al re
   rf.append('photos', new File([await photoBytes('nn')], 'f.jpg', { type: 'image/jpeg' }));
   await fetch(`${app.base}/report`, { method: 'POST', body: rf, redirect: 'manual' });
 
-  assert.equal(sg.received.length, 1);
-  const mail = sg.received[0];
-  assert.match(to(mail), /rescatista@ejemplo\.com/, 'en directo el aviso va al destinatario');
-  assert.doesNotMatch(to(mail), new RegExp(BUZON));
-  assert.doesNotMatch(mail.body.subject, /RETENIDO/);
-  assert.match(text(mail), /300 000 0000/);
+  // Dos correos: el del rescatista y la copia del operador. Antes salía uno
+  // solo, y llevaba el teléfono de la familia adentro.
+  assert.equal(sg.received.length, 2);
+
+  const alRescatista = sg.received.find((m) => /rescatista@ejemplo\.com/.test(to(m)));
+  assert.ok(alRescatista, 'en directo el aviso sí va al destinatario');
+  assert.doesNotMatch(alRescatista.body.subject, /RETENIDO/);
+  assert.match(text(alRescatista), /alguien está buscando a la persona que rescataste/i);
+  assert.doesNotMatch(
+    text(alRescatista),
+    /300 000 0000/,
+    'el contacto de la familia no sale por correo, tampoco en modo directo'
+  );
+  assert.match(text(alRescatista), /No damos el contacto de su familia por este medio/);
+
+  // Y el caso no se queda huérfano: alguien sabe dónde está una persona, así
+  // que el dato que permite cerrarlo le llega a un humano.
+  const alOperador = sg.received.find((m) => new RegExp(BUZON).test(to(m)));
+  assert.ok(alOperador, 'el operador tiene que recibir su copia');
+  assert.match(text(alOperador), /300 000 0000/);
+  assert.match(
+    text(alOperador),
+    /SÍ se envió a su destinatario, pero SIN el contacto/,
+    'la copia no puede decir "no se envió" cuando sí se envió: eso duplica avisos'
+  );
 });
 
 test('un NOTIFY_MODE que no se reconoce cae a relevo: el interruptor falla cerrado', async (t) => {

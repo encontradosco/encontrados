@@ -165,11 +165,14 @@ test('in direct mode, a rescuer can subscribe and is alerted when someone report
   // Later, a family reports that same person missing
   await reportMissing(base, { name: 'Rosa Elvira Gil', contact: '300 999 8888', face: 'nn' });
 
-  assert.equal(sg.received.length, 1, 'el rescatista debe recibir el aviso');
-  const text = sg.received[0].body.content[0].value;
+  const alRescatista = sg.received.find((m) =>
+    /rescatista@ejemplo\.com/.test(JSON.stringify(m.body.personalizations))
+  );
+  assert.ok(alRescatista, 'el rescatista debe recibir el aviso');
+  const text = alRescatista.body.content[0].value;
   assert.match(text, /alguien está buscando a la persona que rescataste/i);
   assert.match(text, /Rosa Elvira Gil/);
-  assert.match(text, /300 999 8888/);
+  assert.doesNotMatch(text, /300 999 8888/, 'sin el contacto de la familia: no sale por ningún canal');
   assert.match(text, /unsubscribe\?token=/);
 });
 

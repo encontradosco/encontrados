@@ -25,12 +25,30 @@ const { hasGeometry, derivativeAction } = require('./report-photo');
 
 const MAX_QUERY_PHOTOS = 3;
 
-// Sent to a rescuer when someone reports the person they rescued as missing.
+// El texto que puede llegarle a un rescatista cuando alguien reporta como
+// desaparecida a la persona que dice haber rescatado.
+//
+// NO lleva el contacto de la familia, y ese es el punto: este texto es el único
+// que se ENVÍA a un tercero, así que la forma de garantizar que el contacto no
+// viaje en un mensaje es que no exista acá. La copia que un humano necesita
+// para cerrar el caso va aparte, en el bloque `details` del relevo al operador,
+// junto a la advertencia de no entregarla sin verificar.
+//
+// Alcance, para no leer de más: esto cubre lo que se manda. La pantalla del
+// resultado de /rescate es otra superficie —`matchContactBlock()` en
+// routes/web.js— y este cambio no la toca.
+//
+// Antes el contacto sí venía en esta cadena, y no salía por WhatsApp solo
+// porque `notifyFaceMatch` desviaba ese canal al relevo. Eso hacía que la
+// garantía dependiera de una rama del código: cualquier camino de envío nuevo
+// —o el que ya existía para correo— la reabría sin tocar esta función. Sacarlo
+// de acá convierte la regla en una propiedad del texto, que no tiene ramas.
+//
 // `similarity` puede venir vacío en avisos viejos, anteriores a que el puntaje
 // se guardara junto con la pregunta (`subscriptions.rescue_similarity`). En los
 // nuevos siempre viene: sin él, un humano aprueba una entrega sin el único dato
 // que distingue un rescate real de un parecido.
-function matchText(matchedPerson, similarity, sub, contact) {
+function matchText(matchedPerson, similarity, sub) {
   const pct = similarity == null ? '' : ` (${Math.round(similarity)}% de coincidencia facial)`;
   // Sin suscripción no hay a quién dar de baja, y un enlace de baja con el
   // token vacío es un enlace roto en el buzón de un operador.
@@ -38,8 +56,11 @@ function matchText(matchedPerson, similarity, sub, contact) {
   return [
     `🔔 encontrados.co — alguien está buscando a la persona que rescataste${pct}.`,
     `Reportada como desaparecida: *${matchedPerson.full_name}*`,
-    contact ? `Contacto de quien la busca: ${contact}` : null,
     `Detalles del reporte: ${env.BASE_URL}/person/${matchedPerson.id}`,
+    '',
+    'No damos el contacto de su familia por este medio. Si sabes dónde está,',
+    'respóndenos por aquí y una persona del equipo sigue el caso: la noticia',
+    'de que alguien apareció la tiene que dar alguien que la verificó.',
     '',
     '🔒 Privacidad: la foto que subiste nunca se guardó; solo conservamos su firma facial para poder avisarte.',
     token ? `Para dejar de recibir estos avisos: ${env.BASE_URL}/unsubscribe?token=${token}` : null
@@ -67,26 +88,27 @@ async function notifyFaceMatch(store, sub, matchedPerson, similarity, contact) {
     `[facematch] notifying sub ${sub.id} (${sub.channel}${unverified ? ', SIN verificar' : ''}) about ${matchedPerson.full_name}` +
       (similarity == null ? '' : ` @ ${Math.round(similarity)}%`)
   );
-  const text = matchText(matchedPerson, similarity, sub, contact);
+  const text = matchText(matchedPerson, similarity, sub);
   const subject = 'Alguien busca a la persona que rescataste — encontrados.co';
 
-  // El contacto de una familia NUNCA sale por WhatsApp. No es una consecuencia
-  // del modo relevo: es la regla, y se sostiene sola.
+  // El contacto de una familia no sale por NINGÚN canal, y ya no depende de
+  // esta rama: `matchText` no lo contiene (ver su nota). Lo que queda acá es
+  // otra razón, que sigue en pie por su cuenta.
   //
-  // Las dos plantillas aprobadas por Meta no llevan un solo dato de la familia,
-  // y un texto libre dentro de la ventana de 24 h tampoco puede llevarlo: lo
-  // único que abre esa ventana es una palabra escrita desde un teléfono, que no
-  // es una identidad comprobada. Equivocarse acá no cuesta un correo de más,
-  // cuesta entregarle a un extorsionista el teléfono de una familia que está
-  // buscando a alguien. Así que un aviso con contacto que iba por WhatsApp se
-  // convierte en relevo, en cualquier modo.
+  // Una suscripción de WhatsApp nace sin verificar —el número lo teclea quien
+  // llena el formulario y nadie comprueba que sea suyo— y un texto libre solo
+  // se entrega dentro de la ventana de 24 h, que abre una palabra escrita
+  // desde ese teléfono. O sea: el canal por el que menos sabemos a quién le
+  // estamos hablando. Su primer contacto va por plantilla aprobada
+  // (`askRescueConfirmation`), no por este camino; si un aviso de coincidencia
+  // llega igual acá, lo enruta una persona.
   const byWhatsApp = sub.channel === 'whatsapp';
 
-  // El aviso más sensible de la app: su cuerpo lleva el contacto de la familia
-  // y su destinatario es alguien que dice haber rescatado a la persona, sin que
-  // nadie lo haya verificado. En modo relevo no sale solo.
-  if (relayEnabled() || byWhatsApp) {
-    await relayToOperators({
+  // El aviso más sensible de la app: su destinatario es alguien que dice haber
+  // rescatado a la persona, sin que nadie lo haya verificado. En modo relevo no
+  // sale solo.
+  const alOperador = (delivered) =>
+    relayToOperators({
       reason:
         'Coincidencia facial con quien dice haber rescatado a esta persona' +
         (unverified ? ' (suscripción SIN verificar)' : ''),
@@ -95,6 +117,7 @@ async function notifyFaceMatch(store, sub, matchedPerson, similarity, contact) {
       subject,
       text,
       person: matchedPerson,
+      delivered,
       details: [
         similarity == null
           ? '⚠️ Sin puntaje de coincidencia facial guardado para este aviso.'
@@ -103,13 +126,16 @@ async function notifyFaceMatch(store, sub, matchedPerson, similarity, contact) {
           ? '⚠️ La suscripción NO está verificada: nadie ha comprobado que esa dirección o ese número sean de quien dice haber rescatado a la persona.'
           : 'La suscripción está verificada por su titular.',
         byWhatsApp
-          ? 'Este aviso iba a un WhatsApp: por ahí NUNCA sale el contacto de una familia, así que se releva siempre, en cualquier modo de envío.'
+          ? 'Este aviso iba a un WhatsApp: el primer contacto por ahí va por plantilla aprobada, no por texto libre, así que se enruta a mano en cualquier modo de envío.'
           : null,
         contact
           ? `Contacto de quien la busca (no entregarlo sin verificar): ${contact}`
           : 'El reporte no trae contacto de quien la busca.'
       ].filter(Boolean)
     });
+
+  if (relayEnabled() || byWhatsApp) {
+    await alOperador(false);
     return;
   }
 
@@ -123,6 +149,13 @@ async function notifyFaceMatch(store, sub, matchedPerson, similarity, contact) {
 
   if (sub.channel === 'email') {
     await sendEmail(sub.address, subject, text);
+    // El texto que acaba de salir NO lleva el contacto de la familia, así que
+    // el caso queda abierto: alguien sabe dónde está una persona y nadie puede
+    // avisarle a quien la busca. Por eso el operador recibe igual su copia, con
+    // el dato — si no, el mensaje le promete al rescatista un seguimiento que
+    // nadie iba a hacer, que es la única mentira que este sistema puede contar
+    // y que hace daño de verdad.
+    await alOperador(true);
   }
 }
 
@@ -240,11 +273,17 @@ async function requestRescueConfirmation(store, address, person, { contact, simi
       channel: 'whatsapp',
       address,
       subject: 'Coincidencia sin preguntar — encontrados.co',
-      text: matchText(person, similarity, null, contact),
+      text: matchText(person, similarity, null),
       person,
       details: [
         'No se le mandó la plantilla: ese número ya tiene otra pregunta de rescate sin responder, y dos preguntas abiertas vuelven ambiguo el "SÍ".',
-        similarity == null ? null : `Coincidencia facial: ${Math.round(similarity)}%`
+        similarity == null ? null : `Coincidencia facial: ${Math.round(similarity)}%`,
+        // El contacto ya no viaja dentro del texto (ver matchText), así que
+        // tiene que venir acá o el operador se queda sin él justo en el caso
+        // que más necesita a un humano.
+        contact
+          ? `Contacto de quien la busca (no entregarlo sin verificar): ${contact}`
+          : 'El reporte no trae contacto de quien la busca.'
       ].filter(Boolean)
     });
     return { asked: false, reason: 'otra-pregunta-abierta' };
