@@ -101,6 +101,47 @@ test('cuenta el cruce query→report, los duplicados de consulta y las firmas co
   }
 });
 
+// Campos que consume el reporte por correo (#116, PR 2): el universo tiene que
+// contar PERSONAS reportadas, no fotos de quien busca, y el total de
+// coincidencias tiene que poder superar el conteo de personas distintas
+// cuando una misma persona aparece en más de una foto.
+test('reported_people_indexed cuenta personas (no fotos), y report_matches_total suma cada golpe', async (t) => {
+  const matcher = fakeMatcher({
+    // Dos fotos de consulta golpean, cada una, contra las DOS fotos de
+    // reporte de la MISMA persona: 1 persona, 2 fotos de reporte, 4 golpes.
+    'cara-consulta-1': [
+      { faceId: 'cara-reporte-1a', similarity: 96 },
+      { faceId: 'cara-reporte-1b', similarity: 90 }
+    ],
+    'cara-consulta-2': [
+      { faceId: 'cara-reporte-1a', similarity: 93 },
+      { faceId: 'cara-reporte-1b', similarity: 92 }
+    ]
+  });
+  const { server, base, store } = await startApp(matcher);
+  t.after(() => server.close());
+
+  const { person } = await store.findOrCreatePerson('Persona Con Dos Fotos');
+  const update = await store.addUpdate(person.id, { status: 'missing', source: 'web' });
+  for (const faceId of ['cara-reporte-1a', 'cara-reporte-1b']) {
+    const photo = await store.addPhoto({
+      personId: person.id,
+      kind: 'report',
+      updateId: update.id,
+      content: Buffer.alloc(0),
+      contentType: 'image/jpeg'
+    });
+    await store.setPhotoFaceId(photo.id, faceId);
+  }
+  await seedPerson(store, { name: 'Consulta Uno', kind: 'query', faceId: 'cara-consulta-1' });
+  await seedPerson(store, { name: 'Consulta Dos', kind: 'query', faceId: 'cara-consulta-2' });
+
+  const body = await (await fetch(`${base}/api/match-stats`)).json();
+  assert.equal(body.reported_people_indexed, 1, 'una sola persona, aunque tenga dos fotos indexadas');
+  assert.equal(body.reported_people_matched, 1);
+  assert.equal(body.report_matches_total, 4, 'cada golpe individual cuenta, sin deduplicar por persona ni por foto');
+});
+
 test('un fallo de Rekognition se declara en failed, sin tumbar el resto del recuento', async (t) => {
   const matcher = fakeMatcher({
     'cara-consulta-1': [{ faceId: 'cara-reporte-1', similarity: 96 }],

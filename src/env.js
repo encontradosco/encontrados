@@ -36,6 +36,11 @@ module.exports = {
   // the person's timeline.
   AVISO_EMAIL: (process.env.AVISO_EMAIL || '').trim(),
 
+  // Destinos del reporte operativo recurrente (#116, PR 2), separados por
+  // coma. Nunca hardcodeados — el repo es público. Vacío = el reporte se
+  // niega a enviarse (ver src/report.js), nunca en silencio.
+  REPORT_RECIPIENTS: (process.env.REPORT_RECIPIENTS || '').trim(),
+
   WHATSAPP_TOKEN: process.env.WHATSAPP_TOKEN || '',
   WHATSAPP_PHONE_NUMBER_ID: process.env.WHATSAPP_PHONE_NUMBER_ID || '',
   WHATSAPP_VERIFY_TOKEN: process.env.WHATSAPP_VERIFY_TOKEN || 'encontrados-verify',
