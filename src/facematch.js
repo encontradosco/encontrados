@@ -28,10 +28,14 @@ const MAX_QUERY_PHOTOS = 3;
 // desaparecida a la persona que dice haber rescatado.
 //
 // NO lleva el contacto de la familia, y ese es el punto: este texto es el único
-// que puede salir hacia afuera, así que la forma de garantizar que el contacto
-// no salga es que no exista acá. La copia que un humano necesita para cerrar el
-// caso viaja aparte, en el bloque `details` del relevo al operador, junto a la
-// advertencia de no entregarla sin verificar.
+// que se ENVÍA a un tercero, así que la forma de garantizar que el contacto no
+// viaje en un mensaje es que no exista acá. La copia que un humano necesita
+// para cerrar el caso va aparte, en el bloque `details` del relevo al operador,
+// junto a la advertencia de no entregarla sin verificar.
+//
+// Alcance, para no leer de más: esto cubre lo que se manda. La pantalla del
+// resultado de /rescate es otra superficie —`matchContactBlock()` en
+// routes/web.js— y este cambio no la toca.
 //
 // Antes el contacto sí venía en esta cadena, y no salía por WhatsApp solo
 // porque `notifyFaceMatch` desviaba ese canal al relevo. Eso hacía que la

@@ -79,7 +79,9 @@ async function relayToOperators({ reason, channel, address, subject, text, perso
     // y encima cuando la configuración ya está rota — así que no sale nada.
     // Este log es la ÚNICA copia que queda del aviso, por eso lleva el texto
     // completo: perderlo es peor que tenerlo en el log del operador.
-    console.error(`[notify:relevo] PERDIDO — relevo activo y AVISO_EMAIL sin configurar. ${trace}\n${text}`);
+    console.error(
+      `[notify:relevo] PERDIDO — ${delivered ? 'copia de seguimiento' : 'relevo activo'} y AVISO_EMAIL sin configurar. ${trace}\n${text}`
+    );
     return { ok: false, relayed: false, error: 'AVISO_EMAIL no configurada' };
   }
 
