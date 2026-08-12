@@ -357,6 +357,42 @@ test('store: missingPeople/getReunitedCount reflect the LATEST status, not any p
   assert.equal(await store.getReunitedCount(), 0);
 });
 
+// #78: the public-registry sweep pushes source='aggregator' updates, and used
+// to send status='safe' for a person the SOURCE marked as already found —
+// even when nobody had ever reported them missing through this app. That row
+// won "latest status" and counted toward the public reunited counter with
+// someone who never passed through encontrados.co.
+test("store: an aggregator 'safe' row never counts as reunited, with or without a real report first", async (t) => {
+  const store = createStore(await createSqliteAdapter(':memory:'));
+  t.after(() => store.close());
+
+  // Never reported here at all — the sweep's very first sighting of this
+  // ficha was already "Localizada". No real signal exists for this person.
+  const { person: neverReported } = await store.findOrCreatePerson('Beatriz Salcedo Prieto');
+  await store.addUpdate(neverReported.id, { status: 'safe', source: 'aggregator', message: 'Localizada' });
+
+  // Genuinely reported missing through the app, and the SAME external ficha
+  // later flips to "Localizada" in a later sweep — the aggregator row must
+  // not override the real 'missing' signal already on file.
+  const { person: reportedThenPolluted } = await store.findOrCreatePerson('Nicolás Perea Duarte');
+  await store.addUpdate(reportedThenPolluted.id, { status: 'missing', source: 'web', location: 'Suba' });
+  await store.addUpdate(reportedThenPolluted.id, { status: 'safe', source: 'aggregator', message: 'Localizada' });
+
+  // Control: a REAL confirmation (web/whatsapp/api) must still count.
+  const { person: reallyFound } = await store.findOrCreatePerson('Laura Gómez Rincón');
+  await store.addUpdate(reallyFound.id, { status: 'missing', source: 'web', location: 'Kennedy' });
+  await store.addUpdate(reallyFound.id, { status: 'safe', source: 'web', message: 'Confirmado' });
+
+  assert.equal(await store.getReunitedCount(), 1, 'solo la confirmación real cuenta');
+
+  const missing = await store.getMissingPeople(50);
+  assert.deepEqual(
+    missing.map((p) => p.full_name),
+    ['Nicolás Perea Duarte'],
+    'el reporte real de desaparición resurge; el nunca-reportado no aparece en ninguna lista'
+  );
+});
+
 test('home: a person later marked safe drops off the list and counts as reunited', async (t) => {
   const { server, base, store } = await startApp();
   t.after(() => server.close());
@@ -372,4 +408,36 @@ test('home: a person later marked safe drops off the list and counts as reunited
   const after = await (await fetch(base)).text();
   assert.doesNotMatch(after, /Andrés Felipe Mora/, 'quien ya apareció no sigue listado como desaparecido');
   assert.match(after, /1 reencontrada/);
+});
+
+// #78 end-to-end: the home page's public "reencontradas" counter must not
+// move just because the public-registry sweep saw a ficha already marked
+// found — that is noise from outside this app, not this app's own signal.
+test('home: the reunited counter does not move on an aggregator sync alone', async (t) => {
+  const { server, base, store } = await startApp();
+  t.after(() => server.close());
+
+  const { person } = await store.findOrCreatePerson('Esteban Cárdenas Lozano');
+  await store.addUpdate(person.id, { status: 'missing', source: 'web', location: 'Engativá' });
+
+  const before = await (await fetch(base)).text();
+  assert.match(before, /Esteban Cárdenas Lozano/);
+  assert.doesNotMatch(before, /reencontrada/);
+
+  // The public registry's later sweep sees this same ficha as "Localizada".
+  await store.addUpdate(person.id, { status: 'safe', source: 'aggregator', message: 'Localizada' });
+
+  const afterAggregatorSync = await (await fetch(base)).text();
+  assert.match(
+    afterAggregatorSync,
+    /Esteban Cárdenas Lozano/,
+    'sigue listado como desaparecido: el barrido externo no es una confirmación de esta app'
+  );
+  assert.doesNotMatch(afterAggregatorSync, /reencontrada/, 'el conteo público no se infla con una fuente externa');
+
+  // A REAL confirmation through the app still has to work.
+  await store.addUpdate(person.id, { status: 'safe', source: 'web', message: 'Confirmado por la familia' });
+  const afterRealReport = await (await fetch(base)).text();
+  assert.doesNotMatch(afterRealReport, /Esteban Cárdenas Lozano/);
+  assert.match(afterRealReport, /1 reencontrada/);
 });
