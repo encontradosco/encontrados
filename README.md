@@ -30,8 +30,9 @@ npm test
 ### WhatsApp (Meta Cloud API) — pendiente de credenciales; el canal está implementado pero sin referencias en la interfaz hasta activarlo
 
 1. En [Meta for Developers](https://developers.facebook.com), crea una app con el producto WhatsApp y toma `WHATSAPP_TOKEN` y `WHATSAPP_PHONE_NUMBER_ID`.
-2. Configura el webhook: URL `https://encontrados.co/webhooks/whatsapp`, verify token = `WHATSAPP_VERIFY_TOKEN`, suscrito al campo `messages`.
-3. Comandos: `AYUDA`, `BUSCAR <nombre>`, `BIEN|HERIDO|DESAPARECIDO <nombre>: <nota> @ <lugar>`, `SUSCRIBIR <nombre>`, `BAJA <nombre>` / `BAJA TODO`. Un mensaje sin comando se trata como búsqueda.
+2. Configura el webhook apuntando al **relevo** que verifica la firma HMAC de Meta, no a este servidor: el relevo reenvía el cuerpo intacto a `https://encontrados.co/webhooks/whatsapp` agregando la cabecera `X-Relay-Secret`. Verify token = `WHATSAPP_VERIFY_TOKEN`, suscrito al campo `messages`.
+3. Define `WHATSAPP_RELAY_SECRET` con el mismo valor en los dos lados (`openssl rand -hex 32`). El `POST` del webhook escribe en la base, así que **sin esa variable responde 403 a todo**: falla cerrado a propósito.
+4. Comandos: `AYUDA`, `BUSCAR <nombre>`, `BIEN|HERIDO|DESAPARECIDO <nombre>: <nota> @ <lugar>`, `SUSCRIBIR <nombre>`, `BAJA <nombre>` / `BAJA TODO`. Un mensaje sin comando se trata como búsqueda.
 
 ## API
 
