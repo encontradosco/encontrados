@@ -170,7 +170,8 @@ hay framework de frontend ni paso de build: lo que se lee es lo que corre.
   `/ideas`, `/bug`, `/privacidad`, `/terminos`, `/api-doc` y
   `/mantenimiento` ≡ `/fotos/actualizar`. Es el archivo más grande del repo.
 - `src/routes/api.js` — el JSON: `/api/people`, `/api/updates`,
-  `/api/people/:id/subscriptions`, `/api/reindex` y los `/api/diag*`.
+  `/api/people/:id/subscriptions`, `/api/reindex`, `/api/match-stats` y los
+  `/api/diag*`.
 - `src/routes/webhooks.js` — WhatsApp (Meta Cloud API), dormido. El `GET` es el
   handshake y es una lectura; el `POST` escribe en la base y exige la
   credencial del relevo (`WHATSAPP_RELAY_SECRET`, cabecera `X-Relay-Secret`).
@@ -269,7 +270,7 @@ presencia y huella, nunca el valor).
 | `PORT` | 3000. Solo aplica a `npm run dev` / `npm start`; en Vercel nadie escucha un puerto. |
 | `DATABASE_URL` (o `POSTGRES_URL`, `STORAGE_URL`, `NEON_DATABASE_URL`…) | SQLite. En local, un archivo; **en Vercel, un `/tmp` efímero que se pierde**. |
 | `DB_PATH` | `./data/encontrados.db`. Solo para SQLite local. |
-| `API_KEY` | Los `POST` del API quedan **abiertos** y `DELETE /api/people/:id` responde 503. Las lecturas son públicas siempre, con o sin llave. |
+| `API_KEY` | Los `POST` del API quedan **abiertos** y `DELETE /api/people/:id` responde 503. Las lecturas de información de personas son públicas siempre, con o sin llave; la excepción es `GET /api/match-stats`, que es operativa y dispara búsquedas en Rekognition, así que pide llave. |
 | `SENDGRID_API_KEY` | No sale ningún correo: ni verificación de suscripción, ni alertas, ni avisos. Se le hace `trim()` porque un salto de línea pegado sin querer devuelve 401. |
 | `EMAIL_FROM` | `a@torrenegra.com`. Tiene que ser un remitente verificado en SendGrid o SendGrid responde 403. |
 | `AVISO_EMAIL` | El aviso del rescatista y el relevo a Colombia Te Busca no se mandan. Falla en silencio: quien reportó ve su página de éxito igual. Y con `NOTIFY_MODE=relay` (el modo por omisión) tampoco sale ningún aviso a terceros: quedan en el log como `[notify:relevo] PERDIDO`. |
@@ -330,5 +331,14 @@ alguien, sí:
   línea `[facematch:olvido]` del log son el único rastro para limpiarlo a mano.
   `POST /api/maintenance/purge-test-data` usa el mismo orden y también retira
   firmas: los dos caminos de borrado se comportan igual.
+- `GET /api/match-stats` — **con llave.** Recomputa el cruce facial histórico
+  buscando por `face_id` contra la colección (las firmas sobreviven aunque la
+  foto del rescatista se haya borrado) y devuelve solo cifras agregadas: fotos
+  de consulta que coinciden con algún reporte, personas distintas a cada lado,
+  la misma cara consultada más de una vez, y coincidencias contra firmas
+  colgadas sin foto en la base. No escribe nada y no notifica a nadie, pero es
+  una lectura con llave: gasta búsquedas de Rekognition y sus cifras son de
+  operación, no información de emergencia. Si `failed` viene > 0, los totales
+  son un piso, no el techo.
 - `/fotos/actualizar` y `POST /api/reindex` — ver "Poner al día fotos" arriba:
   la primera es la segura sin llave, la segunda es la que indexa y avisa.

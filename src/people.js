@@ -242,6 +242,10 @@ function createStore(adapter) {
     return adapter.photosByFaceIds(faceIds);
   }
 
+  async function indexedPhotos() {
+    return adapter.indexedPhotos();
+  }
+
   async function countQueryPhotos(subscriptionId) {
     return adapter.countQueryPhotos(subscriptionId);
   }
@@ -298,6 +302,7 @@ function createStore(adapter) {
     reportPhotoByPerson,
     clearPhotoContent,
     photosByFaceIds,
+    indexedPhotos,
     countQueryPhotos,
     photosMissingFaceId,
     photosMissingDerivatives,
