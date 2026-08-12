@@ -61,7 +61,12 @@ const CHANNEL_LABEL = { email: 'correo', whatsapp: 'WhatsApp' };
 // Le manda al operador un aviso que NO se entregó, con todo lo que hace falta
 // para enrutarlo sin abrir la base de datos. Nunca lanza: un fallo acá no puede
 // tumbar el reporte ni la coincidencia que lo originó.
-async function relayToOperators({ reason, channel, address, subject, text, person, details = [] }) {
+// `delivered` = el aviso SÍ salió a su destinatario y esta copia existe por
+// otra razón: el texto que salió no lleva el contacto de la familia, así que el
+// caso sigue abierto y necesita a un humano. La primera línea del cuerpo tiene
+// que decir cuál de los dos casos es — un operador que lee "no se envió" cuando
+// sí se envió va a mandar el mismo aviso dos veces.
+async function relayToOperators({ reason, channel, address, subject, text, person, details = [], delivered = false }) {
   const to = avisoEmail();
   const ficha = person ? `${env.BASE_URL}/person/${person.id}` : null;
   const trace =
@@ -79,11 +84,22 @@ async function relayToOperators({ reason, channel, address, subject, text, perso
   }
 
   const body = [
-    'Este aviso NO se envió a su destinatario.',
-    '',
-    'encontrados.co está en modo relevo: los avisos que iban a terceros se',
-    'centralizan en este buzón para que una persona verifique a quién se le',
-    'está entregando el dato antes de que salga.',
+    ...(delivered
+      ? [
+          'Este aviso SÍ se envió a su destinatario, pero SIN el contacto de la familia.',
+          '',
+          'El texto que salió no lleva ese dato y nunca lo lleva, en ningún canal.',
+          'Esta copia existe porque el caso queda abierto: alguien dice saber dónde',
+          'está una persona y quien la busca todavía no lo sabe. Cerrarlo es un acto',
+          'humano.'
+        ]
+      : [
+          'Este aviso NO se envió a su destinatario.',
+          '',
+          'encontrados.co está en modo relevo: los avisos que iban a terceros se',
+          'centralizan en este buzón para que una persona verifique a quién se le',
+          'está entregando el dato antes de que salga.'
+        ]),
     '',
     `Iba dirigido a: ${address}`,
     `Canal: ${CHANNEL_LABEL[channel] || channel}`,
@@ -97,8 +113,16 @@ async function relayToOperators({ reason, channel, address, subject, text, perso
     text,
     '--- fin del texto ---',
     '',
-    'Siguiente paso: verificar la identidad del destinatario y, si corresponde,',
-    'hacerle llegar el texto de arriba. De aquí no sale nada solo.'
+    ...(delivered
+      ? [
+          'Siguiente paso: verificar quién es esa persona y decidir si el contacto de',
+          'arriba se le entrega, o si a la familia le avisa alguien del equipo. El',
+          'texto ya salió; el dato no.'
+        ]
+      : [
+          'Siguiente paso: verificar la identidad del destinatario y, si corresponde,',
+          'hacerle llegar el texto de arriba. De aquí no sale nada solo.'
+        ])
   ]
     .filter((l) => l !== null)
     .join('\n');
