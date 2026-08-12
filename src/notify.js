@@ -141,7 +141,13 @@ async function relayToOperators({ reason, channel, address, subject, text, perso
 
 // Returns { ok, status, error } and logs loudly — email silence is a bug we
 // must be able to diagnose from the Vercel logs alone.
-async function sendEmail(to, subject, text) {
+//
+// `html` es opcional: casi todo el sistema manda texto plano (avisos,
+// verificaciones), y eso no cambia. El reporte operativo recurrente (#116,
+// PR 2) es el primer llamador que pasa `html` — SendGrid recibe las dos
+// partes, texto primero, para que un cliente que no rinde HTML siga
+// mostrando algo legible.
+async function sendEmail(to, subject, text, { html } = {}) {
   // Read from process.env too so configuration applied after module load
   // (and test doubles) are honoured.
   const apiKey = process.env.SENDGRID_API_KEY || env.SENDGRID_API_KEY;
@@ -161,7 +167,12 @@ async function sendEmail(to, subject, text) {
         personalizations: [{ to: [{ email: to }] }],
         from: { email: env.EMAIL_FROM, name: 'encontrados.co' },
         subject,
-        content: [{ type: 'text/plain', value: text }],
+        content: html
+          ? [
+              { type: 'text/plain', value: text },
+              { type: 'text/html', value: html }
+            ]
+          : [{ type: 'text/plain', value: text }],
         // Click tracking rewrites our links through SendGrid's tracking domain.
         // That domain returns 403 here, which silently broke every
         // verification and unsubscribe link. These are transactional emails:

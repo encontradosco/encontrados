@@ -709,6 +709,13 @@ async function computeMatchStats(store, matcher) {
   const rows = await store.indexedPhotos();
   const byFaceId = new Map(rows.map((r) => [r.face_id, r]));
   const queries = rows.filter((r) => r.kind === 'query');
+  // Universo de personas reportadas (desaparecidas) que sí tienen al menos una
+  // foto indexada — el denominador honesto del embudo del reporte por correo
+  // (#116, PR 2): "solo estas pueden coincidir". Se calcula directo de `rows`,
+  // sin ningún costo extra: son las mismas filas que ya se leyeron arriba.
+  const reportedPeopleIndexed = new Set(
+    rows.filter((r) => r.kind === 'report').map((r) => r.person_id)
+  );
 
   const stats = {
     generated_at: new Date().toISOString(),
@@ -725,8 +732,20 @@ async function computeMatchStats(store, matcher) {
     // Personas distintas a cada lado de los cruces de arriba.
     reported_people_matched: 0,
     query_people_matched: 0,
+    // Personas reportadas con foto utilizable — el universo de partida del
+    // embudo (ver arriba). No es rows.length: eso cuenta FOTOS, y una persona
+    // puede tener varias.
+    reported_people_indexed: reportedPeopleIndexed.size,
+    // Coincidencias individuales contra el lado reportado, sin deduplicar por
+    // persona ni por foto: una persona con varias fotos, o una foto de quien
+    // busca que golpea a varias personas, suman más de una acá. Es el "31" del
+    // embudo aprobado — la fila de abajo (reported_people_matched) es la
+    // versión deduplicada por persona.
+    report_matches_total: 0,
     // Coincidencias contra firmas que ya no tienen foto en la base: quedaron
     // colgadas en la colección al borrar una persona (#71). Trabajo de limpieza.
+    // Cuenta GOLPES, no firmas huérfanas distintas — una misma firma huérfana
+    // que golpea dos veces suma dos acá.
     dangling_face_matches: 0
   };
 
@@ -753,6 +772,7 @@ async function computeMatchStats(store, matcher) {
       }
       if (row.kind === 'report') {
         hitReport = true;
+        stats.report_matches_total++;
         reportedPeople.add(row.person_id);
         queryPeople.add(q.person_id);
       } else {
