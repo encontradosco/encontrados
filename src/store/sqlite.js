@@ -198,9 +198,17 @@ async function createSqliteAdapter(dbPath) {
         .prepare('SELECT * FROM updates WHERE person_id = ? ORDER BY created_at DESC, id DESC')
         .all(personId);
     },
+    // "El estado actual de una persona es el de su update más reciente" (ver
+    // POST /rescate/aviso en src/routes/web.js) es la regla que lee el bot de
+    // WhatsApp, GET /api/people y las tarjetas de duplicados — no solo el
+    // home. Sin el mismo filtro, esas tres superficies seguirían anunciando
+    // "Localizada" por una fila del agregador que el home ya ignora.
     async latestUpdate(personId) {
       return db
-        .prepare('SELECT * FROM updates WHERE person_id = ? ORDER BY created_at DESC, id DESC LIMIT 1')
+        .prepare(
+          `SELECT * FROM updates WHERE person_id = ? AND NOT (source = 'aggregator' AND status = 'safe')
+           ORDER BY created_at DESC, id DESC LIMIT 1`
+        )
         .get(personId);
     },
     // Everyone currently reported missing, most recent report first.

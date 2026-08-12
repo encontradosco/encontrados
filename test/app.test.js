@@ -441,3 +441,24 @@ test('home: the reunited counter does not move on an aggregator sync alone', asy
   assert.doesNotMatch(afterRealReport, /Esteban Cárdenas Lozano/);
   assert.match(afterRealReport, /1 reencontrada/);
 });
+
+// #78: GET /api/people's `latest_update` is the same "current status" the
+// home page derives — an external consumer of this API must see the same
+// answer the site shows, not the aggregator's unconfirmed noise.
+test('API: GET /api/people does not surface an aggregator-only safe status', async (t) => {
+  const { server, base, store } = await startApp();
+  t.after(() => server.close());
+
+  const { person } = await store.findOrCreatePerson('Valentina Osorio Bermúdez');
+  await store.addUpdate(person.id, { status: 'missing', source: 'web', location: 'Chapinero' });
+  await store.addUpdate(person.id, { status: 'safe', source: 'aggregator', message: 'Localizada' });
+
+  const res = await fetch(`${base}/api/people?q=Valentina Osorio`);
+  const { results } = await res.json();
+  assert.equal(results.length, 1);
+  assert.equal(
+    results[0].latest_update.status,
+    'missing',
+    'la API pública no puede contradecir lo que el home ya muestra'
+  );
+});
