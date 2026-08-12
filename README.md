@@ -7,6 +7,8 @@ Conecta a quien **rescata** a una persona con quien la **busca** — tras el ter
 
 El contacto de quien reporta **solo** se revela a un rescatista cuando el rostro coincide; nunca aparece en páginas públicas.
 
+Cuando la ficha que coincide **no trae** contacto de la familia —pasa con las importadas de registros públicos— la app invierte la pregunta: el rescatista deja su teléfono y dónde está la persona, y ese **aviso de rescatista** lo trabaja un humano, paso por paso y sin automatismos. El camino completo, con el criterio de triage: [**docs/avisos-de-rescatista.md**](docs/avisos-de-rescatista.md).
+
 Las fotos siguen dos reglas opuestas según quién las suba. La de un **rescatista** no se guarda ni se muestra jamás: se compara, se indexa su firma facial y los bytes se borran. La de un **reporte de desaparecido** sí se guarda y sí se publica —recortada al rostro, con los puntos de detección facial dibujados encima— porque de eso se trata: que un rescatista reconozca a la persona que tiene al lado. La lista carga solo la miniatura, y ni siquiera esa si la conexión es mala.
 
 Diseño ultraliviano a propósito: HTML renderizado en el servidor, un CSS pequeño, sin frameworks — funciona en teléfonos viejos y conexiones débiles.

@@ -69,6 +69,17 @@ ayuda a nadie.
   Solo el nombre de quien reporta se guarda (en `reporter`, que sale público
   reducido por `maskReporter()`); el desglose de ubicación no tiene columna
   porque su único consumidor es ese correo.
+- **Aviso de rescatista** (`matchContactBlock()` + `POST /rescate/aviso`): cuando
+  la ficha que coincide no trae contacto de la familia —las importadas de
+  registros públicos no lo traen— el rescatista deja su teléfono y dónde está la
+  persona. El aviso entra a la línea de tiempo con estado `missing` a propósito
+  (un avistamiento sin verificar no puede sacar a nadie de la lista) y el dato
+  viaja en `contact`, que nunca sale público. De ahí en adelante **no hay nada
+  automático**: se tría, se le pregunta al rescatista si está con la persona o si
+  la estaba reportando, y si confirma se le pasa la ficha del registro de origen
+  para que la actualice allá — ese registro es quien tiene el contacto de la
+  familia, nosotros no. El flujo completo y el criterio de triage aplicable a
+  mano: [`docs/avisos-de-rescatista.md`](docs/avisos-de-rescatista.md).
 - El contacto de quien reporta se pide en DOS casillas, teléfono y correo, con
   la misma obligación de siempre: al menos una. Se juntan en la columna
   `contact` (`composeContact()` en `src/routes/web.js`), que sigue siendo texto
