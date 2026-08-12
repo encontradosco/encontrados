@@ -11,6 +11,7 @@ const {
 } = require('../facematch');
 const { esc, layout, updateCard, timeTag, facePlate, LOCATION_SCRIPT } = require('../html');
 const { findDuplicateCandidates } = require('../duplicates');
+const { isReadyToShow } = require('../report-photo');
 const gh = require('../github');
 
 // Express 4 doesn't catch async errors on its own.
@@ -277,12 +278,12 @@ function readDuplicateFinding(req, personId) {
 // there is no way to prove, from a cookie, that the caller is entitled to make
 // them. That belongs behind a real authorization, not here.
 function duplicateNotice({ person, sameName, priorPhoto, candidates }) {
-  // The question only makes sense next to a face — and `facePlate` renders
-  // nothing without a thumbnail, so ask on the SAME condition it draws on.
-  // Branching on the row alone printed "compare the photos" over a blank card.
-  const showsFace = (photo) => !!(photo && photo.thumb_type);
+  // The question only makes sense next to a face — ask on the SAME condition
+  // `facePlate` draws on, from the one place that owns it, instead of a local
+  // copy: a local copy is exactly what once printed "compare the photos" over
+  // a blank card.
   const compare = (photo) =>
-    showsFace(photo)
+    isReadyToShow(photo)
       ? '<p class="dup-q">Compara las fotos: si es la misma persona, escríbenos y unimos los reportes.</p>'
       : '<p class="dup-q">Ese reporte no tiene foto para comparar.</p>';
 
