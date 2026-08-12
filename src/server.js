@@ -13,7 +13,7 @@ async function createApp(adapter, matcher) {
   const faceMatcher = matcher || createLazyMatcher();
   if (!matcher) {
     // Warm it up so boot logs show Rekognition status immediately.
-    faceMatcher.ensureReady().catch((e) => console.error('[faces] warmup', e));
+    faceMatcher.ready().catch((e) => console.error('[faces] warmup', e));
   }
   const app = express();
   app.disable('x-powered-by');

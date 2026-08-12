@@ -28,11 +28,10 @@ function rekognitionLike() {
     if (!jpeg && !png) reject('InvalidImageFormatException');
   };
   return {
-    enabled: true,
-    seen,
-    async ensureReady() {
-      return this;
+    async ready() {
+      return true;
     },
+    seen,
     async indexFace(bytes, id) {
       check(bytes);
       return { faceId: `face-${id}`, geometry: null };

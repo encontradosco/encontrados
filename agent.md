@@ -151,10 +151,13 @@ Trampas al editar, todas con cicatriz:
   en el `wrap()` que ya está definido en el archivo.
 - El HTML se arma concatenando strings: **todo dato que venga de afuera pasa por
   `esc()`**. No hay nada más protegiéndolo.
-- `matcher.enabled` es un getter sobre un matcher que se construye perezosamente.
-  Hay que `await matcher.ensureReady()` **antes** de leerlo: en un arranque en
-  frío da `false` con Rekognition perfectamente disponible, y ese camino guarda
-  la foto sin indexar.
+- La disponibilidad del reconocimiento facial se pregunta con
+  `await matcher.ready()`, que inicializa y responde en la misma llamada. **No
+  hay un `enabled` que leer**, y esa ausencia es deliberada: era un getter sobre
+  un matcher construido perezosamente, así que en un arranque en frío daba
+  `false` con Rekognition perfectamente disponible — y ese camino guardaba la
+  foto sin indexar. Si alguien reintroduce una lectura síncrona,
+  `test/matcher-lifecycle.test.js` falla antes de que llegue a producción.
 - `src/env.js` es una foto congelada al cargar el módulo, pero de paso vuelca el
   `.env` dentro de `process.env`. Lo que pueda cambiar en caliente —o lo que una
   prueba necesite borrar para ejercitar el camino "sin configurar"— se lee de

@@ -31,7 +31,9 @@ function fakeMatcher() {
   let n = 0;
   const key = (b) => b.toString('utf8');
   return {
-    enabled: true,
+    async ready() {
+      return true;
+    },
     async indexFace(bytes) {
       const id = `face-${++n}`;
       if (!indexed.has(key(bytes))) indexed.set(key(bytes), []);

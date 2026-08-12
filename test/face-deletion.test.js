@@ -15,7 +15,9 @@ const KEY = 'secreta-de-prueba';
 // `broken` simula un Rekognition caído en el peor momento posible.
 function deletingMatcher({ broken = false } = {}) {
   return {
-    enabled: true,
+    async ready() {
+      return true;
+    },
     deleteCalls: [],
     async indexFace() {
       return { faceId: null, geometry: null };

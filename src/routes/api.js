@@ -394,9 +394,11 @@ function apiRoutes(store, matcher) {
   router.get(
     '/diag',
     wrap(async (req, res) => {
-      if (typeof matcher.ensureReady === 'function') {
-        await matcher.ensureReady();
-      }
+      // Inicializa y responde en la misma llamada. Es justo la página que se
+      // mira para saber si el reconocimiento facial está vivo: sería el peor
+      // sitio para reportar un "apagado" que solo significa "todavía no lo he
+      // encendido". `status` se lee después, ya inicializado.
+      const faceMatching = await matcher.ready();
       // Read the key live: config captured at module load can be stale.
       const liveKey = (process.env.SENDGRID_API_KEY || env.SENDGRID_API_KEY || '').trim();
       const out = {
@@ -443,7 +445,7 @@ function apiRoutes(store, matcher) {
         faces: {
           aws_key_present: !!process.env.AWS_ACCESS_KEY_ID,
           aws_region: process.env.AWS_REGION || '(sin definir → us-east-1)',
-          matcher_enabled: !!matcher.enabled,
+          matcher_enabled: faceMatching,
           status: matcher.status || 'desconocido'
         },
         // Same reasoning as aviso_email_present: without a token /ideas and

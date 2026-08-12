@@ -36,8 +36,13 @@ function faceGeometry(detail) {
 const DELETE_BATCH = 1000;
 
 const nullMatcher = {
-  enabled: false,
   status: 'deshabilitado (sin credenciales de AWS o error de inicialización)',
+  // Ningún matcher expone un `enabled` síncrono: ver createLazyMatcher abajo.
+  // Este ya está construido y su respuesta nunca cambia, pero responde por el
+  // mismo contrato para que un llamador no tenga que saber cuál le tocó.
+  async ready() {
+    return false;
+  },
   async indexFace() {
     return { faceId: null, geometry: null };
   },
@@ -82,8 +87,10 @@ async function createMatcher() {
 
   console.log(`[faces] Rekognition ready (collection ${COLLECTION_ID}, region ${process.env.AWS_REGION || 'us-east-1'})`);
   return {
-    enabled: true,
     status: `activo (colección ${COLLECTION_ID})`,
+    async ready() {
+      return true;
+    },
     // Returns { faceId, geometry }. faceId is null when no face is detected;
     // geometry (bounding box + landmarks) may be present even then, since
     // Rekognition reports the detail of faces it declined to index.
@@ -194,13 +201,24 @@ async function createMatcher() {
 // boot (transient error, credentials added moments later), a permanently
 // disabled matcher would silently break matching for that whole instance.
 // This wrapper retries initialization on demand, at most once a minute.
+// No expone `enabled`, y esa ausencia es el punto. Era un getter sobre un
+// objeto que todavía no existía, así que leerlo antes de inicializar devolvía
+// `false` con Rekognition perfectamente disponible — y ese `false` se leía como
+// «guarda la foto sin indexar» o «dile al rescatista que el servicio está
+// caído». La interfaz cargaba una regla de orden que no podía hacer cumplir, y
+// cada llamador la pagaba con el mismo conjuro de dos líneas.
+//
+// `ready()` es esa pregunta hecha en el único momento en que la respuesta vale:
+// inicializa si hace falta y devuelve lo que de verdad hay. «¿Está encendido?»
+// y «¿arrancó?» pasan a ser la misma pregunta, y no queda ninguna propiedad
+// que se pueda leer antes de tiempo.
 function createLazyMatcher() {
   let real = null;
   let lastTry = 0;
   const RETRY_MS = 60000;
 
   async function get(now) {
-    if (real && real.enabled) return real;
+    if (real && (await real.ready())) return real;
     if (now - lastTry < RETRY_MS) return real || nullMatcher;
     lastTry = now;
     try {
@@ -213,9 +231,13 @@ function createLazyMatcher() {
   }
 
   return {
-    get enabled() {
-      return !!(real && real.enabled);
+    async ready() {
+      return (await get(Date.now())).ready();
     },
+    // La frase para /api/diag. Sigue siendo un getter porque un string de
+    // display que llegue viejo no le hace daño a nadie — y en el único sitio
+    // que lo lee, `ready()` acaba de correr, así que ya está inicializado. La
+    // decisión de indexar o no, que sí hace daño, no se toma nunca desde acá.
     get status() {
       return (real && real.status) || 'sin inicializar';
     },
@@ -230,9 +252,6 @@ function createLazyMatcher() {
     },
     async deleteFaces(faceIds) {
       return (await get(Date.now())).deleteFaces(faceIds);
-    },
-    async ensureReady() {
-      return get(Date.now());
     }
   };
 }

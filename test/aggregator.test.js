@@ -103,19 +103,18 @@ test('API: without external_id, behavior is unchanged (each POST creates a new u
 });
 
 // A cold serverless invocation used to drop the photo's face indexing on the
-// floor: `enabled` is a getter over the lazily-built real matcher, so it reads
-// false until something initializes it. The photo was still stored, and the
-// only trace was a console.warn — so a bulk import could leave hundreds of
-// people with no face geometry and no match, looking perfectly fine.
+// floor: the availability flag read false until something initialized the
+// matcher. The photo was still stored, and the only trace was a console.warn —
+// so a bulk import could leave hundreds of people with no face geometry and no
+// match, looking perfectly fine.
 test('API: a photo arriving before the matcher is initialized still gets indexed', async (t) => {
-  let awake = false;
+  let asked = false;
   const indexedPhotoIds = [];
   const lazyMatcher = {
-    get enabled() {
-      return awake;
-    },
-    async ensureReady() {
-      awake = true;
+    // Un matcher perezoso de verdad: se inicializa cuando le preguntan.
+    async ready() {
+      asked = true;
+      return true;
     },
     async searchByImage() {
       return [];
