@@ -26,7 +26,29 @@ ayuda a nadie.
   - El contacto de quien reporta solo se muestra a un rescatista tras una
     coincidencia facial; nunca en páginas públicas.
 - Toda la interfaz y los mensajes al usuario son **en español**.
-- Canales activos: web y API REST. WhatsApp está implementado pero dormido (sin credenciales aún) — no mostrar referencias a WhatsApp en la interfaz hasta que se active. (Telegram fue retirado.)
+- Canales activos: web, API REST y **WhatsApp** (activo desde el 12-ago-2026;
+  antes estaba implementado pero dormido y la interfaz no podía nombrarlo).
+  (Telegram fue retirado.)
+- WhatsApp — la regla que manda sobre todas las demás en ese canal:
+  **por WhatsApp NUNCA sale el contacto de una familia.** Ni en texto libre
+  dentro de la ventana de 24 h, ni en ningún modo de envío. Un aviso con
+  contacto que iba a un número se convierte en relevo al buzón del operador
+  (`notifyFaceMatch` en `src/facematch.js`).
+  - Meta solo entrega **plantillas aprobadas** para lo que iniciamos nosotros, y
+    lo que dicen esas plantillas ES el contrato del flujo: el código se ajusta a
+    ellas, no al revés. No inventes plantillas ni cambies sus parámetros.
+    - `confirmacion_rescatista_encontrados` (`es_CO`, `{{1}}` = nombre) —
+      pregunta si la persona está con quien recibe el mensaje o si lo que hizo
+      fue reportarla. Se responde **SÍ** o **REPORTE**, escrito, exacto.
+    - `ficha_fuente_rescatista_encontrados` (`es_CO`, `{{1}}` = nombre,
+      `{{2}}` = URL de la ficha) — lo único que sale tras un SÍ: manda a marcar
+      a la persona como localizada en el registro público de origen, que es
+      quien sí tiene el contacto de la familia.
+  - Una ficha reportada por la web no tiene registro de origen y **no hay
+    plantilla aprobada para ese caso**: ahí no se le manda nada al rescatista y
+    decide el operador.
+  - `es` y `es_CO` son idiomas distintos para Meta: pedir el que no es equivale
+    a que no llegue nada.
 - Fotos — dos reglas distintas según quién las sube:
   - **Rescatista** (`kind='query'`): la foto NUNCA se guarda ni se muestra. Se
     compara, se indexa su firma facial y los bytes se borran de inmediato. Solo
