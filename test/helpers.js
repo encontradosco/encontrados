@@ -48,7 +48,7 @@ async function fakeGithub() {
       res.end(
         JSON.stringify({
           number: received.length,
-          html_url: `https://github.com/torrenegra/encontrados/issues/${received.length}`
+          html_url: `https://github.com/encontradosco/encontrados/issues/${received.length}`
         })
       );
     });
@@ -56,7 +56,7 @@ async function fakeGithub() {
   await new Promise((r) => server.listen(0, r));
   process.env.GITHUB_API_BASE = `http://127.0.0.1:${server.address().port}`;
   process.env.GITHUB_TOKEN = 'ghp_test';
-  process.env.GITHUB_REPO = 'torrenegra/encontrados';
+  process.env.GITHUB_REPO = 'encontradosco/encontrados';
   return {
     received,
     // Make only the NEXT request fail — flipping a flag races the request that

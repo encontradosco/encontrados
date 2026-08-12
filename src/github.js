@@ -14,7 +14,7 @@
 // missing token is a suite that files its fixtures as real issues.
 require('./env');
 
-const DEFAULT_REPO = 'torrenegra/encontrados';
+const DEFAULT_REPO = 'encontradosco/encontrados';
 
 // Overridable the same way SENDGRID_API_BASE is, so the tests exercise the
 // real "issue actually filed" path instead of only the failure path.
