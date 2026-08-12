@@ -687,6 +687,98 @@ async function identifyRescuedPerson(
   return { available: true, matches: found, photoId: photo ? photo.id : null, indexed: !!photo };
 }
 
+// ¿Cuántas veces ya sirvió el matcher? Hoy nadie lo sabe: un match se pinta en
+// pantalla y se evapora — ninguna tabla lo registra (#116). Pero las firmas
+// faciales sí quedaron en la colección, así que la historia se puede
+// RECOMPUTAR: por cada foto de consulta indexada se busca por face_id y se
+// cuenta contra qué reportes coincide hoy.
+//
+// Devuelve SOLO cifras agregadas. Esto es instrumentación, no un registro de
+// personas: ni un nombre, ni un contacto, ni un id de persona sale de acá.
+// Los detalles ya viven en las tablas de siempre, detrás de sus propias reglas.
+//
+// Dos honestidades del número: es el cruce contra la colección de HOY (una
+// firma borrada ya no cuenta, una indexada después sí), y si `failed` > 0 las
+// cifras son un piso, no el total.
+const MATCH_STATS_CONCURRENCY = 3;
+
+async function computeMatchStats(store, matcher) {
+  if (matcher.ensureReady) await matcher.ensureReady();
+  if (!matcher.enabled) return null;
+
+  const rows = await store.indexedPhotos();
+  const byFaceId = new Map(rows.map((r) => [r.face_id, r]));
+  const queries = rows.filter((r) => r.kind === 'query');
+
+  const stats = {
+    generated_at: new Date().toISOString(),
+    // Cuántas firmas hay de cada lado del cruce.
+    indexed: { query: queries.length, report: rows.length - queries.length },
+    searched: 0,
+    failed: 0,
+    // Fotos de consulta (rescatista o quien busca) que hoy coinciden con al
+    // menos un reporte — el cruce que es la razón de ser de la app.
+    query_photos_with_report_match: 0,
+    // La misma cara consultada más de una vez (reintentos, o dos rescatistas
+    // con la misma persona al frente).
+    query_photos_with_query_match: 0,
+    // Personas distintas a cada lado de los cruces de arriba.
+    reported_people_matched: 0,
+    query_people_matched: 0,
+    // Coincidencias contra firmas que ya no tienen foto en la base: quedaron
+    // colgadas en la colección al borrar una persona (#71). Trabajo de limpieza.
+    dangling_face_matches: 0
+  };
+
+  const reportedPeople = new Set();
+  const queryPeople = new Set();
+
+  async function searchOne(q) {
+    let matches;
+    try {
+      matches = await matcher.searchByFaceId(q.face_id);
+    } catch (e) {
+      console.error(`[facematch:stats] search failed for photo ${q.id}:`, e.message);
+      stats.failed++;
+      return;
+    }
+    stats.searched++;
+    let hitReport = false;
+    let hitQuery = false;
+    for (const m of matches) {
+      const row = byFaceId.get(m.faceId);
+      if (!row) {
+        stats.dangling_face_matches++;
+        continue;
+      }
+      if (row.kind === 'report') {
+        hitReport = true;
+        reportedPeople.add(row.person_id);
+        queryPeople.add(q.person_id);
+      } else {
+        hitQuery = true;
+      }
+    }
+    if (hitReport) stats.query_photos_with_report_match++;
+    if (hitQuery) stats.query_photos_with_query_match++;
+  }
+
+  // Pool chico a propósito: Rekognition tiene tope de búsquedas por segundo y
+  // esto corre dentro de una función serverless con reloj. ~100 firmas a
+  // concurrencia 3 salen en pocos segundos sin rozar el throttling.
+  let next = 0;
+  const workers = Array.from({ length: MATCH_STATS_CONCURRENCY }, async () => {
+    while (next < queries.length) {
+      await searchOne(queries[next++]);
+    }
+  });
+  await Promise.all(workers);
+
+  stats.reported_people_matched = reportedPeople.size;
+  stats.query_people_matched = queryPeople.size;
+  return stats;
+}
+
 module.exports = {
   processPhoto,
   identifyRescuedPerson,
@@ -695,5 +787,6 @@ module.exports = {
   resolveRescueAnswer,
   backfillUnindexedPhotos,
   backfillPhotoDerivatives,
+  computeMatchStats,
   MAX_QUERY_PHOTOS
 };
