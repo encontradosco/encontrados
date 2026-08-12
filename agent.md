@@ -315,13 +315,18 @@ alguien, sí:
   `API_KEY`. Cumple el borrado que promete la política de privacidad, y se lleva
   las dos copias del rastro: la fila (en cascada) y las firmas faciales de sus
   fotos, que viven en la colección de Rekognition y a las que la cascada no
-  llega (`forgetPersonFaces` en `src/facematch.js`, justo antes del borrado —
-  después ya no hay de dónde leer los ids). Es **best effort a propósito**: un
-  Rekognition caído no puede bloquear un borrado ya prometido, así que la fila
-  se va igual y la respuesta trae `faces.unconfirmed` con lo que quedó, más
-  `faces.face_matching` en `false` si el matcher estaba apagado. Reintentar el
-  DELETE ya no sirve —la persona no existe y sus ids se fueron con ella—, así
-  que esa respuesta y la línea `[facematch:olvido]` del log son el único rastro
-  para limpiarlo a mano.
+  llega. **El orden importa y está elegido:** los `face_id` se leen antes del
+  borrado (después la cascada ya se los llevó) pero las firmas se retiran
+  *después*, ya sabiendo que la ficha se fue — al revés, un fallo de base en el
+  medio dejaba una persona listada como desaparecida y permanentemente
+  invisible para el matcher, que es la huérfana que sí le cuesta algo a
+  alguien. Es **best effort a propósito**: un Rekognition caído no puede
+  bloquear un borrado ya prometido, así que la fila se va igual y la respuesta
+  trae `faces.unconfirmed` con lo que quedó, más `faces.face_matching` en
+  `false` si el matcher estaba apagado. Reintentar el DELETE ya no sirve —la
+  persona no existe y sus ids se fueron con ella—, así que esa respuesta y la
+  línea `[facematch:olvido]` del log son el único rastro para limpiarlo a mano.
+  Ojo: `POST /api/maintenance/purge-test-data` borra por otro camino y **no**
+  retira firmas.
 - `/fotos/actualizar` y `POST /api/reindex` — ver "Poner al día fotos" arriba:
   la primera es la segura sin llave, la segunda es la que indexa y avisa.

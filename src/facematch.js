@@ -687,35 +687,41 @@ async function identifyRescuedPerson(
   return { available: true, matches: found, photoId: photo ? photo.id : null, indexed: !!photo };
 }
 
-// Retira de la colección las firmas faciales de una persona, justo antes de
-// borrar su ficha. La cascada se lleva las filas de `photos`, pero la firma no
-// vive ahí: vive en Rekognition, y sin esto sobrevivía al borrado para siempre
-// — una foto de rescatista seguiría coincidiendo con alguien cuya ficha ya no
-// existe, y quedaría un dato biométrico retenido sin el registro que lo
-// justificaba.
+// Retira de la colección las firmas faciales que ya perdieron su ficha. La
+// firma no vive en la base: vive en Rekognition, así que ninguna cascada la
+// toca, y sin esto sobrevivía al borrado para siempre — una foto de rescatista
+// seguiría coincidiendo con alguien cuya ficha ya no existe, y quedaría un dato
+// biométrico retenido sin el registro que lo justificaba.
+//
+// Recibe los ids en vez de ir a buscarlos: para cuando esto corre, la cascada
+// ya se llevó las filas de `photos`, así que hay que leerlos ANTES del borrado
+// y pasarlos acá (ver la ruta DELETE en src/routes/api.js).
 //
 // Best effort a propósito: la política de privacidad promete el borrado, así
 // que un Rekognition caído NO puede bloquearlo. Lo que no se pudo confirmar se
-// devuelve y se loguea, porque después del borrado ya no hay dónde volver a
-// leer esos ids — la cascada se llevó las filas que los tenían.
-async function forgetPersonFaces(store, matcher, personId) {
-  const faceIds = await store.faceIdsForPerson(personId);
-  if (!faceIds.length) {
-    return { total: 0, deleted: 0, unconfirmed: [], face_matching: !!matcher.enabled };
-  }
-
-  // La misma trampa de arranque en frío de siempre: `enabled` es un getter
-  // sobre un matcher perezoso y da false en una invocación nueva.
+// devuelve y se loguea, porque los ids ya no están en ninguna parte de donde
+// volver a leerlos.
+async function forgetPersonFaces(matcher, faceIds, personId) {
+  // Se despierta el matcher primero y en los DOS caminos. El corto también
+  // reporta `face_matching`, y leerlo sin haber inicializado devolvía `false`
+  // con Rekognition perfectamente disponible: cosmético acá, pero es la misma
+  // clase de bug que el #89 y no vale dejarlo sembrado.
   if (typeof matcher.ensureReady === 'function') await matcher.ensureReady();
+  const faceMatching = !!matcher.enabled;
+
+  const ids = (faceIds || []).filter(Boolean);
+  if (!ids.length) {
+    return { total: 0, deleted: 0, unconfirmed: [], face_matching: faceMatching };
+  }
 
   let result;
   try {
-    result = await matcher.deleteFaces(faceIds);
+    result = await matcher.deleteFaces(ids);
   } catch (e) {
     // El proveedor no debería lanzar (el suyo atrapa por lote), pero la
     // garantía tiene que ser estructural y no depender de que se porte bien.
     console.error('[facematch:olvido] DeleteFaces falló:', e.name, e.message);
-    result = { deleted: [], unconfirmed: faceIds };
+    result = { deleted: [], unconfirmed: ids };
   }
 
   const unconfirmed = result.unconfirmed || [];
@@ -728,10 +734,10 @@ async function forgetPersonFaces(store, matcher, personId) {
     );
   }
   return {
-    total: faceIds.length,
+    total: ids.length,
     deleted: (result.deleted || []).length,
     unconfirmed,
-    face_matching: !!matcher.enabled
+    face_matching: faceMatching
   };
 }
 

@@ -171,3 +171,42 @@ test('una persona sin fotos indexadas no gasta una llamada a la colección', asy
   assert.equal(body.faces.total, 0);
   assert.deepEqual(matcher.deleteCalls, []);
 });
+
+test('las firmas se retiran DESPUÉS de que la ficha ya se fue', async (t) => {
+  const matcher = deletingMatcher();
+  const { server, base, store } = await startApp(matcher);
+  t.after(() => {
+    server.close();
+    env.API_KEY = '';
+  });
+  env.API_KEY = KEY;
+
+  const person = await reportedWithFaces(store, 'Rosa Quintero', ['face-rosa']);
+
+  // El orden ES la garantía. Si la base falla, la firma sigue en la colección y
+  // el borrado se puede reintentar entero. Al revés quedaría una persona
+  // listada como desaparecida y a la que ningún rescatista podría volver a
+  // encontrar: `backfillUnindexedPhotos` solo recoge fotos con `face_id` nulo,
+  // y esa conservaría el suyo apuntando a una firma que ya no existe.
+  let fichaYaBorrada = null;
+  matcher.deleteFaces = async (ids) => {
+    fichaYaBorrada = !(await store.getPerson(person.id));
+    return { deleted: [...ids], unconfirmed: [] };
+  };
+
+  assert.equal((await del(base, person.id)).status, 200);
+  assert.equal(fichaYaBorrada, true, 'la ficha ya debe estar borrada al tocar la colección');
+});
+
+test('borrar una persona que no existe no toca la colección', async (t) => {
+  const matcher = deletingMatcher();
+  const { server, base } = await startApp(matcher);
+  t.after(() => {
+    server.close();
+    env.API_KEY = '';
+  });
+  env.API_KEY = KEY;
+
+  assert.equal((await del(base, 999999)).status, 404);
+  assert.deepEqual(matcher.deleteCalls, [], 'un 404 no gasta una llamada a Rekognition');
+});

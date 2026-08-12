@@ -295,12 +295,20 @@ function apiRoutes(store, matcher) {
       if ((req.get('authorization') || '') !== `Bearer ${env.API_KEY}`) {
         return res.status(401).json({ error: 'API key inválida o ausente' });
       }
-      // Las firmas primero: son la parte que sobrevive a la fila, y sus ids
-      // solo se pueden leer mientras las filas de `photos` sigan existiendo.
-      // Nunca lanza, así que el borrado de abajo ocurre pase lo que pase.
-      const faces = await forgetPersonFaces(store, matcher, req.params.id);
+      // Los ids se leen ANTES del borrado: la cascada se lleva las filas de
+      // `photos` y con ellas la única forma de saber qué firmas retirar.
+      const faceIds = await store.faceIdsForPerson(req.params.id);
       const deleted = await store.deletePerson(req.params.id);
       if (!deleted) return res.status(404).json({ error: 'Persona no encontrada' });
+      // Y las firmas DESPUÉS, ya sabiendo que la ficha se fue. Al revés —como
+      // abrió este PR— si la base fallaba en el medio quedaban las firmas
+      // borradas y la ficha viva: una persona listada como desaparecida y
+      // permanentemente invisible para el matcher, porque
+      // `backfillUnindexedPhotos` solo recoge fotos con `face_id` nulo y estas
+      // lo conservan. De las dos huérfanas posibles esa es la peor, porque le
+      // cuesta algo a quien está buscando a un familiar. Nunca lanza, así que
+      // un Rekognition caído tampoco deshace el borrado ya hecho.
+      const faces = await forgetPersonFaces(matcher, faceIds, deleted.id);
       res.json({
         ok: true,
         deleted: { id: deleted.id, full_name: deleted.full_name },
