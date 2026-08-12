@@ -169,14 +169,18 @@ hay framework de frontend ni paso de build: lo que se lee es lo que corre.
   `/ideas`, `/bug`, `/privacidad`, `/terminos`, `/api-doc` y
   `/mantenimiento` ≡ `/fotos/actualizar`. Es el archivo más grande del repo.
 - `src/routes/api.js` — el JSON: `/api/people`, `/api/updates`,
-  `/api/people/:id/subscriptions`, `/api/reindex`, `/api/match-stats` y los
-  `/api/diag*`.
+  `/api/people/:id/subscriptions`, `/api/reindex`, `/api/match-stats`,
+  `/api/report/send` y los `/api/diag*`.
 - `src/routes/webhooks.js` — WhatsApp (Meta Cloud API), dormido. El `GET` es el
   handshake y es una lectura; el `POST` escribe en la base y exige la
   credencial del relevo (`WHATSAPP_RELAY_SECRET`, cabecera `X-Relay-Secret`).
 - `src/privacy.js` — `publicUpdate()` y `maskReporter()`: la única puerta por
   la que una fila de `updates` sale a una respuesta pública.
 - `src/duplicates.js` — detección de reportes repetidos. Siempre consultiva.
+- `src/report.js` — el reporte de operación por correo (tres veces al día vía
+  cron de Vercel, ver `vercel.json`): siempre el acumulado, con los rechazos y
+  fallos como primera métrica, y **solo cifras agregadas** — ni un nombre, ni
+  un contacto, ni un enlace a una ficha (`test/report.test.js` lo protege).
 - `src/github.js` (issues de `/ideas` y `/bug`), `src/notify.js` (SendGrid y
   WhatsApp), `src/bot.js` (motor conversacional), `src/env.js` (carga `.env`).
 
@@ -282,7 +286,9 @@ presencia y huella, nunca el valor).
 | `FACE_MATCH_THRESHOLD` | 90. |
 | `WHATSAPP_TOKEN` / `WHATSAPP_PHONE_NUMBER_ID` | El canal queda dormido (que es su estado actual). |
 | `WHATSAPP_VERIFY_TOKEN` | `encontrados-verify`. Es el handshake del webhook de Meta. |
-| `WHATSAPP_RELAY_SECRET` | `POST /webhooks/whatsapp` responde **403 a todo**. Es la única variable que al faltar cierra en vez de abrir: ese POST escribe en la base, y su único cliente legítimo es el relevo que verifica la firma de Meta y reenvía. El `GET` del handshake no la usa. Se genera con `openssl rand -hex 32`. |
+| `WHATSAPP_RELAY_SECRET` | `POST /webhooks/whatsapp` responde **403 a todo**. Al faltar cierra en vez de abrir: ese POST escribe en la base, y su único cliente legítimo es el relevo que verifica la firma de Meta y reenvía. El `GET` del handshake no la usa. Se genera con `openssl rand -hex 32`. |
+| `CRON_SECRET` | `/api/report/send` responde **503 a todo**: el reporte por correo queda deshabilitado. Otra que al faltar cierra en vez de abrir — ese endpoint manda correo y dispara búsquedas de Rekognition. Es la credencial que el cron de Vercel manda solo (`Authorization: Bearer …` cuando la variable existe en el proyecto) y la misma del disparo manual. Se genera con `openssl rand -hex 32`. |
+| `REPORT_EMAILS` | El reporte de operación no se manda: la corrida queda en el log como `[report] SKIPPED` y responde `{ sent: 0 }`. Lista de buzones de operadores separada por comas. Los destinos nunca se inventan ni se derivan de otra variable. |
 
 `SENDGRID_API_BASE` y `GITHUB_API_BASE` existen solo para que las pruebas
 apunten a sus servidores falsos. No se definen en producción.
@@ -308,6 +314,13 @@ alguien, sí:
 - `POST /api/diag/test-email` — **con llave.** Manda un correo real y traduce
   la respuesta de SendGrid a una frase accionable. Gasta cuota, así que no es
   un `GET`.
+- `GET|POST /api/report/send` — **con `CRON_SECRET`** (no la API key). Manda el
+  reporte de operación por correo a `REPORT_EMAILS`. Lo dispara el cron de
+  Vercel tres veces al día (7:00 / 13:00 / 19:00 Bogotá, `vercel.json`), y a
+  mano se dispara igual:
+  `curl -H "Authorization: Bearer $CRON_SECRET" https://encontrados.co/api/report/send`.
+  Es un `GET` con efectos a propósito: el cron de Vercel solo sabe hacer `GET`,
+  y la credencial obligatoria es lo que evita el disparo casual.
 - `POST /api/maintenance/purge-test-data` — **sin llave**, y es seguro sin ella
   porque solo puede tocar una lista fija de nombres de prueba que está en el
   código. Cualquier otra cosa la ignora.

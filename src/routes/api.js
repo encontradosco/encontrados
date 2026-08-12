@@ -16,6 +16,7 @@ const {
   MAX_QUERY_PHOTOS
 } = require('../facematch');
 const { publicUpdate } = require('../privacy');
+const { sendOperationalReport } = require('../report');
 const { findDuplicateCandidates, duplicateWarning } = require('../duplicates');
 const gh = require('../github');
 
@@ -334,6 +335,36 @@ function apiRoutes(store, matcher) {
           .json({ error: `El matcher facial no está disponible: ${matcher.status}` });
       }
       res.json(stats);
+    })
+  );
+
+  // GET|POST /api/report/send — manda el reporte de operación por correo a los
+  // buzones de REPORT_EMAILS (#116, parte 2). Lo dispara el cron de Vercel
+  // (vercel.json), que solo sabe hacer GET con `Authorization: Bearer
+  // $CRON_SECRET` — por eso este GET tiene efectos, contra la regla general:
+  // la credencial obligatoria es lo que impide que un GET casual mande correo
+  // y dispare búsquedas de Rekognition. La misma credencial sirve para el
+  // disparo manual (ver agent.md).
+  //
+  // Sin CRON_SECRET responde 503: manda correo, así que falla cerrado, como
+  // WHATSAPP_RELAY_SECRET — no abierto, como API_KEY.
+  router.all(
+    '/report/send',
+    wrap(async (req, res) => {
+      const secret = (process.env.CRON_SECRET || '').trim();
+      if (!secret) {
+        return res
+          .status(503)
+          .json({ error: 'CRON_SECRET no configurada — el reporte por correo está deshabilitado' });
+      }
+      if ((req.get('authorization') || '') !== `Bearer ${secret}`) {
+        return res.status(401).json({ error: 'Credencial inválida o ausente' });
+      }
+      const result = await sendOperationalReport(store, matcher);
+      // Si había destinos y NINGÚN envío salió, el cron tiene que verlo como
+      // fallo — un 200 acá sería exactamente el health-check mentiroso que
+      // este reporte existe para no repetir.
+      res.status(result.sent === 0 && result.failed > 0 ? 502 : 200).json(result);
     })
   );
 
