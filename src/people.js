@@ -263,6 +263,24 @@ function createStore(adapter) {
     return isoRow(await adapter.deletePerson(id));
   }
 
+  // Bitácora de coincidencias y envíos (#116, PR 4). Pass-through directo:
+  // src/logbook.js ya se encarga de que un fallo acá nunca suba.
+  async function insertMatchLog(fields) {
+    return adapter.insertMatchLog(fields);
+  }
+
+  async function insertContactLog(fields) {
+    return adapter.insertContactLog(fields);
+  }
+
+  async function matchLogCounts(opts) {
+    return adapter.matchLogCounts(opts);
+  }
+
+  async function contactLogCounts(opts) {
+    return adapter.contactLogCounts(opts);
+  }
+
   return {
     STATUSES,
     SOURCES,
@@ -301,6 +319,10 @@ function createStore(adapter) {
     photosMissingDerivatives,
     counts,
     deletePerson,
+    insertMatchLog,
+    insertContactLog,
+    matchLogCounts,
+    contactLogCounts,
     close: () => adapter.close()
   };
 }

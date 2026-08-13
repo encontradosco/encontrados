@@ -439,6 +439,47 @@ async function createSqliteAdapter(dbPath) {
         .prepare("SELECT COUNT(*) AS n FROM photos WHERE subscription_id = ? AND kind = 'query'")
         .get(subscriptionId).n;
     },
+
+    // Bitácora de coincidencias y de envíos (#116, PR 4 — la instrumentación;
+    // las tablas las creó PR 3). Cada escritura la envuelve `src/logbook.js`
+    // en un try/catch — acá abajo no hace falta duplicar esa protección.
+    async insertMatchLog({ personId, updateId, faceId, similarity, surface }) {
+      db.prepare(
+        'INSERT INTO match_log (person_id, update_id, face_id, similarity, surface) VALUES (?, ?, ?, ?, ?)'
+      ).run(personId, updateId ?? null, faceId, similarity ?? null, surface);
+    },
+    async insertContactLog({ personId, updateId, channel, result }) {
+      db.prepare(
+        'INSERT INTO contact_log (person_id, update_id, channel, result) VALUES (?, ?, ?, ?)'
+      ).run(personId, updateId ?? null, channel, result);
+    },
+    // Cuenta total y por superficie. `since` (ISO) filtra a lo escrito desde
+    // ahí — se usa para la línea de "cambio desde el reporte anterior" del
+    // correo operativo; sin `since`, es el acumulado histórico completo.
+    async matchLogCounts({ since } = {}) {
+      const where = since ? 'WHERE created_at >= ?' : '';
+      const params = since ? [since] : [];
+      const total = db.prepare(`SELECT COUNT(*) AS n FROM match_log ${where}`).get(...params).n;
+      const bySurface = {};
+      for (const surface of ['rescate', 'report', 'api']) {
+        const w = since ? 'WHERE created_at >= ? AND surface = ?' : 'WHERE surface = ?';
+        const p = since ? [since, surface] : [surface];
+        bySurface[surface] = db.prepare(`SELECT COUNT(*) AS n FROM match_log ${w}`).get(...p).n;
+      }
+      return { total, ...bySurface };
+    },
+    // Una fila por (channel, result) — el correo pivotea esto en su propia
+    // tabla. `since` con el mismo significado que en matchLogCounts.
+    async contactLogCounts({ since } = {}) {
+      const where = since ? 'WHERE created_at >= ?' : '';
+      const params = since ? [since] : [];
+      return db
+        .prepare(
+          `SELECT channel, result, COUNT(*) AS count FROM contact_log ${where} GROUP BY channel, result ORDER BY channel, result`
+        )
+        .all(...params);
+    },
+
     async close() {
       db.close();
     }
