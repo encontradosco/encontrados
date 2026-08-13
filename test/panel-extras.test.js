@@ -5,8 +5,8 @@
 //   - suppressedCell/suppressBreakdown (report.js): las reglas puras de
 //     supresión primaria y secundaria, sin nada de HTTP ni de base de datos.
 //   - gatherDuplicateBreakdown/gatherRescuedPeopleCount/
-//     gatherSimilarityTierBreakdown (report.js): las tres cuentas nuevas,
-//     contra SQLite real.
+//     gatherSimilarityTierBreakdown/gatherRescueContactAvailability
+//     (report.js): las cuentas nuevas, contra SQLite real.
 //   - Los tres métodos nuevos del adapter de Postgres tienen la FORMA de SQL
 //     esperada (mismo patrón que test/stats-timezone.test.js: un `pg` de
 //     mentiras que solo captura los statements).
@@ -21,7 +21,8 @@ const {
   suppressBreakdown,
   gatherDuplicateBreakdown,
   gatherRescuedPeopleCount,
-  gatherSimilarityTierBreakdown
+  gatherSimilarityTierBreakdown,
+  gatherRescueContactAvailability
 } = require('../src/report');
 const { RESCUE_ANCHOR_PREFIX, RESCUE_ANCHOR_NORMALIZED_PREFIX } = require('../src/people');
 const { normalize } = require('../src/names');
@@ -212,6 +213,48 @@ test('gatherSimilarityTierBreakdown: clasifica por tramo y superficie, deja afue
   }
 });
 
+test('gatherRescueContactAvailability: separa a los rescatistas que dejaron contacto de los que no, sin tocar a quien no es del flujo de rescate', async () => {
+  const store = await seededStore();
+  try {
+    // Dos rescates SIN contacto (sub == null): el caso que #132 llama "el más
+    // común hoy y correcto" — nadie a quien avisar si la foto llega a
+    // coincidir. Sufijos deliberadamente MUY distintos entre sí — el
+    // fuzzy-matching de findOrCreatePerson (>=0.85 por nombre) fusiona
+    // nombres parecidos, y "sin1"/"sin2" comparten casi todo el nombre (ver
+    // el mismo aviso en test/admin-stats.test.js).
+    const { person: sinContacto1 } = await store.findOrCreatePerson(`${RESCUE_ANCHOR_PREFIX}aaaaaa`);
+    await store.addPhoto({ personId: sinContacto1.id, kind: 'query', content: Buffer.alloc(0), contentType: 'image/jpeg' });
+    const { person: sinContacto2 } = await store.findOrCreatePerson(`${RESCUE_ANCHOR_PREFIX}bbbbbb`);
+    await store.addPhoto({ personId: sinContacto2.id, kind: 'query', content: Buffer.alloc(0), contentType: 'image/jpeg' });
+
+    // Un rescate CON contacto: dejó correo, así que la foto de consulta queda
+    // atada a esa suscripción.
+    const { person: conContacto } = await store.findOrCreatePerson(`${RESCUE_ANCHOR_PREFIX}cccccc`);
+    const { sub } = await store.subscribe(conContacto.id, 'email', 'rescatista@ejemplo.com');
+    await store.addPhoto({
+      personId: conContacto.id,
+      kind: 'query',
+      subscriptionId: sub.id,
+      content: Buffer.alloc(0),
+      contentType: 'image/jpeg'
+    });
+
+    // Una persona ya reportada (no es una persona ancla de rescate) con su
+    // propia foto de consulta sin suscripción — no debe colarse en ninguno
+    // de los dos conteos.
+    const { person: searched } = await store.findOrCreatePerson('Persona Buscada Por Familia');
+    await store.addUpdate(searched.id, { status: 'missing', source: 'web' });
+    await store.addPhoto({ personId: searched.id, kind: 'query', content: Buffer.alloc(0), contentType: 'image/jpeg' });
+
+    const result = await gatherRescueContactAvailability(store);
+    assert.equal(result.withoutContact, 2);
+    assert.equal(result.withContact, 1);
+    assert.equal(result.total, 3);
+  } finally {
+    await store.close();
+  }
+});
+
 // ----------------------------------------- Postgres: forma del SQL (sin DB real)
 async function withFakePostgresAdapter(run) {
   const pgPath = require.resolve('pg');
@@ -262,6 +305,16 @@ test('Postgres: queryPhotoPeople filtra por kind=query y no trae ninguna columna
   });
 });
 
+test('Postgres: queryPhotoPeople (#132, punto 5) trae subscription_id agregado con MAX + GROUP BY, no DISTINCT — una fila por persona', async () => {
+  await withFakePostgresAdapter(async (adapter, statements) => {
+    await adapter.queryPhotoPeople();
+    const sql = statements.find((s) => /FROM photos/.test(s) && /JOIN people/.test(s));
+    assert.match(sql, /MAX\(ph\.subscription_id\)/, 'debía traer subscription_id agregado con MAX, no crudo — para no multiplicar filas por persona');
+    assert.match(sql, /GROUP BY ph\.person_id, p\.normalized_name/);
+    assert.doesNotMatch(sql, /DISTINCT/, 'el DISTINCT viejo ya no aplica — GROUP BY es lo que garantiza una fila por persona ahora que hay una tercera columna');
+  });
+});
+
 test('Postgres: matchLogSimilarityRows trae solo similarity y surface', async () => {
   await withFakePostgresAdapter(async (adapter, statements) => {
     await adapter.matchLogSimilarityRows();
@@ -277,6 +330,10 @@ test('Postgres: matchLogSimilarityRows trae solo similarity y surface', async ()
 // canal aplicaba supresión CELDA POR CELDA (suppressedCell), no
 // suppressBreakdown — con el total exacto de al lado, una sola fuente chica
 // quedaba deducible por resta de las demás. Este test fija el arreglo.
+// `rescueContact`/`reunitedCount` (#132, punto 5-6) tienen un default no-cero
+// para que los tests viejos (que no los pasan) sigan probando lo que decían
+// probar, en vez de reventar contra un `extras.rescueContact.withoutContact`
+// de un `undefined`.
 function minimalPanelInputs(extras) {
   return {
     data: {
@@ -289,7 +346,23 @@ function minimalPanelInputs(extras) {
         instrumentedSince: { match: null, contact: null }
       },
       matcherStatus: 'activo (fake)',
-      extras
+      extras: {
+        duplicates: { total: 47, bySource: { web: 36, whatsapp: 2, api: 0, aggregator: 9, rescate: 0 } },
+        rescuedPeople: 40,
+        similarity: {
+          tiers: {
+            '100': { label: '100%', bySurface: { rescate: 0, report: 0, api: 0 }, total: 0 },
+            '99-99.9': { label: '99–99,9%', bySurface: { rescate: 0, report: 0, api: 0 }, total: 0 },
+            '95-99': { label: '95–99%', bySurface: { rescate: 0, report: 0, api: 0 }, total: 0 },
+            '90-95': { label: '90–95%', bySurface: { rescate: 0, report: 0, api: 0 }, total: 0 }
+          },
+          belowThreshold: 0,
+          missingScore: 0
+        },
+        rescueContact: { withContact: 25, withoutContact: 60, total: 85 },
+        reunitedCount: 30,
+        ...extras
+      }
     },
     daily: []
   };
@@ -351,4 +424,78 @@ test('buildStatsPageHtml: un total pequeño de coincidencias al 100% también se
   // La alarma de calidad solo se dispara con datos reales (>0), pero nunca
   // con el número real.
   assert.match(html, /alguien usó el formulario equivocado/);
+});
+
+// --------------------------------------- buildStatsPageHtml: puntos 5-6 (#132)
+
+test('buildStatsPageHtml: "nadie a quien avisar" se explica con las palabras del issue — caso más común y correcto, no una falla', () => {
+  const extras0 = { rescueContact: { withContact: 12, withoutContact: 88, total: 100 }, reunitedCount: 5 };
+  const { data, daily } = minimalPanelInputs(extras0);
+  const html = buildStatsPageHtml(data, daily, { isPublic: true });
+
+  const start = html.indexOf('Qué pasó después de cada coincidencia');
+  const end = html.indexOf('El embudo del encuentro');
+  assert.ok(start >= 0 && end > start, 'la sección del punto 5 debía existir');
+  const section = html.slice(start, end);
+
+  assert.match(section, />88</, 'el total (100) y las partes (88/12) están arriba del umbral de supresión, así que salen exactas');
+  assert.match(section, />12</);
+  assert.match(section, /MÁS COMÚN/, 'el issue exige decir explícitamente que es el caso más común');
+  assert.match(section, /correcto/i, 'y que es comportamiento CORRECTO, no una falla');
+  assert.match(section, /nunca le escribe a un número o correo que nadie confirmó/i);
+});
+
+test('buildStatsPageHtml: la supresión protege tanto "nadie a quien avisar" como el desglose de avisos por resultado', () => {
+  // Un solo rescate sin contacto (1-4) junto a un total mayor: el candidato a
+  // supresión secundaria es "conContacto".
+  const extras = {
+    rescueContact: { withContact: 40, withoutContact: 2, total: 42 },
+    reunitedCount: 3 // 1-4 también, para probar el escalón 4 del embudo
+  };
+  const { data, daily } = minimalPanelInputs(extras);
+  const html = buildStatsPageHtml(data, daily, { isPublic: true });
+
+  const start = html.indexOf('Qué pasó después de cada coincidencia');
+  const end = html.indexOf('El embudo del encuentro');
+  const section = html.slice(start, end);
+
+  assert.match(section, /&lt;5/, 'el "sin contacto"=2 debe salir como <5');
+  assert.ok(!/>40</.test(section), 'con el total exacto (42) al lado, el "con contacto"=40 sería deducible por resta y debe quedar oculto');
+  assert.match(section, />—</, 'debía aparecer al menos una celda oculta protegiendo al "sin contacto"');
+});
+
+test('buildStatsPageHtml: el embudo del encuentro es acumulado, dice "PISO, no un total", y reusa las MISMAS celdas que el resto de la página', () => {
+  const extras = {
+    rescueContact: { withContact: 25, withoutContact: 60, total: 85 },
+    reunitedCount: 17
+  };
+  const { data, daily } = minimalPanelInputs(extras);
+  const html = buildStatsPageHtml(data, daily, { isPublic: true });
+
+  const start = html.indexOf('El embudo del encuentro (acumulado)');
+  assert.ok(start >= 0, 'la sección del punto 6 debía existir');
+  const section = html.slice(start);
+
+  assert.match(section, /PISO, no un total/, 'la honestidad del piso es un requisito del issue, no un nice-to-have');
+  assert.match(section, /La app no puede ver el abrazo/i);
+  assert.match(section, /100/, 'escalón 1 (registrada) debe mostrar el total de coincidencias, 100');
+  assert.match(section, />40</, 'escalón 2 (entregada) debe mostrar SOLO las de superficie rescate (40), la misma cifra del hero card de arriba');
+  assert.match(section, />17</, 'escalón 4 (a salvo) debe mostrar reunitedCount tal cual, arriba del umbral de supresión');
+
+  // Nunca por día: la palabra "día" no debe aparecer describiendo el embudo.
+  assert.ok(!/embudo del encuentro[\s\S]{0,400}por día/i.test(section), 'el embudo del encuentro es acumulado, nunca rebanado por día');
+});
+
+test('buildStatsPageHtml: el escalón 4 del embudo (a salvo) también respeta la supresión de celdas pequeñas', () => {
+  const extras = {
+    rescueContact: { withContact: 25, withoutContact: 60, total: 85 },
+    reunitedCount: 3 // 1-4
+  };
+  const { data, daily } = minimalPanelInputs(extras);
+  const html = buildStatsPageHtml(data, daily, { isPublic: true });
+
+  const start = html.indexOf('El embudo del encuentro (acumulado)');
+  const section = html.slice(start);
+  assert.match(section, /&lt;5/, 'reunitedCount=3 debía salir como <5, nunca "3" exacto');
+  assert.ok(!/>3</.test(section), 'el 3 real nunca debe aparecer exacto en esta sección');
 });

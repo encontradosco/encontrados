@@ -43,7 +43,7 @@ const {
   suppressBreakdown,
   SUPPRESSION_NOTE
 } = require('./report');
-const { dailyMatchesChart, dailyContactChart, contactByChannelChart, funnelChart } = require('./charts');
+const { dailyMatchesChart, dailyContactChart, contactByChannelChart, funnelChart, reunionFunnelChart } = require('./charts');
 
 const ISSUE_URL = 'https://github.com/encontradosco/encontrados/issues/116';
 const DEDUP_ISSUE_URL = 'https://github.com/encontradosco/encontrados/issues/132';
@@ -440,6 +440,114 @@ function buildStatsPageHtml({ generatedAt, counts, activity, matcherStatus, extr
     }</p>
   </div>`;
 
+  // Punto 5 del issue #132: qué pasó después de cada coincidencia.
+  //
+  // LÍMITE HONESTO (ver también report.js, gatherRescueContactAvailability):
+  // ni match_log ni contact_log guardan qué coincidencia concreta originó
+  // qué aviso — no hay match_id en contact_log, y contact_log ni siquiera
+  // guarda de qué superficie vino la coincidencia que lo disparó. Así que
+  // esta sección responde la pregunta del issue en DOS piezas medibles, en
+  // vez de fingir un embudo por coincidencia que la base no puede sostener:
+  //   (a) de las veces que un rescatista usó la app, cuántas dejaron un
+  //       contacto utilizable — la causa exacta y medible de "nadie a quien
+  //       avisar" (el rescatista no dejó su contacto);
+  //   (b) de TODOS los avisos que sí se intentaron (de cualquier
+  //       coincidencia, cualquier superficie), qué resultado tuvieron.
+  const rescueContactSuppression = suppressBreakdown(
+    [
+      { key: 'sinContacto', value: extras.rescueContact.withoutContact },
+      { key: 'conContacto', value: extras.rescueContact.withContact }
+    ],
+    extras.rescueContact.total
+  );
+  const rescueContactByKey = Object.fromEntries(rescueContactSuppression.cells.map((c) => [c.key, c]));
+
+  // "Entregado directo" = enviado por correo o WhatsApp, sin pasar por el
+  // relevo. "Al buzón del equipo" = relevo/enviado — SÍ llegó, pero a un
+  // humano del equipo, no a quien buscaba o rescataba; esta base no guarda
+  // si ese aviso YA se resolvió (ese estado vive en las etiquetas de Gmail
+  // de /encontrados-avisos, un sistema aparte), así que cuenta cuántos
+  // avisos llegaron ahí ALGUNA VEZ, no cuántos siguen pendientes hoy.
+  const directDelivered = (contactPivot.email.enviado || 0) + (contactPivot.whatsapp.enviado || 0);
+  const relayDelivered = contactPivot.relevo.enviado || 0;
+  const failedOrRejected = ['email', 'whatsapp', 'relevo'].reduce(
+    (s, ch) => s + (contactPivot[ch].fallido || 0) + (contactPivot[ch].rechazado || 0),
+    0
+  );
+  const contactOutcomeSuppression = suppressBreakdown(
+    [
+      { key: 'fallidoRechazado', value: failedOrRejected },
+      { key: 'relevo', value: relayDelivered },
+      { key: 'directo', value: directDelivered }
+    ],
+    contactTotals.total
+  );
+  const outcomeByKey = Object.fromEntries(contactOutcomeSuppression.cells.map((c) => [c.key, c]));
+
+  // Fallos primero (pedido explícito del issue): fallidos y rechazados antes
+  // que entregados, en cada fila del canal.
+  const outcomeDetailRows = ['email', 'whatsapp', 'relevo'].map((ch) => {
+    const c = contactCells(contactPivot[ch]);
+    return [CHANNEL_LABEL[ch], c.fallido.display, c.rechazado.display, c.enviado.display];
+  });
+
+  const matchOutcomeSection = `<div class="stats-section">
+    ${section('Qué pasó después de cada coincidencia')}
+    <p class="stats-note">Ni la bitácora de coincidencias ni la de avisos guardan qué aviso salió de cuál coincidencia puntual — no hay ninguna columna que las ate. Por eso esta sección responde en dos piezas medibles, no en un solo número por coincidencia.</p>
+    <p class="stats-note"><strong>¿Había a quién avisar?</strong> De <strong>${rescueContactSuppression.total.display}</strong> veces que un rescatista usó esta app, <strong>${rescueContactByKey.sinContacto.display}</strong> no dejaron ningún contacto (correo o WhatsApp) — así que si esa foto llega a coincidir con un reporte, <strong>no hay a quién avisar</strong>. Es el caso <strong>MÁS COMÚN hoy, y es correcto</strong>: esta app nunca le escribe a un número o correo que nadie confirmó, ni inventa un contacto que no existe. Las otras <strong>${rescueContactByKey.conContacto.display}</strong> sí dejaron un contacto utilizable.</p>
+    <p class="stats-note"><strong>Avisos intentados, por resultado.</strong> De ${contactOutcomeSuppression.total.display} avisos intentados (de cualquier coincidencia): ${outcomeByKey.directo.display} llegaron directo a quien buscaba o rescataba, ${outcomeByKey.relevo.display} llegaron al buzón del equipo — <strong>esperando que una persona los revise y los enrute</strong> (esta base no distingue cuáles ya se atendieron; ese seguimiento vive en el correo del equipo, no acá) — y ${outcomeByKey.fallidoRechazado.display} fallaron o se rechazaron.</p>
+    ${detailsBlock('Ver el detalle por canal, fallos primero', table(['Canal', 'Fallidos', 'Rechazados', 'Entregados'], outcomeDetailRows))}
+  </div>`;
+
+  // Punto 6 del issue #132 — la pregunta que importa: cuántos encuentros
+  // hizo posibles esta app. Cuatro escalones, ACUMULADOS desde siempre —
+  // NUNCA por día (rebanar por día fue justo lo que fabricó un falso "caso
+  // único" antes en este panel). Los tres primeros reusan celdas YA
+  // suprimidas más arriba en esta misma página (misma cifra, mismo sitio de
+  // verdad — matchSuppression/matchByKey vienen del hero card de arriba,
+  // contactByKey de la tarjeta de envíos) — solo el último escalón es nuevo.
+  const reunitedCell = suppressedCell(extras.reunitedCount);
+  const funnelSteps = [
+    { key: 'registrada', label: 'Registrada', cell: matchSuppression.total },
+    { key: 'entregada', label: 'Entregada', cell: matchByKey.rescate },
+    { key: 'avisada', label: 'Avisada', cell: contactByKey.enviado },
+    { key: 'salvo', label: 'A salvo', cell: reunitedCell }
+  ];
+  const reunionSection = `<div class="stats-section">
+    ${section('El embudo del encuentro (acumulado) — la pregunta que importa')}
+    <p class="stats-note"><strong>La app no puede ver el abrazo.</strong> Nadie vuelve a la web a contarnos que encontró a su familiar, así que esto se mide por aproximación:</p>
+    <div class="stats-chart-card">${reunionFunnelChart(funnelSteps)}</div>
+    ${detailsBlock(
+      'Ver qué cuenta cada escalón',
+      table(
+        ['Escalón', 'Cuántas', 'Qué significa'],
+        [
+          [
+            '1 · Coincidencia registrada',
+            matchSuppression.total.display,
+            'El sistema reconoció a alguien — cualquier superficie (rescate, reporte, API).'
+          ],
+          [
+            '2 · Entregada',
+            matchByKey.rescate.display,
+            'Un rescatista vio en pantalla a quién encontró y cómo contactar a su familia. Este es el momento en que la app hace su trabajo — solo cuenta la superficie "rescate" (/rescate), la única con una pantalla de resultado; las coincidencias de reporte/API se notifican sin este paso intermedio.'
+          ],
+          [
+            '3 · Contacto avisado',
+            contactByKey.enviado.display,
+            'Un aviso llegó a destino — directo a quien buscaba/rescataba, o al buzón del equipo (relevo). No distingue si ese aviso ya se resolvió.'
+          ],
+          [
+            '4 · Persona a salvo',
+            reunitedCell.display,
+            'Su estado más reciente en el registro es "a salvo". No necesariamente vino de un aviso de esta app — puede ser una familia que la encontró por su cuenta y solo actualizó el estado.'
+          ]
+        ]
+      )
+    )}
+    <p class="stats-note">⚠️ El último escalón es un <strong>PISO, no un total</strong>: los reencuentros que nadie nos reporta no aparecen acá, y son probablemente la mayoría. Tampoco es estrictamente un subconjunto de los anteriores — puede haber personas "a salvo" que nunca pasaron por ningún aviso de esta app.</p>
+  </div>`;
+
   // El principio que gobierna todo el issue #132: un cero nunca puede
   // parecer un hecho medido cuando es un punto ciego. Estos son los puntos
   // ciegos que introduce ESTA pasada — no un inventario de todo lo que la
@@ -460,8 +568,12 @@ function buildStatsPageHtml({ generatedAt, counts, activity, matcherStatus, extr
             'El esquema no distingue las dos cosas: un cambio de estado reportado después y un duplicado por error se ven exactamente igual — una fila adicional de `updates` para la misma persona.'
           ],
           [
-            'El embudo del encuentro (coincidencia → entregada → avisada → persona a salvo)',
-            `Punto 6 del issue — queda para un PR aparte, referenciado desde <a href="${esc(DEDUP_ISSUE_URL)}">#132</a>.`
+            'Qué coincidencia concreta originó qué aviso',
+            'Ni match_log ni contact_log guardan esa relación (no hay match_id en contact_log) — la sección «Qué pasó después de cada coincidencia» responde en dos piezas separadas, no en un embudo por coincidencia.'
+          ],
+          [
+            'Si un aviso que llegó al buzón del equipo (relevo) ya fue atendido',
+            'Esta base no guarda un estado de "resuelto" para el relevo — ese seguimiento vive en las etiquetas de Gmail del equipo, un sistema aparte.'
           ]
         ]
       )
@@ -483,6 +595,8 @@ function buildStatsPageHtml({ generatedAt, counts, activity, matcherStatus, extr
     ${dailySection}
     ${channelSection}
     ${similaritySection}
+    ${matchOutcomeSection}
+    ${reunionSection}
     ${funnelPlaceholder}
     ${baseSection}
     ${notYetSection}

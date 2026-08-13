@@ -247,4 +247,25 @@ function funnelChart(stats) {
   return columnChart({ title: 'El embudo (acumulado)', ariaLabel, groups });
 }
 
-module.exports = { dailyMatchesChart, dailyContactChart, contactByChannelChart, funnelChart };
+// El embudo del encuentro (#132, punto 6) — 4 magnitudes ACUMULADAS desde
+// siempre, nunca por día (ver report.js/adminStats.js: rebanar por día es
+// justo lo que fabricó un falso "caso único" antes en este panel). Un solo
+// valor por escalón — como dailyMatchesChart, no hay un total-vs-partes que
+// proteger, así que alcanza con suppressedCell por escalón (ya calculado por
+// quien llama). MISMA advertencia que funnelChart de arriba, más fuerte
+// todavía: acá el último escalón NI SIQUIERA es necesariamente subconjunto de
+// los anteriores (una persona puede pasar a 'safe' sin que medie ninguna
+// coincidencia ni aviso de esta app) — por eso el texto que acompaña la
+// gráfica, no la gráfica misma, es quien tiene que decir "piso, no total".
+function reunionFunnelChart(steps) {
+  const groups = steps.map((s) => ({
+    label: s.label,
+    available: true,
+    segments: [{ key: s.key, value: s.cell.value, color: COLOR.primary, suppressed: s.cell.suppressed, hidden: s.cell.hidden }],
+    totalDisplay: s.cell.display
+  }));
+  const ariaLabel = 'Embudo del encuentro, acumulado desde siempre: ' + steps.map((s) => `${s.label} ${spoken(s.cell)}`).join(', ');
+  return columnChart({ title: 'El embudo del encuentro (acumulado)', ariaLabel, groups });
+}
+
+module.exports = { dailyMatchesChart, dailyContactChart, contactByChannelChart, funnelChart, reunionFunnelChart };
