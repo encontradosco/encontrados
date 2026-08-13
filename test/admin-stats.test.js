@@ -182,17 +182,46 @@ test('las cifras del panel coinciden con gatherReportData — la misma fuente qu
   });
   process.env.PUBLIC_STATS = '1';
 
-  await reportMissing(base, { name: 'Gustavo Prueba Panel', contact: 'gustavo@ejemplo.com', face: 'gustavo' });
-  const fd = new FormData();
-  fd.set('photo', new File([await photoBytes('gustavo')], 'r.jpg', { type: 'image/jpeg' }));
-  fd.set('email', 'rescatista@ejemplo.com');
-  await fetch(`${base}/rescate`, { method: 'POST', body: fd });
+  // Cinco coincidencias distintas — arriba del umbral de supresión (#132),
+  // para que el total salga exacto en las dos superficies y la comparación
+  // pruebe una igualdad real, no dos "<5" que coincidirían por casualidad.
+  for (let i = 0; i < 5; i++) {
+    const face = `gustavo-panel-${i}`;
+    await reportMissing(base, { name: `Gustavo Prueba Panel ${i}`, contact: `gustavo${i}@ejemplo.com`, face });
+    const fd = new FormData();
+    fd.set('photo', new File([await photoBytes(face)], 'r.jpg', { type: 'image/jpeg' }));
+    fd.set('email', `rescatista${i}@ejemplo.com`);
+    await fetch(`${base}/rescate`, { method: 'POST', body: fd });
+  }
 
   // La MISMA función que arma el correo — no una consulta distinta que
   // pueda divergir.
   const data = await gatherReportData(store, matcher);
-  assert.ok(data.activity.match.total >= 1, 'debía haber al menos una coincidencia registrada para comparar algo real');
+  assert.ok(data.activity.match.total >= 5, 'debía haber al menos 5 coincidencias para quedar arriba del umbral de supresión');
 
   const html = await (await fetch(`${base}/admin/stats`)).text();
   assert.match(html, new RegExp(`<strong>${data.activity.match.total}</strong>`), 'el total de coincidencias del panel debe ser el mismo número que gatherReportData');
+});
+
+test('#132 supresión de celdas pequeñas: un total chico sale como "<5" en el panel, nunca el número exacto', async (t) => {
+  const matcher = fakeMatcher();
+  const { server, base } = await startApp(matcher);
+  t.after(() => {
+    server.close();
+    cleanupEnv();
+  });
+  process.env.PUBLIC_STATS = '1';
+
+  // Una sola coincidencia — justo el caso que #132 no puede dejar pasar: un
+  // conteo de 1 en una app de personas desaparecidas describe a una persona
+  // puntual.
+  await reportMissing(base, { name: 'Persona Chica Prueba', contact: 'chica@ejemplo.com', face: 'chica' });
+  const fd = new FormData();
+  fd.set('photo', new File([await photoBytes('chica')], 'r.jpg', { type: 'image/jpeg' }));
+  fd.set('email', 'rescatista-chica@ejemplo.com');
+  await fetch(`${base}/rescate`, { method: 'POST', body: fd });
+
+  const html = await (await fetch(`${base}/admin/stats`)).text();
+  assert.ok(!/<strong>1<\/strong>/.test(html), 'un total de 1 nunca debe salir exacto en el panel');
+  assert.match(html, /&lt;5/, 'el panel debe mostrar la cifra suprimida como &lt;5');
 });

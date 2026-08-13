@@ -15,6 +15,7 @@ const { findDuplicateCandidates } = require('../duplicates');
 const { isReadyToShow } = require('../report-photo');
 const gh = require('../github');
 const { logContact, resultFromSend } = require('../logbook');
+const { RESCUE_ANCHOR_PREFIX } = require('../people');
 
 // Express 4 doesn't catch async errors on its own.
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
@@ -771,7 +772,7 @@ ${rescueForm(typed)}`
         ? null
         : (
             await store.findOrCreatePerson(
-              `Persona rescatada ${crypto.randomBytes(3).toString('hex')}`
+              `${RESCUE_ANCHOR_PREFIX}${crypto.randomBytes(3).toString('hex')}`
             )
           ).person;
       let emailSub = null;

@@ -526,6 +526,32 @@ async function createSqliteAdapter(dbPath) {
       return r.min || null;
     },
 
+    // Cifras del panel #132 — mismo contrato que el adapter de Postgres (ver
+    // ahí el porqué de cada una).
+    async updatesBeyondFirstBySource() {
+      return db
+        .prepare(
+          `WITH ranked AS (
+             SELECT source, ROW_NUMBER() OVER (PARTITION BY person_id ORDER BY created_at ASC, id ASC) AS rn
+             FROM updates
+           )
+           SELECT source, COUNT(*) AS n FROM ranked WHERE rn > 1 GROUP BY source`
+        )
+        .all();
+    },
+    async queryPhotoPeople() {
+      return db
+        .prepare(
+          `SELECT DISTINCT ph.person_id AS person_id, p.normalized_name AS normalized_name
+           FROM photos ph JOIN people p ON p.id = ph.person_id
+           WHERE ph.kind = 'query'`
+        )
+        .all();
+    },
+    async matchLogSimilarityRows() {
+      return db.prepare('SELECT similarity, surface FROM match_log').all();
+    },
+
     async close() {
       db.close();
     }

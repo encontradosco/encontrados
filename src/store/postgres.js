@@ -552,6 +552,43 @@ async function createPostgresAdapter(connectionString) {
       return r.min || null;
     },
 
+    // Cifras del panel #132 — tres consultas de agregación, sin PII, sin
+    // recompute contra Rekognition.
+    //
+    // Fichas que se sumaron a un registro que YA existía (no fueron la
+    // primera actualización de esa persona), por canal de entrada. La
+    // clasificación de qué significa cada canal vive en report.js — acá solo
+    // el ranking por antigüedad dentro de cada persona (mismo patrón de
+    // ROW_NUMBER que ya usan reunitedCount/missingPeople arriba).
+    async updatesBeyondFirstBySource() {
+      return all(
+        `WITH ranked AS (
+           SELECT source, ROW_NUMBER() OVER (PARTITION BY person_id ORDER BY created_at ASC, id ASC) AS rn
+           FROM updates
+         )
+         SELECT source, COUNT(*)::int AS n FROM ranked WHERE rn > 1 GROUP BY source`
+      );
+    },
+    // Personas distintas con al menos una foto de CONSULTA (kind='query') —
+    // el universo del que report.js filtra las ancladas por el flujo de
+    // rescate (ver RESCUE_ANCHOR_NORMALIZED_PREFIX en people.js). Sin filtrar
+    // acá por nombre a propósito: ese patrón es una convención de la capa de
+    // negocio, no algo que el adapter deba conocer.
+    async queryPhotoPeople() {
+      return all(
+        `SELECT DISTINCT ph.person_id AS person_id, p.normalized_name AS normalized_name
+         FROM photos ph JOIN people p ON p.id = ph.person_id
+         WHERE ph.kind = 'query'`
+      );
+    },
+    // Todas las filas de match_log — solo similarity y surface, la materia
+    // prima del desglose por tramo de confianza. report.js hace la
+    // clasificación en JS (una sola fuente de verdad para los tramos, en vez
+    // de repetir los límites en dos motores de SQL distintos).
+    async matchLogSimilarityRows() {
+      return all('SELECT similarity, surface FROM match_log');
+    },
+
     async close() {
       await pool.end();
     }
