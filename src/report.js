@@ -357,19 +357,12 @@ function reportRecipients() {
     .filter(Boolean);
 }
 
-// Arma el reporte y lo manda a cada destinatario de REPORT_RECIPIENTS (un
-// correo por destinatario — no expone la lista de operadores entre sí).
-// Nunca revienta: si no hay destinos configurados, se niega RUIDOSAMENTE
-// (log + { ok:false }), nunca en silencio — el mismo principio que ya rige
-// sendEmail y relayToOperators en este repo.
-async function sendReport(store, matcher) {
-  const generatedAt = new Date();
-  const recipients = reportRecipients();
-  if (!recipients.length) {
-    console.error('[report] SKIPPED — REPORT_RECIPIENTS no está configurada. Nadie recibió el reporte operativo.');
-    return { ok: false, error: 'REPORT_RECIPIENTS no configurada', sent: 0, failed: 0, recipients: 0 };
-  }
-
+// La ÚNICA función que calcula estas cifras (#116, PR 6). El correo
+// (sendReport) y el panel (src/adminStats.js) llaman a esta misma función —
+// nunca duplican la consulta. Si algún día se contradicen, el bug está acá,
+// en un solo lugar, no en dos copias que divergieron.
+async function gatherReportData(store, matcher, { at = new Date() } = {}) {
+  const generatedAt = at;
   const stats = await computeMatchStats(store, matcher);
   const counts = await store.counts();
 
@@ -390,8 +383,55 @@ async function sendReport(store, matcher) {
     since: { at: sinceAt, match: matchSince, contact: contactSince }
   };
 
-  const html = buildReportHtml(generatedAt, counts, stats, matcher.status, activity);
-  const text = buildReportText(generatedAt, counts, stats, matcher.status, activity);
+  return { generatedAt, stats, counts, activity, matcherStatus: matcher.status };
+}
+
+// Serie diaria de los últimos `days` días (#116, PR 6 — solo la usa el
+// panel; el correo no la necesitó pedir). Rellena los días sin filas con
+// cero, para que la tabla no tenga huecos que parezcan un bug de la
+// consulta en vez de "no pasó nada ese día".
+async function gatherDailySeries(store, { days = 7 } = {}) {
+  const sinceIso = new Date(Date.now() - days * 24 * 3600 * 1000).toISOString();
+  const [matchDaily, contactDaily] = await Promise.all([
+    store.matchLogDaily({ since: sinceIso }),
+    store.contactLogDaily({ since: sinceIso })
+  ]);
+
+  const dayKeys = [];
+  for (let i = days - 1; i >= 0; i--) {
+    dayKeys.push(new Date(Date.now() - i * 24 * 3600 * 1000).toISOString().slice(0, 10));
+  }
+
+  const matchByDay = new Map(matchDaily.map((r) => [r.day, Number(r.count)]));
+  const contactByDay = new Map();
+  for (const r of contactDaily) {
+    if (!contactByDay.has(r.day)) contactByDay.set(r.day, { enviado: 0, fallido: 0, rechazado: 0 });
+    contactByDay.get(r.day)[r.result] = Number(r.count);
+  }
+
+  return dayKeys.map((day) => ({
+    day,
+    matches: matchByDay.get(day) || 0,
+    contact: contactByDay.get(day) || { enviado: 0, fallido: 0, rechazado: 0 }
+  }));
+}
+
+// Arma el reporte y lo manda a cada destinatario de REPORT_RECIPIENTS (un
+// correo por destinatario — no expone la lista de operadores entre sí).
+// Nunca revienta: si no hay destinos configurados, se niega RUIDOSAMENTE
+// (log + { ok:false }), nunca en silencio — el mismo principio que ya rige
+// sendEmail y relayToOperators en este repo.
+async function sendReport(store, matcher) {
+  const recipients = reportRecipients();
+  if (!recipients.length) {
+    console.error('[report] SKIPPED — REPORT_RECIPIENTS no está configurada. Nadie recibió el reporte operativo.');
+    return { ok: false, error: 'REPORT_RECIPIENTS no configurada', sent: 0, failed: 0, recipients: 0 };
+  }
+
+  const { generatedAt, stats, counts, activity, matcherStatus } = await gatherReportData(store, matcher);
+
+  const html = buildReportHtml(generatedAt, counts, stats, matcherStatus, activity);
+  const text = buildReportText(generatedAt, counts, stats, matcherStatus, activity);
   const emailSubject = subject(generatedAt, stats);
 
   const results = await Promise.allSettled(
@@ -424,5 +464,17 @@ module.exports = {
   buildReportText,
   reportRecipients,
   sendReport,
-  previousScheduledBogota
+  previousScheduledBogota,
+  // Reutilizados por el panel (#116, PR 6) — una sola fuente de verdad para
+  // las cifras y para cómo se arman las tablas.
+  gatherReportData,
+  gatherDailySeries,
+  table,
+  section,
+  pivotContact,
+  sumContact,
+  SURFACE_LABEL,
+  CHANNEL_LABEL,
+  n,
+  bogotaClock
 };

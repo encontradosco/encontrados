@@ -195,8 +195,19 @@ hay framework de frontend ni paso de build: lo que se lee es lo que corre.
   `/api/admin/*`. El sitio sigue público; solo esas dos rutas quedan detrás
   del gate. Sin `ADMIN_EMAILS` configurada, cerrado para todos — ver
   `docs/admin-auth-setup.md` para el setup de dashboard que le toca a un
-  humano. El panel de verdad detrás del gate es el PR 6; hoy solo hay un stub
-  que confirma que el login funciona de punta a punta.
+  humano.
+- `src/adminStats.js` — el panel de estadísticas (#116, PR 6), montado en
+  `GET /admin/stats`. SOLO cifras agregadas — misma clase de dato que ya es
+  pública en `GET /api/diag`; nunca un nombre, contacto, `person_id`,
+  `face_id` ni `update_id`. Reusa `gatherReportData`/`gatherDailySeries` de
+  `src/report.js` — la MISMA función que arma el correo — para que las dos
+  superficies nunca puedan contradecirse. Detrás de `statsGate`
+  (`src/adminAuth.js`): cerrado por `requireAdminSession` salvo que
+  `PUBLIC_STATS=1` lo abra temporalmente (decisión del operador, mientras el
+  auth de Vercel termina de configurarse) — `noindex` + banner visible
+  cuando está abierto. El drill-down por ID que resolvería nombres/contactos
+  en vivo **no existe todavía**; cuando exista, nace en `/api/admin/*` con
+  `requireAdminSession` — ese prefijo NUNCA lee `PUBLIC_STATS`.
 - `src/privacy.js` — `publicUpdate()` y `maskReporter()`: la única puerta por
   la que una fila de `updates` sale a una respuesta pública.
 - `src/duplicates.js` — detección de reportes repetidos. Siempre consultiva.
@@ -309,6 +320,7 @@ presencia y huella, nunca el valor).
 | `VERCEL_APP_CLIENT_ID` / `VERCEL_APP_CLIENT_SECRET` | `/admin/login/start` responde **503**: no arranca un login de "Sign in with Vercel" a medias. Ver `docs/admin-auth-setup.md` para crear la App en el dashboard. |
 | `ADMIN_SESSION_SECRET` | Mismo 503 que arriba — firma la cookie de sesión propia de `/admin` (nada que ver con el client secret de Vercel). Rotarla cierra todas las sesiones activas de golpe. |
 | `ADMIN_EMAILS` | `/admin` queda **cerrada para todos**, incluso para quien complete un login real y válido en Vercel — otra que falla cerrado, no abierto. Correos separados por coma, nunca hardcodeados (repo público). |
+| `PUBLIC_STATS` | `GET /admin/stats` sigue **detrás de sesión** (el default). Solo el valor exacto `1` la abre sin sesión — ventana temporal mientras el auth de Vercel termina de configurarse (#116, PR 6). Cerrarla es borrar la variable, no un PR. El drill-down por ID (`/api/admin/*`) nunca lee esta variable. |
 
 `SENDGRID_API_BASE`, `GITHUB_API_BASE`, `WHATSAPP_API_BASE`,
 `VERCEL_OAUTH_API_BASE` y `VERCEL_OAUTH_AUTHORIZE_URL` existen solo para que

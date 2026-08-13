@@ -502,6 +502,30 @@ async function createPostgresAdapter(connectionString) {
       );
     },
 
+    // Series por día (#116, PR 6 — el panel). `since` (ISO) siempre viene del
+    // llamador ya calculado en JS, igual que en SQLite — misma razón. La
+    // conversión a UTC es explícita: sin ella, to_char formatea en el huso de
+    // la sesión de Postgres, y el corte de "día" tiene que ser el mismo en
+    // los dos motores.
+    async matchLogDaily({ since } = {}) {
+      const clause = since ? 'WHERE created_at >= $1' : '';
+      const params = since ? [since] : [];
+      return all(
+        `SELECT to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day, COUNT(*)::int AS count
+         FROM match_log ${clause} GROUP BY day ORDER BY day`,
+        params
+      );
+    },
+    async contactLogDaily({ since } = {}) {
+      const clause = since ? 'WHERE created_at >= $1' : '';
+      const params = since ? [since] : [];
+      return all(
+        `SELECT to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day, result, COUNT(*)::int AS count
+         FROM contact_log ${clause} GROUP BY day, result ORDER BY day`,
+        params
+      );
+    },
+
     async close() {
       await pool.end();
     }

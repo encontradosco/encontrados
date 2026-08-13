@@ -480,6 +480,28 @@ async function createSqliteAdapter(dbPath) {
         .all(...params);
     },
 
+    // Series por día (#116, PR 6 — el panel). `since` (ISO) siempre viene del
+    // llamador ya calculado en JS — nunca aritmética de fechas en SQL — para
+    // no depender de qué funciones de fecha trae la versión de SQLite en
+    // este runtime. `date(created_at)` sí parsea bien el ISO con 'T'/'Z' que
+    // ya usa el resto de este esquema.
+    async matchLogDaily({ since } = {}) {
+      const where = since ? 'WHERE created_at >= ?' : '';
+      const params = since ? [since] : [];
+      return db
+        .prepare(`SELECT date(created_at) AS day, COUNT(*) AS count FROM match_log ${where} GROUP BY day ORDER BY day`)
+        .all(...params);
+    },
+    async contactLogDaily({ since } = {}) {
+      const where = since ? 'WHERE created_at >= ?' : '';
+      const params = since ? [since] : [];
+      return db
+        .prepare(
+          `SELECT date(created_at) AS day, result, COUNT(*) AS count FROM contact_log ${where} GROUP BY day, result ORDER BY day`
+        )
+        .all(...params);
+    },
+
     async close() {
       db.close();
     }

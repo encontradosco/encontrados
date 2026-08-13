@@ -55,10 +55,18 @@ Sin las tres primeras, `/admin/login/start` responde `503` (login no configurado
 
 1. Local: `npm run dev`, entra a `http://localhost:3000/admin` → debe redirigir a `/admin/login`.
 2. Click "Iniciar sesión con Vercel" → Vercel pide login (si no estás ya logueado) y la pantalla de consentimiento.
-3. Al aceptar, vuelve a `/admin` y debe mostrar tu correo + el aviso de "panel en construcción".
+3. Al aceptar, vuelve a `/admin` y debe mostrar tu correo y el enlace a `/admin/stats`.
 4. Prueba con una cuenta de Vercel que NO esté en `ADMIN_EMAILS` — debe dar `403`, no dejar pasar y no repetir el login en silencio.
 5. "Cerrar sesión" en el panel → vuelve a pedir login.
 
+## Ventana pública temporal de `/admin/stats` (#116, PR 6)
+
+Mientras este auth termina de configurarse, el operador aprobó abrir **solo** `/admin/stats` — el panel de cifras agregadas (las mismas que ya son públicas hoy en `GET /api/diag`) — sin sesión, con `noindex` y un banner visible en la propia página. **El drill-down por ID nunca se abre así**: no existe todavía, y cuando exista nace en `/api/admin/*` detrás de `requireAdminSession` sin excepción.
+
+**Para abrir la ventana pública:** en Vercel, Settings → Environment Variables, agrega `PUBLIC_STATS=1` (Production). Redeploy para que tome efecto.
+
+**Para cerrarla — apenas el auth quede listo:** borra la variable `PUBLIC_STATS` (o cámbiala a cualquier valor que no sea exactamente `1`) y redeploy. `/admin/stats` vuelve a exigir sesión de inmediato — cerrar es borrar una variable, **nunca** requiere un PR ni un cambio de código.
+
 ## Lo que este PR NO hace
 
-No crea ningún endpoint de administración real — eso es el PR 6 (el panel de verdad, agregados + drill-down). Este PR entrega el gate y un stub que confirma que el flujo funciona de punta a punta. Cualquier ruta que se agregue bajo `/api/admin/*` en el PR 6 nace protegida — el middleware ya está montado ahí, solo hay que agregar rutas dentro del router que devuelve `adminApiRoutes()`.
+No hay drill-down por ID (resolver nombres/contactos en vivo desde el panel). `/api/admin/*` existe y está protegido, pero sin ninguna ruta propia todavía — cuando se necesite, nace ahí, siempre detrás de `requireAdminSession`, sin ninguna puerta "mientras tanto".

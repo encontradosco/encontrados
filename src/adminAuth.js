@@ -325,6 +325,28 @@ function requireAdminSession(req, res, next) {
   next();
 }
 
+// ---------------------------------------------------- ventana pública temporal
+//
+// #116, PR 6 — decisión del operador: el panel de estadísticas (SOLO cifras
+// agregadas, nunca el drill-down por ID) puede verse en producción sin sesión
+// mientras el auth de verdad termina de configurarse. PUBLIC_STATS='1' es el
+// ÚNICO valor que lo abre — cualquier otro valor, incluida su ausencia, lo
+// deja detrás del mismo gate que el resto de /admin. Cerrarlo después es
+// borrar la variable, no un PR.
+function publicStatsOpen() {
+  return (process.env.PUBLIC_STATS || '').trim() === '1';
+}
+
+// Middleware de /admin/stats: si la ventana pública está abierta, pasa
+// directo (sin sesión); si no, exige sesión como cualquier otra ruta de
+// /admin. El drill-down (si algún día existe) NUNCA usa este middleware —
+// nace directo con requireAdminSession, sin ninguna puerta de "mientras
+// tanto".
+function statsGate(req, res, next) {
+  if (publicStatsOpen()) return next();
+  return requireAdminSession(req, res, next);
+}
+
 module.exports = {
   beginLogin,
   completeLogin,
@@ -334,5 +356,7 @@ module.exports = {
   isAllowedEmail,
   adminEmails,
   oauthConfigured,
+  publicStatsOpen,
+  statsGate,
   SESSION_COOKIE
 };
