@@ -539,12 +539,15 @@ async function createSqliteAdapter(dbPath) {
         )
         .all();
     },
+    // `subscription_id` es nuevo (#132, punto 5) — mismo contrato que el
+    // adapter de Postgres (ver ahí el porqué del GROUP BY en vez de DISTINCT).
     async queryPhotoPeople() {
       return db
         .prepare(
-          `SELECT DISTINCT ph.person_id AS person_id, p.normalized_name AS normalized_name
+          `SELECT ph.person_id AS person_id, p.normalized_name AS normalized_name, MAX(ph.subscription_id) AS subscription_id
            FROM photos ph JOIN people p ON p.id = ph.person_id
-           WHERE ph.kind = 'query'`
+           WHERE ph.kind = 'query'
+           GROUP BY ph.person_id, p.normalized_name`
         )
         .all();
     },

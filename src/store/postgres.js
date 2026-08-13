@@ -574,11 +574,19 @@ async function createPostgresAdapter(connectionString) {
     // rescate (ver RESCUE_ANCHOR_NORMALIZED_PREFIX en people.js). Sin filtrar
     // acá por nombre a propósito: ese patrón es una convención de la capa de
     // negocio, no algo que el adapter deba conocer.
+    // `subscription_id` es nuevo (#132, punto 5): GROUP BY en vez del DISTINCT
+    // de antes, para que una persona con más de una foto de consulta siga
+    // devolviendo UNA sola fila (el conteo de gatherRescuedPeopleCount sigue
+    // siendo "una fila = una persona", sin cambiar su comportamiento). MAX()
+    // ignora los NULL: si CUALQUIERA de sus fotos de consulta quedó atada a
+    // una suscripción, la fila sale con esa suscripción — "esta persona sí
+    // dejó un contacto" es lo único que report.js necesita para clasificar.
     async queryPhotoPeople() {
       return all(
-        `SELECT DISTINCT ph.person_id AS person_id, p.normalized_name AS normalized_name
+        `SELECT ph.person_id AS person_id, p.normalized_name AS normalized_name, MAX(ph.subscription_id) AS subscription_id
          FROM photos ph JOIN people p ON p.id = ph.person_id
-         WHERE ph.kind = 'query'`
+         WHERE ph.kind = 'query'
+         GROUP BY ph.person_id, p.normalized_name`
       );
     },
     // Todas las filas de match_log — solo similarity y surface, la materia

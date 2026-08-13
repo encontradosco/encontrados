@@ -584,9 +584,9 @@ async function sendReport(store, matcher) {
 // ---------------------------------------------------------------- #132: el
 // panel debe responder "cuántos encuentros hemos hecho posibles" — esta
 // sección junta las cifras nuevas: personas reportadas y duplicados (punto 1
-// del issue), personas fotografiadas por rescatistas (punto 2), y las
-// coincidencias por tramo de confianza (puntos 3-4). El embudo del encuentro
-// (puntos 5-6) queda para un PR aparte — ver el cuerpo del PR de esta pasada.
+// del issue), personas fotografiadas por rescatistas (punto 2), las
+// coincidencias por tramo de confianza (puntos 3-4), qué pasó después de cada
+// coincidencia (punto 5) y el embudo del encuentro completo (punto 6).
 //
 // Deliberadamente SOLO para el panel (src/adminStats.js), no para el correo
 // (#116): son consultas de agregación baratas, pero el correo ya tiene su
@@ -744,14 +744,49 @@ async function gatherSimilarityTierBreakdown(store) {
   return { tiers, belowThreshold, missingScore };
 }
 
-// Las tres cifras nuevas de #132, juntas — una sola llamada para el panel.
+// Punto 5 del issue (mitad "nadie a quien avisar"): de las personas
+// fotografiadas por un rescatista (mismo universo que gatherRescuedPeopleCount
+// — mismo query, ver la nota de queryPhotoPeople en los dos adapters sobre
+// por qué es GROUP BY y no DISTINCT), cuántas dejaron un contacto utilizable
+// (correo o WhatsApp) y cuántas no.
+//
+// Límite honesto, declarado también junto a donde se usa este número
+// (adminStats.js): esto cuenta CONSULTAS de rescatista, no coincidencias.
+// Ni match_log ni contact_log guardan qué coincidencia concreta originó qué
+// aviso — no hay match_id en contact_log, y contact_log ni siquiera guarda de
+// qué superficie vino (columnas: person_id, update_id, channel, result,
+// created_at — ver el esquema en los dos adapters). Así que "de las
+// coincidencias de rescate registradas, cuántas se quedaron sin nadie a quien
+// avisar" no es una pregunta que esta base pueda responder con exactitud;
+// esta función responde la pregunta más cercana que SÍ es exacta: de las
+// veces que un rescatista usó la app, cuántas lo dejaron sin forma de que le
+// avisáramos si su foto llegaba a coincidir.
+async function gatherRescueContactAvailability(store) {
+  const rows = await store.queryPhotoPeople();
+  let withContact = 0;
+  let withoutContact = 0;
+  for (const r of rows || []) {
+    const normalized = r.normalized_name || '';
+    if (!normalized.startsWith(RESCUE_ANCHOR_NORMALIZED_PREFIX)) continue;
+    if (r.subscription_id == null) withoutContact++;
+    else withContact++;
+  }
+  return { withContact, withoutContact, total: withContact + withoutContact };
+}
+
+// Las cifras nuevas de #132, juntas — una sola llamada para el panel.
+// `reunitedCount` (punto 6, último escalón del embudo del encuentro) es un
+// pass-through directo de people.js — ya existía para la cuenta pública de
+// "reencontradas", el panel solo lo pide también acá.
 async function gatherPanelExtras(store) {
-  const [duplicates, rescuedPeople, similarity] = await Promise.all([
+  const [duplicates, rescuedPeople, similarity, rescueContact, reunitedCount] = await Promise.all([
     gatherDuplicateBreakdown(store),
     gatherRescuedPeopleCount(store),
-    gatherSimilarityTierBreakdown(store)
+    gatherSimilarityTierBreakdown(store),
+    gatherRescueContactAvailability(store),
+    store.getReunitedCount()
   ]);
-  return { duplicates, rescuedPeople, similarity };
+  return { duplicates, rescuedPeople, similarity, rescueContact, reunitedCount };
 }
 
 module.exports = {
@@ -787,5 +822,6 @@ module.exports = {
   gatherDuplicateBreakdown,
   gatherRescuedPeopleCount,
   gatherSimilarityTierBreakdown,
+  gatherRescueContactAvailability,
   gatherPanelExtras
 };

@@ -13,6 +13,7 @@ const env = require('../src/env');
 const { createSqliteAdapter } = require('../src/store/sqlite');
 const { createApp } = require('../src/server');
 const { gatherReportData } = require('../src/report');
+const { fakeSendgrid } = require('./helpers');
 
 function fakeMatcher() {
   const indexed = new Map();
@@ -224,4 +225,109 @@ test('#132 supresión de celdas pequeñas: un total chico sale como "<5" en el p
   const html = await (await fetch(`${base}/admin/stats`)).text();
   assert.ok(!/<strong>1<\/strong>/.test(html), 'un total de 1 nunca debe salir exacto en el panel');
   assert.match(html, /&lt;5/, 'el panel debe mostrar la cifra suprimida como &lt;5');
+});
+
+test('#132 puntos 5-6: el embudo del encuentro y "nadie a quien avisar" contra datos reales, de principio a fin', async (t) => {
+  const sg = await fakeSendgrid();
+  const BUZON = 'buzon-embudo@ejemplo.com';
+  process.env.AVISO_EMAIL = BUZON;
+  process.env.PUBLIC_STATS = '1';
+  const matcher = fakeMatcher();
+  const { server, base, store } = await startApp(matcher);
+  t.after(() => {
+    sg.stop();
+    server.close();
+    delete process.env.AVISO_EMAIL;
+    cleanupEnv();
+  });
+
+  // 5 rescates CON contacto (relevo activo por omisión → 5 avisos al buzón
+  // del equipo) y 5 rescates SIN contacto (nadie a quien avisar) — el mínimo
+  // para que TODAS las cifras de esta prueba queden arriba del umbral de
+  // supresión (5) y se puedan comparar exactas.
+  //
+  // Etiquetas de cara elegidas a mano: el hash-a-color de photoBytes es
+  // multiplicativo (`h = h*31 + charCode`), así que etiquetas "vecinas" tipo
+  // `embudo-con-0`/`embudo-con-1` producen colores que la compresión JPEG
+  // termina cuantizando al MISMO byte a byte — "caras" distintas que el
+  // fakeMatcher ve como una sola. Estas diez sí producen bytes distintos
+  // (verificado a mano antes de escribir la prueba).
+  const CON_FACES = ['embudo-a1', 'embudo-b2', 'embudo-c3', 'embudo-d4', 'embudo-e5'];
+  const SIN_FACES = ['embudo-f6', 'embudo-g7', 'embudo-h8', 'embudo-i9', 'embudo-j0'];
+  const conContactoNames = [];
+  for (let i = 0; i < 5; i++) {
+    const face = CON_FACES[i];
+    const name = `Persona Embudo Con Contacto ${i}`;
+    conContactoNames.push(name);
+    await reportMissing(base, { name, contact: `familia-con-${i}@ejemplo.com`, face });
+    const fd = new FormData();
+    fd.set('photo', new File([await photoBytes(face)], 'r.jpg', { type: 'image/jpeg' }));
+    fd.set('email', `rescatista-con-${i}@ejemplo.com`);
+    await fetch(`${base}/rescate`, { method: 'POST', body: fd });
+  }
+  for (let i = 0; i < 5; i++) {
+    const face = SIN_FACES[i];
+    await reportMissing(base, { name: `Persona Embudo Sin Contacto ${i}`, contact: `familia-sin-${i}@ejemplo.com`, face });
+    const fd = new FormData();
+    fd.set('photo', new File([await photoBytes(face)], 'r.jpg', { type: 'image/jpeg' }));
+    // Sin email ni teléfono — el rescatista no deja cómo avisarle.
+    await fetch(`${base}/rescate`, { method: 'POST', body: fd });
+  }
+
+  // Escalón 4: 5 de las personas encontradas quedan "a salvo" en su estado
+  // más reciente — directo por el store, sin pasar por ningún aviso de esta
+  // app (el punto que hace que el último escalón sea un piso, no un total).
+  for (const name of conContactoNames) {
+    const { person } = await store.findOrCreatePerson(name);
+    await store.addUpdate(person.id, { status: 'safe', source: 'web' });
+  }
+
+  const data = await gatherReportData(store, matcher);
+  assert.equal(data.activity.match.total, 10, '10 rescates → 10 coincidencias de superficie rescate');
+  assert.equal(data.activity.match.rescate, 10);
+
+  const html = await (await fetch(`${base}/admin/stats`)).text();
+
+  // Punto 5: "nadie a quien avisar" — exacto, honesto, con las palabras del issue.
+  const p5start = html.indexOf('Qué pasó después de cada coincidencia');
+  const p5end = html.indexOf('El embudo del encuentro');
+  assert.ok(p5start >= 0 && p5end > p5start, 'la sección del punto 5 debía existir');
+  const p5 = html.slice(p5start, p5end);
+  assert.match(p5, />5</, 'las 5 consultas sin contacto deben salir exactas (arriba del umbral de supresión)');
+  assert.match(p5, /MÁS COMÚN/);
+  assert.match(p5, /correcto/i);
+  // Relevo activo por omisión + AVISO_EMAIL configurada + SendGrid falso que
+  // responde 202 → los 5 avisos de "con contacto" SÍ llegaron al buzón del
+  // equipo. Nada salió directo (el modo relevo lo impide por diseño).
+  assert.match(p5, /esperando que una persona los revise/i);
+
+  // Punto 6: el embudo completo, acumulado.
+  const p6start = html.indexOf('El embudo del encuentro (acumulado)');
+  assert.ok(p6start >= 0, 'la sección del punto 6 debía existir');
+  const p6 = html.slice(p6start);
+  assert.match(p6, />10</, 'escalón 1 y 2 (registrada, entregada) deben mostrar 10 — las 10 coincidencias son todas de superficie rescate');
+  assert.match(p6, />5</, 'escalón 3 (avisada) y 4 (a salvo) deben mostrar 5 cada uno');
+  assert.match(p6, /PISO, no un total/);
+  assert.match(p6, /La app no puede ver el abrazo/i);
+
+  // Los avisos SÍ llegaron al buzón falso — confirma que "esperando
+  // intervención humana" en el punto 5 no es una cifra inventada. Los otros
+  // 5 correos de las 10 recibidas son la verificación de suscripción de cada
+  // rescatista (esa SÍ va directa a su dueño, nunca por relevo — regla
+  // aparte, ya cubierta por test/relay.test.js).
+  const alBuzon = sg.received.filter((mail) => new RegExp(BUZON).test(JSON.stringify(mail.body.personalizations)));
+  assert.equal(alBuzon.length, 5, 'los 5 avisos de "con contacto" debían llegar al SendGrid falso, vía relevo');
+  for (const mail of alBuzon) {
+    assert.doesNotMatch(
+      JSON.stringify(mail.body.personalizations),
+      /rescatista-con-/,
+      'un correo al buzón del equipo nunca puede ir TAMBIÉN al rescatista'
+    );
+  }
+
+  // Cero PII nueva: ningún nombre, correo o teléfono de los que sembró esta
+  // prueba puede aparecer en el HTML del panel.
+  for (const leak of ['Embudo Con Contacto', 'Embudo Sin Contacto', 'familia-con-', 'familia-sin-', 'rescatista-con-']) {
+    assert.ok(!html.includes(leak), `el panel no debe contener "${leak}"`);
+  }
 });
