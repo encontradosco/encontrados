@@ -1087,11 +1087,12 @@ ${LOCATION_SCRIPT}`,
       // correo no se paga.
       //
       // Thin adapter: the shared report-admission service owns the whole domain
-      // sequence — person, update, owner resolution, duplicate check BEFORE
-      // photo indexing, photo indexing, and subscriber notification (skipping
-      // both contact fields this form collects so the reporter isn't echoed
-      // their own report). This handler keeps only the web-specific parts:
-      // multipart files in, cookies, the Colombia Te Busca relay, and the 303.
+      // sequence — person, update, owner resolution, photo indexing, and
+      // subscriber notification (skipping both contact fields this form
+      // collects so the reporter isn't echoed their own report). The
+      // duplicate check runs LAST, once the report is durable. This handler
+      // keeps only the web-specific parts: multipart files in, cookies, the
+      // Colombia Te Busca relay, and the 303.
       const result = await admission.admitReport({
         name,
         status: 'missing',
@@ -1101,8 +1102,25 @@ ${LOCATION_SCRIPT}`,
         contact,
         reporter: relay.reporterName || null,
         photos: files.map((f) => ({ bytes: f.buffer, contentType: f.mimetype })),
-        skipAddresses: [phone, email.toLowerCase()].filter(Boolean)
+        skipAddresses: [phone, email.toLowerCase()].filter(Boolean),
+        checkDuplicates: true,
+        includePriorPhoto: true
       });
+      // Unreachable today — the check above already covers the one field the
+      // service validates that this route doesn't (`name`) — but the service
+      // is the single source of truth for its own contract: a caller that
+      // stops prevalidating, or a validation rule that changes only on one
+      // side, must get a 400 here instead of a TypeError on `result.person`.
+      if (!result.ok) {
+        return res
+          .status(400)
+          .send(
+            layout(
+              'Error',
+              '<p class="error">Faltan datos: hacen falta las fotos, el nombre, el lugar y un teléfono o correo de contacto.</p>'
+            )
+          );
+      }
       const { person, personCreated: created, update, photos, priorPhoto, candidates } = result;
 
       remember(res, REPORTER_COOKIE, phone || contact);
