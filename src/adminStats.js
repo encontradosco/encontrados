@@ -1,4 +1,4 @@
-// El panel de estadísticas (#116, PR 6 — la última pieza de la secuencia).
+// El panel de estadísticas (#116, PR 6 + hotfix post-#127).
 //
 // SOLO cifras agregadas — la misma clase de dato que ya es público hoy en
 // GET /api/diag. Ni un nombre, ni un contacto, ni un person_id/face_id/
@@ -6,6 +6,16 @@
 // reporte (src/report.js), no cabe acá. El drill-down por ID que resuelve
 // nombres y contactos en vivo NO EXISTE en este PR — cuando exista, nace
 // detrás de requireAdminSession en /api/admin/*, nunca en esta superficie.
+//
+// El embudo (tablas "¿podemos confiar?" + "coincidencias") es la sección
+// CARA — depende de computeMatchStats, que recomputa contra Rekognition y
+// midió 28,7s en prod con ~110 fotos. Antes de este hotfix vivía en el mismo
+// render que el resto de la página, adentro del presupuesto de la función
+// serverless: eso fue el 504 (#127). Ahora la página se manda de inmediato
+// con lo barato (bitácora + conteos + serie de 7 días, todo de la base, con
+// índice), y el embudo se pide aparte, después de cargar, a
+// GET /admin/stats/funnel — mismo gate, mismo maxDuration, pero SU PROPIO
+// request, que puede tardar sin bloquear la página.
 //
 // Server-rendered, como el resto de la app — reusa layout()/esc() de
 // src/html.js y table()/section()/n()/pivotContact()/sumContact()/
@@ -35,55 +45,85 @@ function dailyTable(daily) {
   );
 }
 
-// `data` es exactamente lo que devuelve gatherReportData(store, matcher) —
-// mismo shape que consume buildReportHtml. `daily` es gatherDailySeries().
-function buildStatsPageHtml({ generatedAt, stats, counts, activity, matcherStatus }, daily, { isPublic }) {
+// El fragmento caro — solo su contenido interno, sin <html>/<head>/layout:
+// lo consume tanto GET /admin/stats/funnel (lo manda tal cual) como el
+// fallback del navegador sin JavaScript (ver buildStatsPageHtml). `stats`
+// puede venir null (reconocimiento facial apagado): nunca se muestra un cero
+// que parezca un dato real — se declara explícitamente que no se pudo medir.
+function buildFunnelFragmentHtml(stats, matcherStatus) {
+  if (!stats) {
+    return `<p style="padding:10px 12px;background:#fff3cd;border:1px solid #ffe08a;border-radius:4px;">
+⚠️ El reconocimiento facial no está disponible en esta corrida (${esc(matcherStatus || 'desconocido')}). Las coincidencias no se pudieron recalcular —
+esto <strong>no significa que sean cero</strong>, significa que no se pudieron medir. La base general de abajo sigue siendo real.</p>`;
+  }
+  const notFoundYet = Math.max(stats.reported_people_indexed - stats.reported_people_matched, 0);
+  return (
+    section('¿Podemos confiar en los números de abajo?') +
+    table(
+      ['Señal', 'Cuántos', 'Qué significa'],
+      [
+        [
+          'Comparaciones que fallaron',
+          n(stats.failed),
+          'Estas personas no se pudieron comparar en esta corrida. Los números de abajo son el <strong>mínimo real</strong> — pueden ser más.'
+        ],
+        [
+          'Fotos huérfanas en el índice',
+          n(stats.dangling_face_matches),
+          'Caras de personas ya borradas de la base que siguen en el índice facial. Hay que limpiarlas (#71).'
+        ]
+      ]
+    ) +
+    section('Coincidencias (el embudo, acumulado)') +
+    table(
+      ['Paso', 'Cuántas', 'Qué significa'],
+      [
+        [
+          'Personas buscadas con foto utilizable',
+          n(stats.reported_people_indexed),
+          'Tienen una foto donde se detectó bien la cara — solo estas pueden coincidir.'
+        ],
+        [
+          '→ De esas, con al menos una coincidencia',
+          n(stats.reported_people_matched),
+          `Las otras ${n(notFoundYet)} no han aparecido en ninguna foto — todavía.`
+        ],
+        ['→ Coincidencias en total', n(stats.report_matches_total), 'Una misma persona puede aparecer en varias fotos.']
+      ]
+    )
+  );
+}
+
+// Vanilla, sin dependencias: pide el fragmento apenas carga la página y lo
+// inyecta. Mientras espera, dice con claridad que está calculando; si falla
+// o expira, lo dice también — nunca deja el placeholder ambiguo ni lo
+// reemplaza por un cero.
+const FUNNEL_SCRIPT = `<script>
+(function () {
+  var el = document.getElementById('funnel-async');
+  if (!el) return;
+  fetch('/admin/stats/funnel')
+    .then(function (res) {
+      if (!res.ok) throw new Error('status ' + res.status);
+      return res.text();
+    })
+    .then(function (html) {
+      el.innerHTML = html;
+    })
+    .catch(function () {
+      el.innerHTML = '<p style="padding:10px 12px;background:#fdecea;border:1px solid #f5b5ae;border-radius:4px;">' +
+        '⚠️ No se pudo calcular el embudo de coincidencias en este momento (recompute contra Rekognition — puede tardar). ' +
+        'Intenta recargar en un minuto.</p>';
+    });
+})();
+</script>`;
+
+// `data` es gatherCheapReportData(store, matcher) — SIN stats: el embudo se
+// pide aparte (ver FUNNEL_SCRIPT). `daily` es gatherDailySeries().
+function buildStatsPageHtml({ generatedAt, counts, activity, matcherStatus }, daily, { isPublic }) {
   const { day, month, hm } = bogotaClock(generatedAt);
 
   const banner = isPublic ? publicBanner() : '';
-
-  let reliabilityAndFunnel;
-  if (!stats) {
-    reliabilityAndFunnel = `<p style="padding:10px 12px;background:#fff3cd;border:1px solid #ffe08a;border-radius:4px;">
-⚠️ El reconocimiento facial no está disponible en esta corrida (${esc(matcherStatus || 'desconocido')}). Las coincidencias no se pudieron recalcular —
-esto <strong>no significa que sean cero</strong>, significa que no se pudieron medir. La base general de abajo sigue siendo real.</p>`;
-  } else {
-    const notFoundYet = Math.max(stats.reported_people_indexed - stats.reported_people_matched, 0);
-    reliabilityAndFunnel =
-      section('¿Podemos confiar en los números de abajo?') +
-      table(
-        ['Señal', 'Cuántos', 'Qué significa'],
-        [
-          [
-            'Comparaciones que fallaron',
-            n(stats.failed),
-            'Estas personas no se pudieron comparar en esta corrida. Los números de abajo son el <strong>mínimo real</strong> — pueden ser más.'
-          ],
-          [
-            'Fotos huérfanas en el índice',
-            n(stats.dangling_face_matches),
-            'Caras de personas ya borradas de la base que siguen en el índice facial. Hay que limpiarlas (#71).'
-          ]
-        ]
-      ) +
-      section('Coincidencias (el embudo, acumulado)') +
-      table(
-        ['Paso', 'Cuántas', 'Qué significa'],
-        [
-          [
-            'Personas buscadas con foto utilizable',
-            n(stats.reported_people_indexed),
-            'Tienen una foto donde se detectó bien la cara — solo estas pueden coincidir.'
-          ],
-          [
-            '→ De esas, con al menos una coincidencia',
-            n(stats.reported_people_matched),
-            `Las otras ${n(notFoundYet)} no han aparecido en ninguna foto — todavía.`
-          ],
-          ['→ Coincidencias en total', n(stats.report_matches_total), 'Una misma persona puede aparecer en varias fotos.']
-        ]
-      );
-  }
 
   const matchPivot = activity.match || { total: 0, rescate: 0, report: 0, api: 0 };
   const contactPivot = pivotContact(activity.contact);
@@ -149,10 +189,21 @@ esto <strong>no significa que sean cero</strong>, significa que no se pudieron m
 
   const footer = `<p style="font-size:12px;color:#888;font-style:italic;">Generado ${esc(day)} ${esc(month)}, ${esc(hm)} Bogotá · Mismas cifras que el reporte por correo (#116) · Sin drill-down por ID — eso vive detrás de sesión en /api/admin/*, no acá.</p>`;
 
+  // El embudo depende de Rekognition y puede tardar — nunca adentro del
+  // render de la página (ver la nota grande al inicio del archivo). Sin
+  // JavaScript, <noscript> deja dicho por qué esa sección no llegó, en vez
+  // de quedar en blanco sin explicación.
+  const funnelPlaceholder = `
+    <div id="funnel-async">
+      <p style="padding:10px 12px;background:#f4f4f4;border:1px solid #ddd;border-radius:4px;">⏳ Calculando el embudo de coincidencias contra Rekognition — puede tardar unos segundos…</p>
+      <noscript><p>⚠️ Esta sección necesita JavaScript para cargar (pide el embudo aparte, para que el resto de la página no espere por Rekognition). Sin JS, no se muestra.</p></noscript>
+    </div>
+    ${FUNNEL_SCRIPT}`;
+
   const body = `
     <h1>Panel de estadísticas</h1>
     ${banner}
-    ${reliabilityAndFunnel}
+    ${funnelPlaceholder}
     ${bitacoraSection}
     ${deltaLine}
     ${seriesSection}
@@ -163,4 +214,4 @@ esto <strong>no significa que sean cero</strong>, significa que no se pudieron m
   return layout('Panel de estadísticas', body, { path: '/admin/stats', robots: 'noindex, nofollow' });
 }
 
-module.exports = { buildStatsPageHtml };
+module.exports = { buildStatsPageHtml, buildFunnelFragmentHtml };

@@ -29,6 +29,12 @@ const BOGOTA_TZ = 'America/Bogota';
 const SCHEDULE_HOURS_BOGOTA = [7, 13, 19];
 const BOGOTA_OFFSET_MS = 5 * 3600 * 1000;
 
+// Umbral de aviso para el recompute del embudo (hotfix post-#127). Medido en
+// prod: 28,7s con ~110 fotos contra un maxDuration de 30s — 1,3s de margen.
+// Con maxDuration en 120s (ver vercel.json), 60s de umbral avisa cuando el
+// margen bajó a la mitad, mucho antes de que vuelva a rozar el límite real.
+const FUNNEL_DURATION_WARN_MS = 60 * 1000;
+
 function previousScheduledBogota(generatedAt) {
   const bogotaMs = generatedAt.getTime() - BOGOTA_OFFSET_MS;
   const bogota = new Date(bogotaMs);
@@ -141,7 +147,7 @@ function sumContact(pivot) {
 // PR 4): { match, contact, since: { at, match, contact } } — match y contact
 // acumulados desde siempre; since.match/since.contact desde el horario
 // programado anterior (ver previousScheduledBogota).
-function buildReportHtml(generatedAt, counts, stats, matcherStatus, activity) {
+function buildReportHtml(generatedAt, counts, stats, matcherStatus, activity, funnelDurationMs) {
   const howNote = `<blockquote style="margin:0 0 16px;padding:8px 12px;border-left:3px solid #999;color:#333;background:#fafafa;">
 <strong>¿Cómo se calcula esto?</strong> Las tablas 1 y 2 son un <em>recálculo</em> (método provisional): cada vez que sale este reporte, la app vuelve a comparar
 las fotos que ha subido quien busca a alguien —un rescatista que reporta haber encontrado a una persona, o quien se suscribe adjuntando una foto— contra las
@@ -280,7 +286,16 @@ ${n(sinceMatch.total)} coincidencia(s) nueva(s) registrada(s), ${n(sinceContact.
     deltaLine = `<p style="font-size:13px;color:#555;"><strong>Cambio desde el reporte anterior:</strong> no disponible en esta corrida.</p>`;
   }
 
-  const footer = `<p style="font-size:12px;color:#888;font-style:italic;">Generado automáticamente 3×/día · Destinos por variable de entorno · Plan: #116 · El "reporte anterior" de la línea de arriba es el horario programado, no un registro de envíos reales — si una corrida se saltó, la siguiente ventana es más ancha, no hay hueco ni doble conteo.</p>`;
+  // Duración del recompute (hotfix post-#127): la señal más barata de que el
+  // margen se está achicando. Un lector que ve esta cifra crecer corrida a
+  // corrida sabe que hay que revisar maxDuration ANTES de que llegue a
+  // fallar — no después.
+  const durationNote =
+    typeof funnelDurationMs === 'number'
+      ? ` · Recompute del embudo: ${(funnelDurationMs / 1000).toFixed(1)}s`
+      : '';
+
+  const footer = `<p style="font-size:12px;color:#888;font-style:italic;">Generado automáticamente 3×/día · Destinos por variable de entorno · Plan: #116${durationNote} · El "reporte anterior" de la línea de arriba es el horario programado, no un registro de envíos reales — si una corrida se saltó, la siguiente ventana es más ancha, no hay hueco ni doble conteo.</p>`;
 
   return `<div style="font-family:-apple-system,Helvetica,Arial,sans-serif;color:#111;max-width:640px;">
 ${howNote}
@@ -295,7 +310,7 @@ ${footer}
 
 // Texto plano paralelo, para el cliente que no rinde HTML — mismas cifras,
 // sin tablas.
-function buildReportText(generatedAt, counts, stats, matcherStatus, activity) {
+function buildReportText(generatedAt, counts, stats, matcherStatus, activity, funnelDurationMs) {
   const lines = ['Reporte operativo de encontrados.co', ''];
   if (!stats) {
     lines.push(
@@ -342,7 +357,8 @@ function buildReportText(generatedAt, counts, stats, matcherStatus, activity) {
     `Fotos (en el índice facial): ${n(counts.photos)} (${n(counts.photos_indexed)})`,
     '',
     'Ver el HTML de este correo para el detalle en tablas.',
-    'Generado automáticamente 3×/día · Destinos por variable de entorno · Plan: #116'
+    'Generado automáticamente 3×/día · Destinos por variable de entorno · Plan: #116' +
+      (typeof funnelDurationMs === 'number' ? ` · Recompute del embudo: ${(funnelDurationMs / 1000).toFixed(1)}s` : '')
   );
   return lines.join('\n');
 }
@@ -357,13 +373,14 @@ function reportRecipients() {
     .filter(Boolean);
 }
 
-// La ÚNICA función que calcula estas cifras (#116, PR 6). El correo
-// (sendReport) y el panel (src/adminStats.js) llaman a esta misma función —
-// nunca duplican la consulta. Si algún día se contradicen, el bug está acá,
-// en un solo lugar, no en dos copias que divergieron.
-async function gatherReportData(store, matcher, { at = new Date() } = {}) {
+// Las cifras BARATAS (#116, hotfix post-PR6): bitácora + conteos generales.
+// Nunca toca Rekognition — solo consultas a la base, todas con índice. Esto
+// es lo que /admin/stats renderiza en el camino síncrono del request: medido
+// en prod, GET /api/match-stats (el recompute de abajo) tarda 28,7s con
+// ~110 fotos, y el panel lo estaba llamando adentro del request de la
+// página — eso fue el 504. Esta función es la mitad que SÍ puede vivir ahí.
+async function gatherCheapReportData(store, matcher, { at = new Date() } = {}) {
   const generatedAt = at;
-  const stats = await computeMatchStats(store, matcher);
   const counts = await store.counts();
 
   // Bitácora (#116, PR 4): acumulado de siempre + la ventana desde el
@@ -383,7 +400,30 @@ async function gatherReportData(store, matcher, { at = new Date() } = {}) {
     since: { at: sinceAt, match: matchSince, contact: contactSince }
   };
 
-  return { generatedAt, stats, counts, activity, matcherStatus: matcher.status };
+  return { generatedAt, counts, activity, matcherStatus: matcher.status };
+}
+
+// La parte CARA: el recompute del embudo contra Rekognition
+// (computeMatchStats, #117). Aislada para que quien la llame pueda medir su
+// propia duración y decidir cuándo correrla — nunca adentro del camino
+// síncrono de una página que un navegador está esperando.
+async function gatherFunnelStats(store, matcher) {
+  const startedAt = Date.now();
+  const stats = await computeMatchStats(store, matcher);
+  const durationMs = Date.now() - startedAt;
+  return { stats, durationMs };
+}
+
+// La ÚNICA función que calcula TODAS las cifras del correo (#116, PR 6 +
+// hotfix). El correo puede pagar el recompute completo porque corre en su
+// propio cron, con su propio presupuesto — nunca adentro de una página que
+// alguien está mirando cargar. El panel (src/adminStats.js) usa
+// gatherCheapReportData directo para su render inmediato, y
+// gatherFunnelStats aparte, en su propio endpoint diferido.
+async function gatherReportData(store, matcher, opts = {}) {
+  const cheap = await gatherCheapReportData(store, matcher, opts);
+  const { stats, durationMs } = await gatherFunnelStats(store, matcher);
+  return { ...cheap, stats, funnelDurationMs: durationMs };
 }
 
 // Serie diaria de los últimos `days` días (#116, PR 6 — solo la usa el
@@ -428,10 +468,23 @@ async function sendReport(store, matcher) {
     return { ok: false, error: 'REPORT_RECIPIENTS no configurada', sent: 0, failed: 0, recipients: 0 };
   }
 
-  const { generatedAt, stats, counts, activity, matcherStatus } = await gatherReportData(store, matcher);
+  const { generatedAt, stats, counts, activity, matcherStatus, funnelDurationMs } = await gatherReportData(store, matcher);
 
-  const html = buildReportHtml(generatedAt, counts, stats, matcherStatus, activity);
-  const text = buildReportText(generatedAt, counts, stats, matcherStatus, activity);
+  // Señal antes de que sea un fallo (hotfix post-#127): un 504 de plataforma
+  // mata la función a medio camino — nada de lo que corra DESPUÉS del
+  // recompute llega a ejecutarse, así que esto no puede avisar de un timeout
+  // ya ocurrido. Lo que sí puede es avisar de que el margen se está
+  // achicando, corrida a corrida, ANTES de que llegue a cero — por eso queda
+  // en el log de cada corrida exitosa, no solo en la fallida.
+  if (funnelDurationMs > FUNNEL_DURATION_WARN_MS) {
+    console.warn(
+      `[report] el recompute del embudo tardó ${(funnelDurationMs / 1000).toFixed(1)}s — ` +
+        `por encima del umbral de aviso (${FUNNEL_DURATION_WARN_MS / 1000}s). Crece con las fotos; revisar maxDuration y la concurrencia de computeMatchStats.`
+    );
+  }
+
+  const html = buildReportHtml(generatedAt, counts, stats, matcherStatus, activity, funnelDurationMs);
+  const text = buildReportText(generatedAt, counts, stats, matcherStatus, activity, funnelDurationMs);
   const emailSubject = subject(generatedAt, stats);
 
   const results = await Promise.allSettled(
@@ -447,7 +500,8 @@ async function sendReport(store, matcher) {
     }
   }
   console.log(
-    `[report] generado ${generatedAt.toISOString()} — ${recipients.length} destino(s), ${sent} enviado(s), ${failed} fallido(s), stats_disponibles=${!!stats}`
+    `[report] generado ${generatedAt.toISOString()} — ${recipients.length} destino(s), ${sent} enviado(s), ${failed} fallido(s), ` +
+      `stats_disponibles=${!!stats}, recompute=${(funnelDurationMs / 1000).toFixed(1)}s`
   );
   return {
     ok: failed === 0,
@@ -455,7 +509,8 @@ async function sendReport(store, matcher) {
     stats_available: !!stats,
     recipients: recipients.length,
     sent,
-    failed
+    failed,
+    funnel_duration_ms: funnelDurationMs
   };
 }
 
@@ -466,8 +521,12 @@ module.exports = {
   sendReport,
   previousScheduledBogota,
   // Reutilizados por el panel (#116, PR 6) — una sola fuente de verdad para
-  // las cifras y para cómo se arman las tablas.
+  // las cifras y para cómo se arman las tablas. gatherCheapReportData es lo
+  // que el panel llama en su camino síncrono (hotfix post-#127);
+  // gatherFunnelStats es la parte cara, diferida a su propio endpoint.
   gatherReportData,
+  gatherCheapReportData,
+  gatherFunnelStats,
   gatherDailySeries,
   table,
   section,
