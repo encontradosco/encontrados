@@ -84,16 +84,26 @@ async function createSqliteAdapter(dbPath) {
     CREATE INDEX IF NOT EXISTS idx_match_log_person ON match_log(person_id);
     CREATE INDEX IF NOT EXISTS idx_match_log_created ON match_log(created_at);
 
+    -- La columna "source" dice QUIÉN ejecutó el contacto, no por qué medio
+    -- (eso es "channel"); "external_ref" es la llave de idempotencia del
+    -- registrador externo, siempre un DIGESTO, nunca el id crudo del proveedor. El
+    -- porqué completo de las dos columnas está en postgres.js — acá va el
+    -- mismo esquema para que los dos motores no se separen.
     CREATE TABLE IF NOT EXISTS contact_log (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
       update_id INTEGER REFERENCES updates(id) ON DELETE CASCADE,
       channel TEXT NOT NULL CHECK (channel IN ('email','whatsapp','relevo')),
       result TEXT NOT NULL CHECK (result IN ('enviado','fallido','rechazado')),
+      source TEXT NOT NULL DEFAULT 'app' CHECK (source IN ('app','operador')),
+      external_ref TEXT,
       created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
     );
     CREATE INDEX IF NOT EXISTS idx_contact_log_person ON contact_log(person_id);
     CREATE INDEX IF NOT EXISTS idx_contact_log_created ON contact_log(created_at);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_contact_log_external_ref
+      ON contact_log(external_ref) WHERE external_ref IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_contact_log_source ON contact_log(source, created_at);
   `);
 
   // Older dev databases: add the GPS columns if missing.
@@ -141,6 +151,39 @@ async function createSqliteAdapter(dbPath) {
   db.exec(
     'CREATE UNIQUE INDEX IF NOT EXISTS idx_updates_external_id ON updates(external_id) WHERE external_id IS NOT NULL'
   );
+  // Bases de desarrollo anteriores a que contact_log distinguiera QUIÉN
+  // contactó. Las filas que ya existen son todas de la app y ese es el
+  // DEFAULT, así que la columna no afirma nada nuevo sobre nadie. Igual que
+  // con `source` de updates: SQLite no puede agregar el CHECK por ALTER, así
+  // que una base local vieja acepta cualquier texto en la columna hasta que
+  // se recree — la validación real vive en la ruta, que es por donde entra
+  // todo lo externo.
+  for (const col of ['source TEXT NOT NULL DEFAULT \'app\'', 'external_ref TEXT']) {
+    try {
+      db.exec(`ALTER TABLE contact_log ADD COLUMN ${col}`);
+    } catch { /* already exists */ }
+  }
+  db.exec(
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_contact_log_external_ref ON contact_log(external_ref) WHERE external_ref IS NOT NULL'
+  );
+  db.exec('CREATE INDEX IF NOT EXISTS idx_contact_log_source ON contact_log(source, created_at)');
+
+  // El WHERE compartido por los tres agregados de contact_log — mismo
+  // contrato que `contactLogWhere` en postgres.js (ver ahí el porqué de que
+  // el default sea 'app' y no "todo").
+  function contactLogWhere({ since, source } = {}) {
+    const conds = [];
+    const params = [];
+    if (since) {
+      conds.push('created_at >= ?');
+      params.push(since);
+    }
+    if (source) {
+      conds.push('source = ?');
+      params.push(source);
+    }
+    return { clause: conds.length ? `WHERE ${conds.join(' AND ')}` : '', params };
+  }
 
   const getPersonStmt = db.prepare('SELECT * FROM people WHERE id = ?');
 
@@ -448,10 +491,36 @@ async function createSqliteAdapter(dbPath) {
         'INSERT INTO match_log (person_id, update_id, face_id, similarity, surface) VALUES (?, ?, ?, ?, ?)'
       ).run(personId, updateId ?? null, faceId, similarity ?? null, surface);
     },
-    async insertContactLog({ personId, updateId, channel, result }) {
-      db.prepare(
-        'INSERT INTO contact_log (person_id, update_id, channel, result) VALUES (?, ?, ?, ?)'
-      ).run(personId, updateId ?? null, channel, result);
+    // Mismo contrato que el adapter de Postgres (ver ahí los comentarios):
+    // la app escribe sin `source` y cae al default 'app'; el registrador
+    // externo pasa 'operador' + su digesto + la fecha real del contacto, y
+    // recibe `{ inserted }` para distinguir un registro nuevo de un
+    // reintento.
+    async insertContactLog({ personId, updateId, channel, result, source = 'app', externalRef = null, createdAt = null }) {
+      const info = db
+        .prepare(
+          `INSERT INTO contact_log (person_id, update_id, channel, result, source, external_ref, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, COALESCE(?, strftime('%Y-%m-%dT%H:%M:%SZ','now')))
+           ON CONFLICT (external_ref) WHERE external_ref IS NOT NULL DO NOTHING`
+        )
+        .run(personId, updateId ?? null, channel, result, source, externalRef, createdAt);
+      return { inserted: info.changes > 0 };
+    },
+    async deleteContactLogByRef(externalRef) {
+      const info = db
+        .prepare("DELETE FROM contact_log WHERE external_ref = ? AND source = 'operador'")
+        .run(externalRef);
+      return info.changes > 0;
+    },
+    async familyContactLogByPerson(personId) {
+      return db
+        .prepare(
+          `SELECT channel, result, source, created_at
+           FROM contact_log
+           WHERE person_id = ? AND channel <> 'relevo'
+           ORDER BY created_at ASC, id ASC`
+        )
+        .all(personId);
     },
     // Cuenta total y por superficie. `since` (ISO) filtra a lo escrito desde
     // ahí — se usa para la línea de "cambio desde el reporte anterior" del
@@ -470,12 +539,11 @@ async function createSqliteAdapter(dbPath) {
     },
     // Una fila por (channel, result) — el correo pivotea esto en su propia
     // tabla. `since` con el mismo significado que en matchLogCounts.
-    async contactLogCounts({ since } = {}) {
-      const where = since ? 'WHERE created_at >= ?' : '';
-      const params = since ? [since] : [];
+    async contactLogCounts({ since, source = 'app' } = {}) {
+      const { clause, params } = contactLogWhere({ since, source });
       return db
         .prepare(
-          `SELECT channel, result, COUNT(*) AS count FROM contact_log ${where} GROUP BY channel, result ORDER BY channel, result`
+          `SELECT channel, result, COUNT(*) AS count FROM contact_log ${clause} GROUP BY channel, result ORDER BY channel, result`
         )
         .all(...params);
     },
@@ -503,12 +571,11 @@ async function createSqliteAdapter(dbPath) {
         )
         .all(...params);
     },
-    async contactLogDaily({ since } = {}) {
-      const where = since ? 'WHERE created_at >= ?' : '';
-      const params = since ? [since] : [];
+    async contactLogDaily({ since, source = 'app' } = {}) {
+      const { clause, params } = contactLogWhere({ since, source });
       return db
         .prepare(
-          `SELECT date(created_at, '-5 hours') AS day, result, COUNT(*) AS count FROM contact_log ${where} GROUP BY day, result ORDER BY day`
+          `SELECT date(created_at, '-5 hours') AS day, result, COUNT(*) AS count FROM contact_log ${clause} GROUP BY day, result ORDER BY day`
         )
         .all(...params);
     },
@@ -521,8 +588,9 @@ async function createSqliteAdapter(dbPath) {
       const r = db.prepare('SELECT MIN(created_at) AS min FROM match_log').get();
       return r.min || null;
     },
-    async contactLogEarliest() {
-      const r = db.prepare('SELECT MIN(created_at) AS min FROM contact_log').get();
+    async contactLogEarliest({ source = 'app' } = {}) {
+      const { clause, params } = contactLogWhere({ source });
+      const r = db.prepare(`SELECT MIN(created_at) AS min FROM contact_log ${clause}`).get(...params);
       return r.min || null;
     },
 

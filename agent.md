@@ -159,6 +159,16 @@ hay framework de frontend ni paso de build: lo que se lee es lo que corre.
   tienen escritor: `insertMatchLog`/`insertContactLog` (escritura) y
   `matchLogCounts`/`contactLogCounts` (agregados, con `since` opcional para
   ventanas — los usa el reporte por correo).
+  `contact_log` distingue además **quién** contactó: `source` es `'app'` (lo
+  que mandó el software) u `'operador'` (lo que una persona del equipo mandó
+  por fuera de la app y registró después). **Los tres agregados de
+  `contact_log` filtran por `source` y su default es `'app'`**, así que un
+  llamador que no diga nada sigue viendo la serie de siempre — pedir todo hay
+  que escribirlo (`source: null`). No es cosmético: mezclar las dos vuelve
+  incontestable la única pregunta que la gráfica de canales sirve para
+  responder. `external_ref` (índice único parcial) es la llave de idempotencia
+  del registro externo, siempre un digesto. Ver
+  [`docs/contactos-fuera-de-la-app.md`](docs/contactos-fuera-de-la-app.md).
 - `src/logbook.js` — `logMatch`/`logContact` (#116, PR 4): la capa que
   instrumenta `facematch.js` y `notify.js` escribiendo en `match_log`/
   `contact_log`. Regla de oro, aplicada acá una sola vez para todo el árbol de
@@ -186,9 +196,27 @@ hay framework de frontend ni paso de build: lo que se lee es lo que corre.
   `/person/:id`, `/photo/:id{,/thumb,/face}`, `/verify`, `/unsubscribe`,
   `/ideas`, `/bug`, `/privacidad`, `/terminos`, `/api-doc` y
   `/mantenimiento` ≡ `/fotos/actualizar`. Es el archivo más grande del repo.
+  `/person/:id` tiene **un solo bloque condicionado a quién mira**: la
+  bitácora de avisos a quien reportó (`contactHistoryBlock`), que solo se
+  renderiza con sesión de administración —`readSession(req)`— y que para
+  cualquier otro visitante no cambia ni un byte de la página. Cuando aparece,
+  la respuesta lleva `Cache-Control: private, no-store`: dejó de ser la misma
+  para todo el mundo. La versión pública de ese bloque **no existe** y es una
+  decisión aparte (cambia lo que lee una familia y abre superficie de
+  ingeniería social) — no la agregues sin issue.
 - `src/routes/api.js` — el JSON: `/api/people`, `/api/updates`,
-  `/api/people/:id/subscriptions`, `/api/reindex`, `/api/match-stats` y los
-  `/api/diag*`.
+  `/api/people/:id/subscriptions`, `/api/reindex`, `/api/match-stats`,
+  `/api/contact-log` y los `/api/diag*`.
+  `POST /api/contact-log` registra un contacto que se hizo **por fuera de la
+  app** (un correo desde el buzón de alguien del equipo, un WhatsApp desde su
+  teléfono). Tres garantías que están en el código, no en un párrafo:
+  fuerza `source = 'operador'` —un llamador externo no puede escribir en la
+  serie de la app ni queriendo—; no acepta ningún campo que identifique al
+  destinatario; y exige que `ref` sea un digesto SHA-256, porque el `wamid`
+  de WhatsApp lleva el teléfono del destinatario codificado adentro y crudo
+  no puede entrar. `DELETE /api/contact-log/:ref` lo retira, y solo puede
+  tocar filas `source = 'operador'`. Detalle:
+  [`docs/contactos-fuera-de-la-app.md`](docs/contactos-fuera-de-la-app.md).
 - `src/routes/webhooks.js` — WhatsApp (Meta Cloud API), dormido. El `GET` es el
   handshake y es una lectura; el `POST` escribe en la base y exige la
   credencial del relevo (`WHATSAPP_RELAY_SECRET`, cabecera `X-Relay-Secret`).
@@ -409,6 +437,12 @@ alguien, sí:
 - `POST /api/diag/test-email` — **con llave.** Manda un correo real y traduce
   la respuesta de SendGrid a una frase accionable. Gasta cuota, así que no es
   un `GET`.
+- `POST /api/contact-log` / `DELETE /api/contact-log/:ref` — **con llave.**
+  Registra (y retira) un contacto hecho por fuera de la app. Idempotente por
+  `ref`; el registro en bloque lo hace `scripts/registrar-contactos.js`, que
+  **corre en seco por omisión** y hashea los identificadores del proveedor en
+  la máquina de quien mandó los mensajes. Ver
+  [`docs/contactos-fuera-de-la-app.md`](docs/contactos-fuera-de-la-app.md).
 - `POST /api/maintenance/purge-test-data` — **sin llave**, y es seguro sin ella
   porque solo puede tocar una lista fija de nombres de prueba que está en el
   código. Cualquier otra cosa la ignora.

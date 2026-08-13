@@ -307,8 +307,16 @@ function createStore(adapter) {
     return adapter.matchLogEarliest();
   }
 
-  async function contactLogEarliest() {
-    return adapter.contactLogEarliest();
+  async function contactLogEarliest(opts) {
+    return adapter.contactLogEarliest(opts);
+  }
+
+  async function deleteContactLogByRef(externalRef) {
+    return adapter.deleteContactLogByRef(externalRef);
+  }
+
+  async function familyContactLogByPerson(personId) {
+    return adapter.familyContactLogByPerson(personId);
   }
 
   // Cifras del panel #132 — pass-through directo, igual que el resto de la
@@ -371,6 +379,8 @@ function createStore(adapter) {
     contactLogDaily,
     matchLogEarliest,
     contactLogEarliest,
+    deleteContactLogByRef,
+    familyContactLogByPerson,
     updatesBeyondFirstBySource,
     queryPhotoPeople,
     matchLogSimilarityRows,

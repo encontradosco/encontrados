@@ -16,6 +16,7 @@ const { isReadyToShow } = require('../report-photo');
 const gh = require('../github');
 const { logContact, resultFromSend } = require('../logbook');
 const { RESCUE_ANCHOR_PREFIX } = require('../people');
+const { readSession } = require('../adminAuth');
 
 // Express 4 doesn't catch async errors on its own.
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
@@ -413,6 +414,54 @@ const CTB_CHECKBOX = `<label class="share-check">
   </div>`;
 
 const REPORT_PRIVACY = `<p class="privacy">📢 Las fotos del reporte <strong>se publican</strong> en la lista de personas desaparecidas, con los puntos de reconocimiento facial marcados sobre el rostro. Es lo que permite que un rescatista reconozca a la persona que tiene al lado. Sube solo fotos que quieras hacer públicas.</p>`;
+
+// ------------------------------------------- "¿ya se avisó a quien reportó?"
+//
+// El bloque que responde, en la ficha, la pregunta que hoy no tiene respuesta
+// en ninguna pantalla: si alguien ya le escribió a la persona que reportó a
+// esta otra, y cuándo. Lee `contact_log` a través de familyContactLogByPerson,
+// que ya deja 'relevo' afuera en el SQL — un relevo fue al buzón del equipo,
+// no a una familia, y mostrarlo acá diría lo contrario de lo que pasó.
+//
+// QUIÉN LO VE: solo quien tiene sesión de administración. La ficha sigue
+// siendo pública y para un visitante anónimo no cambia ni un byte. La versión
+// pública de este mismo bloque es una decisión aparte, declarada en el PR:
+// cambia lo que lee una familia (categoría "lo que ve o hace un usuario") y
+// abre una superficie nueva de ingeniería social — un estafador que lee "te
+// escribimos el 12" en una página indexada tiene el detalle corroborante que
+// vuelve creíble una llamada. Eso lo decide una persona, en su propio issue.
+//
+// Ni el bloque ni sus datos dicen a QUIÉN se contactó: la dirección y el
+// número nunca estuvieron en esta tabla y no aparecen acá.
+const CONTACT_CHANNEL_LABEL = { email: 'Correo', whatsapp: 'WhatsApp' };
+const CONTACT_SOURCE_LABEL = {
+  app: 'lo mandó la app',
+  operador: 'lo mandó el equipo, por fuera de la app'
+};
+
+function contactHistoryBlock(rows) {
+  if (!rows || !rows.length) {
+    return `<div class="notice"><p>📣 <strong>Todavía no se ha avisado a quien reportó a esta persona.</strong> No hay ningún contacto registrado — ni de la app, ni del equipo.</p>
+<p class="subtle">Los relevos al buzón del equipo no cuentan acá: un relevo es un aviso retenido, no un aviso entregado.</p></div>`;
+  }
+  const items = rows
+    .map((r) => {
+      const canal = CONTACT_CHANNEL_LABEL[r.channel] || r.channel;
+      const quien = CONTACT_SOURCE_LABEL[r.source] || r.source;
+      const verbo = r.result === 'enviado' ? 'Se avisó por' : 'Falló el aviso por';
+      return `<li>${esc(verbo)} <strong>${esc(canal)}</strong> — ${timeTag(r.created_at)} <span class="subtle">(${esc(quien)})</span></li>`;
+    })
+    .join('');
+  const entregados = rows.filter((r) => r.result === 'enviado').length;
+  const titulo = entregados
+    ? '📣 <strong>Ya se avisó a quien reportó a esta persona.</strong>'
+    : '📣 <strong>Se intentó avisar a quien reportó a esta persona, y no se pudo entregar.</strong>';
+  return `<div class="notice">
+  <p>${titulo}</p>
+  <ul>${items}</ul>
+  <p class="subtle">Solo lo ve el equipo: esta ficha, para cualquier otro visitante, no muestra este bloque.</p>
+</div>`;
+}
 
 // Photos stored before thumbnails existed catch up on their own, so nobody has
 // to run a maintenance command for the listing to start showing faces.
@@ -1203,6 +1252,18 @@ ${LOCATION_SCRIPT}`,
       }
       const updates = await store.getUpdates(person.id);
       const photo = (await store.reportPhotoByPerson([person.id])).get(person.id);
+      // Bitácora de avisos a quien reportó — solo con sesión de
+      // administración. La consulta ni siquiera se hace para un visitante
+      // anónimo: una ficha pública no debe pagar una consulta más por un
+      // bloque que no va a renderizar.
+      const isTeam = !!readSession(req);
+      const contactHistory = isTeam ? contactHistoryBlock(await store.familyContactLogByPerson(person.id)) : '';
+      // La respuesta deja de ser la misma para todo el mundo en cuanto este
+      // bloque aparece. Sin esto, un intermediario que cachee la página por
+      // URL podría servirle a un visitante anónimo la copia que se armó para
+      // el equipo. Hoy nada cachea esta ruta; el encabezado es lo que hace
+      // que siga siendo cierto si mañana algo lo hace.
+      if (isTeam) res.set('Cache-Control', 'private, no-store');
       // Only worth a banner when the newest report ISN'T the located one —
       // otherwise it just repeats the card right below it.
       const lastLocated = updates.find((u) => u.location);
@@ -1268,6 +1329,7 @@ ${
     : ''
 }
 ${duplicates}
+${contactHistory}
 <div class="person-body">
   <h1>${esc(person.full_name)}</h1>
   <div class="person-updates">
