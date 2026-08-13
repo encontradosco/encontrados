@@ -561,10 +561,20 @@ test('a match without family contact offers the aviso form and stores the aviso'
   assert.doesNotMatch(html, /Sin datos de contacto/);
   assert.match(html, /action="\/rescate\/aviso"/, 'debe ofrecer el formulario de aviso, no un callejón sin salida');
 
+  // Antes de pedir nada, la pregunta que separa a un rescatista de una familia
+  // que llegó acá por equivocación — y la salida para la segunda.
+  assert.match(html, /¿Tienes a Mariana Prueba Torres contigo en este momento\?/);
+  assert.match(html, /No — yo soy quien la está buscando/);
+  assert.match(
+    html,
+    /href="\/report\?name=Mariana%20Prueba%20Torres"/,
+    'quien la busca sale de acá al formulario de reporte, con el nombre ya puesto'
+  );
+
   // La pregunta del lugar se estaba leyendo al revés — llegaban respuestas con
-  // dónde está QUIEN AVISA. Tiene que quedar explícito de quién se pregunta, y
-  // con un ejemplo del detalle que sirve.
-  assert.match(html, /¿Dónde está ahora esa persona\?/);
+  // dónde está QUIEN AVISA. El nombre va dentro de la pregunta, que es lo que
+  // «esa persona» no lograba, y con un ejemplo del detalle que sirve.
+  assert.match(html, /¿En qué lugar está Mariana Prueba Torres en este momento\?/);
   assert.match(html, /no dónde estás tú/);
   assert.match(html, /Hospital San Jorge/, 'un ejemplo dice más que la etiqueta');
 
@@ -603,12 +613,55 @@ test('a match without family contact offers the aviso form and stores the aviso'
   assert.ok(relevo, 'el aviso de rescatista debía quedar registrado como relevo al operador');
   assert.equal(relevo.result, 'enviado', 'con AVISO_EMAIL configurada y SendGrid respondiendo bien, el relevo cuenta como enviado');
 
-  // A SECOND rescuer matching the same person now sees the first rescuer's
-  // contact, labelled as what it is — a rescuer, not the family.
+  // #120: al SIGUIENTE que coincida con esa cara no se le muestra nada de
+  // quien avisó antes. Ni el teléfono ni el lugar — los dos viajan juntos en
+  // `contact`, así que basta con que uno se filtre para entregar el otro.
   const fd2 = new FormData();
   fd2.set('photo', new File([await photoBytes('mariana')], 'r2.jpg', { type: 'image/jpeg' }));
   const html2 = await (await fetch(`${base}/rescate`, { method: 'POST', body: fd2 })).text();
-  assert.match(html2, /Contacto del rescatista que la tiene/);
+  assert.doesNotMatch(html2, /300 999 8877/, 'el teléfono de quien avisó no puede salir en la pantalla de nadie más');
+  assert.doesNotMatch(html2, /Albergue San José/, 'ni el sitio donde dijo que estaba la persona');
+  assert.doesNotMatch(html2, /Contacto del rescatista que la tiene/);
+  // Y sigue pudiendo dejar el suyo: la ficha no se queda sin salida.
+  assert.match(html2, /action="\/rescate\/aviso"/);
+  assert.match(html2, /Otra persona ya nos avisó por esta misma ficha/);
+});
+
+// La otra mitad de #120: lo de arriba prueba el aviso que acaba de entrar en
+// esa misma corrida. Este prueba el caso que de verdad hay en producción — un
+// aviso YA guardado, de antes del arreglo. El filtro vive en el momento de
+// pintar justamente para cubrirlo sin tocar la base.
+test('un aviso ya guardado tampoco expone a quien lo dejó', async (t) => {
+  const matcher = fakeMatcher();
+  const { server, base, store } = await startApp(matcher);
+  t.after(() => server.close());
+
+  const { person } = await store.findOrCreatePerson('Rosalba Prueba Ariza');
+  const update = await store.addUpdate(person.id, { status: 'missing', source: 'aggregator' });
+  const photo = await store.addPhoto({
+    personId: person.id,
+    kind: 'report',
+    updateId: update.id,
+    content: await photoBytes('rosalba'),
+    contentType: 'image/jpeg'
+  });
+  const { faceId } = await matcher.indexFace(await photoBytes('rosalba'));
+  await store.setPhotoFaceId(photo.id, faceId);
+
+  // El aviso escrito directo, como los que ya están en la base.
+  await store.addUpdate(person.id, {
+    status: 'missing',
+    source: 'rescate',
+    contact: '311 555 0102 · la persona puede ser localizada en: Calle Falsa 123, Pereira'
+  });
+
+  const fd = new FormData();
+  fd.set('photo', new File([await photoBytes('rosalba')], 'r.jpg', { type: 'image/jpeg' }));
+  const html = await (await fetch(`${base}/rescate`, { method: 'POST', body: fd })).text();
+
+  assert.match(html, /Rosalba Prueba Ariza/, 'la coincidencia sigue saliendo');
+  assert.doesNotMatch(html, /311 555 0102/);
+  assert.doesNotMatch(html, /Calle Falsa 123/);
 });
 
 // Rekognition can look at a real photo and find no face (group shots from
