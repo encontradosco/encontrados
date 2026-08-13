@@ -526,6 +526,21 @@ async function createPostgresAdapter(connectionString) {
       );
     },
 
+    // El primer registro de cada tabla (hotfix post-#127/#128 — "los ceros
+    // pre-instrumentación son una mentira por omisión"). Antes de esta fecha
+    // la bitácora no existía: no es que no pasó nada, es que no se medía.
+    // null si la tabla está vacía — todavía no hay ningún registro. Se
+    // devuelve como ISO (to_char, igual que matchLogDaily) para que el
+    // llamador nunca tenga que distinguir Date vs string entre los motores.
+    async matchLogEarliest() {
+      const r = await one("SELECT to_char(MIN(created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS min FROM match_log", []);
+      return r.min || null;
+    },
+    async contactLogEarliest() {
+      const r = await one("SELECT to_char(MIN(created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS min FROM contact_log", []);
+      return r.min || null;
+    },
+
     async close() {
       await pool.end();
     }

@@ -222,6 +222,31 @@ hay framework de frontend ni paso de build: lo que se lee es lo que corre.
   `gatherCheapReportData` + `gatherFunnelStats`, y mide cuánto tarda esa
   segunda parte — el correo trae esa duración en el pie, y una corrida que
   pase de 60s deja un `console.warn` con umbral explícito.
+  **Hotfix siguiente (investigación del panel mostrando 4 coincidencias / 0
+  envíos):** confirmado en el código, no supuesto — `/rescate` deja el
+  correo y el WhatsApp del rescatista como **opcionales** (`rescueForm()` en
+  `src/routes/web.js`, y el checkbox "solo búsqueda"), y
+  `notifyRescuerOfMatches` (`src/facematch.js`) solo llama a
+  `notifyFaceMatch`/`requestRescueConfirmation` cuando existe una
+  suscripción — sin correo ni teléfono no hay a quién avisar, así que 0
+  envíos con coincidencias reales es el comportamiento correcto: el
+  rescatista ya vio el contacto de la familia EN PANTALLA (esa es la
+  entrega), y `match_log` (superficie `rescate`) ya captura exactamente eso.
+  No es un hueco de instrumentación — verificado con evidencia de código,
+  no con una corrida.
+  **Hotfix "los ceros pre-instrumentación mienten por omisión" +
+  visualización:** `store.matchLogEarliest()`/`contactLogEarliest()` (`MIN
+  (created_at)`, null si la tabla está vacía) le dan a
+  `gatherCheapReportData`/`gatherDailySeries` (`src/report.js`) un punto de
+  corte real — antes de esa fecha no es "cero", es "sin instrumentación", y
+  el panel lo muestra como `—` (nunca 0) con `instrumentedSinceNote()`
+  declarando desde cuándo se mide, en el correo y en el panel. `src/charts.js`
+  agrega columnas SVG generadas en el servidor (sin dependencias, sin CDN, sin
+  framework) para la serie de 7 días, envíos por canal y el embudo — paleta
+  de estado (bueno/alerta/crítico) para enviado/fallido/rechazado, un único
+  azul para series de un solo valor, `role="img"` + `aria-label` agregado en
+  cada SVG, y las tablas de siempre debajo — nunca reemplazadas — para quien
+  lee sin JS o con lector de pantalla.
 - `src/privacy.js` — `publicUpdate()` y `maskReporter()`: la única puerta por
   la que una fila de `updates` sale a una respuesta pública.
 - `src/duplicates.js` — detección de reportes repetidos. Siempre consultiva.

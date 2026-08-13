@@ -139,6 +139,22 @@ function sumContact(pivot) {
   return { total, enviados };
 }
 
+// "Medido desde…" (hotfix post-#127/#128): la frase que hace explícito que
+// "acumulado" no es "toda la historia" — sin esto, un total sin fecha se lee
+// como si la app llevara midiendo desde siempre. Reusada por el correo
+// (acá) y por el panel (src/adminStats.js) — mismo texto, misma fuente.
+function instrumentedSinceNote(instrumentedSince) {
+  if (!instrumentedSince || (!instrumentedSince.match && !instrumentedSince.contact)) {
+    return '<p style="font-size:13px;color:#555;margin:0 0 8px;">Sin registros todavía en la bitácora.</p>';
+  }
+  const fmt = (d) => {
+    if (!d) return 'sin registros todavía';
+    const { day, month, hm } = bogotaClock(d);
+    return `${day} ${month}, ${hm} Bogotá`;
+  };
+  return `<p style="font-size:13px;color:#555;margin:0 0 8px;">Medido desde: coincidencias desde ${esc(fmt(instrumentedSince.match))} · envíos desde ${esc(fmt(instrumentedSince.contact))}. Antes de esa fecha no es que no pasara nada — es que todavía no se medía.</p>`;
+}
+
 // El HTML del formato aprobado por @ni500 el 12-ago-2026, con las cifras
 // vivas de esta corrida. `stats` puede venir null (reconocimiento facial
 // apagado) — las tablas 1 y 2 (que dependen de él) se sustituyen por un
@@ -225,6 +241,7 @@ esto <strong>no significa que sean cero</strong>, significa que no se pudieron m
 
   const bitacoraSection =
     section('3 · Envíos y coincidencias registradas en el momento (acumulado, desde que existe la bitácora)') +
+    instrumentedSinceNote(activity.instrumentedSince) +
     '<p style="font-size:13px;color:#555;margin:0 0 4px;">Coincidencias — cada vez que el matcher encuentra a alguien, en el momento en que pasa (ya no es el recálculo del embudo de arriba):</p>' +
     matchTable +
     '<p style="font-size:13px;color:#555;margin:12px 0 4px;">Envíos intentados, por canal — <strong>los fallos y rechazos importan más que los enviados</strong>: un canal que solo cuenta lo que salió bien siempre se ve sano.</p>' +
@@ -332,8 +349,10 @@ function buildReportText(generatedAt, counts, stats, matcherStatus, activity, fu
   const matchPivot = activity.match || { total: 0, rescate: 0, report: 0, api: 0 };
   const contactPivot = pivotContact(activity.contact);
   const contactTotals = sumContact(contactPivot);
+  const fmtSince = (d) => (d ? `${bogotaClock(d).day} ${bogotaClock(d).month}, ${bogotaClock(d).hm} Bogotá` : 'sin registros todavía');
   lines.push(
     'Bitácora (acumulado, en el momento en que ocurre):',
+    `  Medido desde: coincidencias desde ${fmtSince(activity.instrumentedSince && activity.instrumentedSince.match)} · envíos desde ${fmtSince(activity.instrumentedSince && activity.instrumentedSince.contact)}`,
     `  Coincidencias registradas: ${n(matchPivot.total)} (rescate ${n(matchPivot.rescate)}, reporte ${n(matchPivot.report)}, API ${n(matchPivot.api)})`,
     `  Envíos intentados: ${n(contactTotals.total)} (${n(contactTotals.enviados)} entregados)`,
     ''
@@ -388,16 +407,26 @@ async function gatherCheapReportData(store, matcher, { at = new Date() } = {}) {
   // Rekognition esté apagado ahora mismo, porque son hechos ya ocurridos.
   const sinceAt = previousScheduledBogota(generatedAt);
   const sinceIso = sinceAt.toISOString();
-  const [matchAll, contactAll, matchSince, contactSince] = await Promise.all([
+  const [matchAll, contactAll, matchSince, contactSince, matchEarliest, contactEarliest] = await Promise.all([
     store.matchLogCounts(),
     store.contactLogCounts(),
     store.matchLogCounts({ since: sinceIso }),
-    store.contactLogCounts({ since: sinceIso })
+    store.contactLogCounts({ since: sinceIso }),
+    store.matchLogEarliest(),
+    store.contactLogEarliest()
   ]);
   const activity = {
     match: matchAll,
     contact: contactAll,
-    since: { at: sinceAt, match: matchSince, contact: contactSince }
+    since: { at: sinceAt, match: matchSince, contact: contactSince },
+    // Hotfix post-#127/#128: "acumulado" no es lo mismo que "toda la
+    // historia" — la bitácora tiene una fecha de nacimiento (#125). Sin esto,
+    // un total "desde siempre" se lee como si hubiera medido desde el inicio
+    // de la app, y no es cierto. null = todavía no hay ni un registro.
+    instrumentedSince: {
+      match: matchEarliest ? new Date(matchEarliest) : null,
+      contact: contactEarliest ? new Date(contactEarliest) : null
+    }
   };
 
   return { generatedAt, counts, activity, matcherStatus: matcher.status };
@@ -429,13 +458,22 @@ async function gatherReportData(store, matcher, opts = {}) {
 // Serie diaria de los últimos `days` días (#116, PR 6 — solo la usa el
 // panel; el correo no la necesitó pedir). Rellena los días sin filas con
 // cero, para que la tabla no tenga huecos que parezcan un bug de la
-// consulta en vez de "no pasó nada ese día".
+// consulta en vez de "no pasó nada ese día" — PERO un día anterior al primer
+// registro de la tabla no es "cero", es "sin instrumentación" (hotfix
+// post-#127/#128): matchesAvailable/contactAvailable distinguen los dos
+// casos para que quien renderice nunca confunda uno con otro.
 async function gatherDailySeries(store, { days = 7 } = {}) {
   const sinceIso = new Date(Date.now() - days * 24 * 3600 * 1000).toISOString();
-  const [matchDaily, contactDaily] = await Promise.all([
+  const [matchDaily, contactDaily, matchEarliest, contactEarliest] = await Promise.all([
     store.matchLogDaily({ since: sinceIso }),
-    store.contactLogDaily({ since: sinceIso })
+    store.contactLogDaily({ since: sinceIso }),
+    store.matchLogEarliest(),
+    store.contactLogEarliest()
   ]);
+  // 'YYYY-MM-DD...' → 'YYYY-MM-DD': comparable como texto contra `day`
+  // (mismo formato que arma matchLogDaily/contactLogDaily, ver los adapters).
+  const matchEarliestDay = matchEarliest ? matchEarliest.slice(0, 10) : null;
+  const contactEarliestDay = contactEarliest ? contactEarliest.slice(0, 10) : null;
 
   const dayKeys = [];
   for (let i = days - 1; i >= 0; i--) {
@@ -452,7 +490,9 @@ async function gatherDailySeries(store, { days = 7 } = {}) {
   return dayKeys.map((day) => ({
     day,
     matches: matchByDay.get(day) || 0,
-    contact: contactByDay.get(day) || { enviado: 0, fallido: 0, rechazado: 0 }
+    matchesAvailable: !!matchEarliestDay && day >= matchEarliestDay,
+    contact: contactByDay.get(day) || { enviado: 0, fallido: 0, rechazado: 0 },
+    contactAvailable: !!contactEarliestDay && day >= contactEarliestDay
   }));
 }
 
@@ -535,5 +575,6 @@ module.exports = {
   SURFACE_LABEL,
   CHANNEL_LABEL,
   n,
-  bogotaClock
+  bogotaClock,
+  instrumentedSinceNote
 };
