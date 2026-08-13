@@ -23,7 +23,18 @@
 // de verdad para cómo se calculan y se tabulan estas cifras. El correo y el
 // panel nunca deberían poder contradecirse.
 const { layout, esc } = require('./html');
-const { table, section, pivotContact, sumContact, SURFACE_LABEL, CHANNEL_LABEL, n, bogotaClock } = require('./report');
+const {
+  table,
+  section,
+  pivotContact,
+  sumContact,
+  SURFACE_LABEL,
+  CHANNEL_LABEL,
+  n,
+  bogotaClock,
+  instrumentedSinceNote
+} = require('./report');
+const { dailyMatchesChart, dailyContactChart, contactByChannelChart, funnelChart } = require('./charts');
 
 const ISSUE_URL = 'https://github.com/encontradosco/encontrados/issues/116';
 
@@ -38,10 +49,22 @@ queda abierta con las mismas cifras agregadas que ya son públicas en <code>/api
 detrás de una sesión en cuanto el acceso esté listo.</p>`;
 }
 
+// "—" para un día anterior al primer registro de la tabla correspondiente
+// (hotfix post-#127/#128): un cero ahí sería la misma mentira por omisión
+// que motivó el issue — "no medido" y "medido en cero" son hechos distintos,
+// y la tabla no puede confundirlos. matchesAvailable/contactAvailable son
+// independientes porque match_log y contact_log pueden tener su propio
+// primer registro.
 function dailyTable(daily) {
   return table(
     ['Día', 'Coincidencias', 'Enviados', 'Fallidos', 'Rechazados'],
-    daily.map((d) => [esc(d.day), n(d.matches), n(d.contact.enviado), n(d.contact.fallido), n(d.contact.rechazado)])
+    daily.map((d) => [
+      esc(d.day),
+      d.matchesAvailable ? n(d.matches) : '—',
+      d.contactAvailable ? n(d.contact.enviado) : '—',
+      d.contactAvailable ? n(d.contact.fallido) : '—',
+      d.contactAvailable ? n(d.contact.rechazado) : '—'
+    ])
   );
 }
 
@@ -58,6 +81,7 @@ esto <strong>no significa que sean cero</strong>, significa que no se pudieron m
   }
   const notFoundYet = Math.max(stats.reported_people_indexed - stats.reported_people_matched, 0);
   return (
+    funnelChart(stats) +
     section('¿Podemos confiar en los números de abajo?') +
     table(
       ['Señal', 'Cuántos', 'Qué significa'],
@@ -130,6 +154,7 @@ function buildStatsPageHtml({ generatedAt, counts, activity, matcherStatus }, da
 
   const bitacoraSection =
     section('Envíos y coincidencias registradas en el momento (acumulado, desde que existe la bitácora)') +
+    instrumentedSinceNote(activity.instrumentedSince) +
     table(
       ['Superficie', 'Coincidencias registradas'],
       [
@@ -137,7 +162,8 @@ function buildStatsPageHtml({ generatedAt, counts, activity, matcherStatus }, da
         ['<strong>Total</strong>', `<strong>${n(matchPivot.total || 0)}</strong>`]
       ]
     ) +
-    '<p style="font-size:13px;color:#555;margin:12px 0 4px;">Envíos intentados, por canal — <strong>los fallos y rechazos importan más que los enviados</strong>.</p>' +
+    '<p style="font-size:13px;color:#555;margin:12px 0 4px;">Envíos intentados, por canal — <strong>los fallos y rechazos importan más que los enviados</strong>: un canal que solo cuenta lo que salió bien siempre se ve sano.</p>' +
+    contactByChannelChart(contactPivot, CHANNEL_LABEL) +
     table(
       ['Canal', 'Enviados', 'Fallidos', 'Rechazados'],
       ['email', 'whatsapp', 'relevo'].map((ch) => [
@@ -157,7 +183,11 @@ function buildStatsPageHtml({ generatedAt, counts, activity, matcherStatus }, da
     deltaLine = `<p style="font-size:13px;color:#555;"><strong>Desde el horario programado anterior</strong> (aprox. ${esc(at.day)} ${esc(at.month)}, ${esc(at.hm)} Bogotá): ${n(sinceMatch.total)} coincidencia(s) nueva(s), ${n(sinceContact.total)} envío(s) intentado(s) (${n(sinceContact.enviados)} entregado(s)).</p>`;
   }
 
-  const seriesSection = section('Últimos 7 días') + dailyTable(daily);
+  const seriesSection =
+    section('Últimos 7 días') +
+    dailyMatchesChart(daily) +
+    dailyContactChart(daily) +
+    dailyTable(daily);
 
   const baseSection =
     section('La base en general') +

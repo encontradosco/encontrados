@@ -502,6 +502,19 @@ async function createSqliteAdapter(dbPath) {
         .all(...params);
     },
 
+    // El primer registro de cada tabla (hotfix post-#127/#128 — "los ceros
+    // pre-instrumentación son una mentira por omisión"). Antes de esta fecha
+    // la bitácora no existía: no es que no pasó nada, es que no se medía.
+    // null si la tabla está vacía — todavía no hay ningún registro.
+    async matchLogEarliest() {
+      const r = db.prepare('SELECT MIN(created_at) AS min FROM match_log').get();
+      return r.min || null;
+    },
+    async contactLogEarliest() {
+      const r = db.prepare('SELECT MIN(created_at) AS min FROM contact_log').get();
+      return r.min || null;
+    },
+
     async close() {
       db.close();
     }
