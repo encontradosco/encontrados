@@ -7,6 +7,7 @@ const { createLazyMatcher } = require('./faces');
 const { webRoutes } = require('./routes/web');
 const { apiRoutes } = require('./routes/api');
 const { webhookRoutes } = require('./routes/webhooks');
+const { adminRoutes, adminApiRoutes } = require('./routes/admin');
 
 async function createApp(adapter, matcher) {
   const store = createStore(adapter || (await createAdapter()));
@@ -20,6 +21,11 @@ async function createApp(adapter, matcher) {
 
   app.use(express.static(path.join(__dirname, '..', 'public')));
   app.get('/health', (req, res) => res.json({ ok: true }));
+  // El sitio sigue público — /admin y /api/admin son la única superficie
+  // detrás del gate de Vercel (#116, PR 5). Montados antes de /api y / para
+  // que su prioridad sea explícita, aunque hoy no compiten con ninguna ruta.
+  app.use('/admin', adminRoutes());
+  app.use('/api/admin', adminApiRoutes());
   app.use('/api', apiRoutes(store, faceMatcher));
   app.use('/webhooks', express.json(), webhookRoutes(store, faceMatcher));
   app.use('/', webRoutes(store, faceMatcher));

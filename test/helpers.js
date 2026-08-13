@@ -102,4 +102,57 @@ async function fakeWhatsApp() {
   };
 }
 
-module.exports = { fakeSendgrid, fakeGithub, fakeWhatsApp };
+// Stand-in "Sign in with Vercel" (#116, PR 5) — token + userinfo + revoke, lo
+// mínimo que src/adminAuth.js necesita para probar el flujo completo (login
+// → callback → sesión) sin hablar con Vercel de verdad. setUserInfo() decide
+// qué correo "inicia sesión" en la siguiente llamada al callback.
+async function fakeVercelOAuth() {
+  let nextUserInfo = { email: 'nadie@ejemplo.com', email_verified: true };
+  const server = http.createServer((req, res) => {
+    if (req.method === 'POST' && req.url.startsWith('/login/oauth/token/revoke')) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end('{}');
+    }
+    if (req.method === 'POST' && req.url.startsWith('/login/oauth/token')) {
+      let body = '';
+      req.on('data', (c) => (body += c));
+      req.on('end', () => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            access_token: 'fake-access-token',
+            token_type: 'Bearer',
+            expires_in: 3600,
+            scope: 'openid email'
+          })
+        );
+      });
+      return;
+    }
+    if (req.method === 'GET' && req.url.startsWith('/login/oauth/userinfo')) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify(nextUserInfo));
+    }
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end('{}');
+  });
+  await new Promise((r) => server.listen(0, r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  process.env.VERCEL_OAUTH_API_BASE = base;
+  process.env.VERCEL_APP_CLIENT_ID = 'test-client-id';
+  process.env.VERCEL_APP_CLIENT_SECRET = 'test-client-secret';
+  return {
+    base,
+    setUserInfo(info) {
+      nextUserInfo = info;
+    },
+    stop() {
+      server.close();
+      delete process.env.VERCEL_OAUTH_API_BASE;
+      delete process.env.VERCEL_APP_CLIENT_ID;
+      delete process.env.VERCEL_APP_CLIENT_SECRET;
+    }
+  };
+}
+
+module.exports = { fakeSendgrid, fakeGithub, fakeWhatsApp, fakeVercelOAuth };

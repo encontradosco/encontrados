@@ -188,6 +188,15 @@ hay framework de frontend ni paso de build: lo que se lee es lo que corre.
 - `src/routes/webhooks.js` — WhatsApp (Meta Cloud API), dormido. El `GET` es el
   handshake y es una lectura; el `POST` escribe en la base y exige la
   credencial del relevo (`WHATSAPP_RELAY_SECRET`, cabecera `X-Relay-Secret`).
+- `src/adminAuth.js` + `src/routes/admin.js` — "Sign in with Vercel" para
+  `/admin` (#116, PR 5): login, callback, sesión propia (cookie firmada con
+  HMAC, sin tabla en la base — igual de stateless que `verify_token`), logout
+  y el middleware `requireAdminSession`, montado sobre `/admin` y
+  `/api/admin/*`. El sitio sigue público; solo esas dos rutas quedan detrás
+  del gate. Sin `ADMIN_EMAILS` configurada, cerrado para todos — ver
+  `docs/admin-auth-setup.md` para el setup de dashboard que le toca a un
+  humano. El panel de verdad detrás del gate es el PR 6; hoy solo hay un stub
+  que confirma que el login funciona de punta a punta.
 - `src/privacy.js` — `publicUpdate()` y `maskReporter()`: la única puerta por
   la que una fila de `updates` sale a una respuesta pública.
 - `src/duplicates.js` — detección de reportes repetidos. Siempre consultiva.
@@ -297,9 +306,13 @@ presencia y huella, nunca el valor).
 | `WHATSAPP_TOKEN` / `WHATSAPP_PHONE_NUMBER_ID` | El canal queda dormido (que es su estado actual). |
 | `WHATSAPP_VERIFY_TOKEN` | `encontrados-verify`. Es el handshake del webhook de Meta. |
 | `WHATSAPP_RELAY_SECRET` | `POST /webhooks/whatsapp` responde **403 a todo**. Es la única variable que al faltar cierra en vez de abrir: ese POST escribe en la base, y su único cliente legítimo es el relevo que verifica la firma de Meta y reenvía. El `GET` del handshake no la usa. Se genera con `openssl rand -hex 32`. |
+| `VERCEL_APP_CLIENT_ID` / `VERCEL_APP_CLIENT_SECRET` | `/admin/login/start` responde **503**: no arranca un login de "Sign in with Vercel" a medias. Ver `docs/admin-auth-setup.md` para crear la App en el dashboard. |
+| `ADMIN_SESSION_SECRET` | Mismo 503 que arriba — firma la cookie de sesión propia de `/admin` (nada que ver con el client secret de Vercel). Rotarla cierra todas las sesiones activas de golpe. |
+| `ADMIN_EMAILS` | `/admin` queda **cerrada para todos**, incluso para quien complete un login real y válido en Vercel — otra que falla cerrado, no abierto. Correos separados por coma, nunca hardcodeados (repo público). |
 
-`SENDGRID_API_BASE` y `GITHUB_API_BASE` existen solo para que las pruebas
-apunten a sus servidores falsos. No se definen en producción.
+`SENDGRID_API_BASE`, `GITHUB_API_BASE`, `WHATSAPP_API_BASE`,
+`VERCEL_OAUTH_API_BASE` y `VERCEL_OAUTH_AUTHORIZE_URL` existen solo para que
+las pruebas apunten a sus servidores falsos. No se definen en producción.
 
 ## Endpoints operativos
 

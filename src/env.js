@@ -41,6 +41,20 @@ module.exports = {
   // niega a enviarse (ver src/report.js), nunca en silencio.
   REPORT_RECIPIENTS: (process.env.REPORT_RECIPIENTS || '').trim(),
 
+  // Auth de /admin (#116, PR 5) — "Sign in with Vercel". La App (client id +
+  // secret) se crea en el dashboard de Vercel; ver docs/admin-auth-setup.md
+  // para el paso a paso. Vacíos = /admin no arranca el login (ver
+  // src/adminAuth.js), nunca un login roto a medias.
+  VERCEL_APP_CLIENT_ID: (process.env.VERCEL_APP_CLIENT_ID || '').trim(),
+  VERCEL_APP_CLIENT_SECRET: (process.env.VERCEL_APP_CLIENT_SECRET || '').trim(),
+  // Firma la cookie de sesión propia (HMAC) — nada que ver con el client
+  // secret de Vercel. Sin ella, /admin se niega a abrir sesión: firmar con un
+  // secreto vacío o adivinado es peor que no tener sesión.
+  ADMIN_SESSION_SECRET: (process.env.ADMIN_SESSION_SECRET || '').trim(),
+  // Allowlist de correos, separados por coma — NUNCA hardcodeados (repo
+  // público). Vacía = /admin queda cerrada para todos, nunca abierta.
+  ADMIN_EMAILS: (process.env.ADMIN_EMAILS || '').trim(),
+
   WHATSAPP_TOKEN: process.env.WHATSAPP_TOKEN || '',
   WHATSAPP_PHONE_NUMBER_ID: process.env.WHATSAPP_PHONE_NUMBER_ID || '',
   WHATSAPP_VERIFY_TOKEN: process.env.WHATSAPP_VERIFY_TOKEN || 'encontrados-verify',
