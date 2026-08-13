@@ -40,3 +40,20 @@ reviews:
       instructions: >-
         El webhook de WhatsApp procesa escrituras: verifica la firma
         X-Hub-Signature-256 antes de tocar datos.
+
+# Apaga las funciones de CodeRabbit que requieren retención de datos, y borra
+# lo que ya tuviera guardado: el "knowledge base" (aprendizajes acumulados
+# entre PRs, contexto de issues, historial de PRs, documentos de lineamientos).
+# Menos retención en un tercero para un proyecto que maneja reportes de
+# personas desaparecidas.
+#
+# Lo que esto NO hace, dicho de frente: no anula que CodeRabbit entrene con
+# proyectos open source. Su compromiso de no entrenar con código de clientes
+# excluye explícitamente al OSS, y este repo es OSS. Esto reduce retención;
+# no saca al repo de esa cláusula.
+#
+# Lo que NO se pierde: las path_instructions de arriba, que son todo el valor
+# afinado a mano de este archivo. Viven bajo `reviews`, no bajo
+# `knowledge_base`, así que el opt-out no las toca.
+knowledge_base:
+  opt_out: true
