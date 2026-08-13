@@ -13,8 +13,8 @@ const {
   statsGate,
   publicStatsOpen
 } = require('../adminAuth');
-const { gatherReportData, gatherDailySeries } = require('../report');
-const { buildStatsPageHtml } = require('../adminStats');
+const { gatherCheapReportData, gatherFunnelStats, gatherDailySeries } = require('../report');
+const { buildStatsPageHtml, buildFunnelFragmentHtml } = require('../adminStats');
 
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
@@ -63,15 +63,48 @@ function adminRoutes(store, matcher) {
   // pública en GET /api/diag. statsGate decide si hace falta sesión: abierta
   // solo si PUBLIC_STATS='1' (ventana temporal mientras se termina de
   // configurar el auth de verdad), cerrada por omisión como todo lo demás.
+  //
+  // Hotfix post-#127: esta ruta SOLO llama a gatherCheapReportData (bitácora
+  // + conteos + serie, todo consultas a la base con índice) — nunca
+  // computeMatchStats. El recompute contra Rekognition medía 28,7s en prod
+  // con ~110 fotos, corriendo ADENTRO de este mismo request: eso era el 504
+  // (maxDuration estaba en 30s). Se movió a su propio endpoint, GET
+  // /admin/stats/funnel, que la página pide aparte después de renderizar.
   router.get(
     '/stats',
     statsGate,
     wrap(async (req, res) => {
-      const [data, daily] = await Promise.all([gatherReportData(store, matcher), gatherDailySeries(store)]);
+      const [data, daily] = await Promise.all([gatherCheapReportData(store, matcher), gatherDailySeries(store)]);
       // Cabecera además del <meta robots> del layout — dos capas, porque un
       // crawler puede no ejecutar/leer el <head> completo.
       res.set('X-Robots-Tag', 'noindex, nofollow');
       res.send(buildStatsPageHtml(data, daily, { isPublic: publicStatsOpen() }));
+    })
+  );
+
+  // La sección cara, diferida (hotfix post-#127). Mismo statsGate que
+  // /admin/stats — misma clase de dato, mismo criterio de público/gateado.
+  // Nunca calla un fallo: si computeMatchStats revienta por algo distinto a
+  // los fallos por-foto que ya atrapa internamente (p.ej. la base no
+  // responde), acá se declara en vez de dejar la sección en blanco o, peor,
+  // mostrar un cero que parezca un dato real.
+  router.get(
+    '/stats/funnel',
+    statsGate,
+    wrap(async (req, res) => {
+      res.set('X-Robots-Tag', 'noindex, nofollow');
+      try {
+        const { stats, durationMs } = await gatherFunnelStats(store, matcher);
+        console.log(`[admin-stats:funnel] recompute ${(durationMs / 1000).toFixed(1)}s`);
+        res.send(buildFunnelFragmentHtml(stats, matcher.status));
+      } catch (e) {
+        console.error('[admin-stats:funnel] recompute falló:', e.message);
+        res
+          .status(502)
+          .send(
+            '<p style="padding:10px 12px;background:#fdecea;border:1px solid #f5b5ae;border-radius:4px;">⚠️ No se pudo calcular el embudo de coincidencias en este momento. Intenta recargar en un minuto.</p>'
+          );
+      }
     })
   );
 
