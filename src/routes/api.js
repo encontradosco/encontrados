@@ -134,9 +134,9 @@ function apiRoutes(store, matcher) {
       const photo = decodePhoto(req.body.photo);
 
       // Thin adapter: the shared report-admission service owns the whole domain
-      // sequence (owner resolution after external_id upsert, duplicate check
-      // before indexing, photo indexing, subscriber notification). This route
-      // only decodes JSON in and shapes JSON out.
+      // sequence (owner resolution after external_id upsert, photo indexing,
+      // subscriber notification, and — LAST, once the report is durable — the
+      // duplicate check). This route only decodes JSON in and shapes JSON out.
       const result = await admission.admitReport({
         name,
         status,

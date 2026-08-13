@@ -12,7 +12,7 @@ const { createReportAdmission } = require('../src/report-admission');
 
 // A tiny in-memory store with just the surface the service touches. Records
 // every call so a test can assert the ORDER of operations, which is where the
-// "duplicate check before indexing" invariant lives.
+// "duplicate check LAST, after indexing and notifying" invariant lives.
 function fakeStore({ existingPerson = null, existingReportPhoto = null, ownerOverride = null } = {}) {
   const events = [];
   let nextPersonId = 100;

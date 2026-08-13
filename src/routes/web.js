@@ -1087,11 +1087,12 @@ ${LOCATION_SCRIPT}`,
       // correo no se paga.
       //
       // Thin adapter: the shared report-admission service owns the whole domain
-      // sequence — person, update, owner resolution, duplicate check BEFORE
-      // photo indexing, photo indexing, and subscriber notification (skipping
-      // both contact fields this form collects so the reporter isn't echoed
-      // their own report). This handler keeps only the web-specific parts:
-      // multipart files in, cookies, the Colombia Te Busca relay, and the 303.
+      // sequence — person, update, owner resolution, photo indexing, and
+      // subscriber notification (skipping both contact fields this form
+      // collects so the reporter isn't echoed their own report). The
+      // duplicate check runs LAST, once the report is durable. This handler
+      // keeps only the web-specific parts: multipart files in, cookies, the
+      // Colombia Te Busca relay, and the 303.
       const result = await admission.admitReport({
         name,
         status: 'missing',
