@@ -14,6 +14,19 @@
 // reusan tal cual — respeta la identidad visual existente en vez de traer
 // un vocabulario de color nuevo para una sección más del sitio.
 const { esc } = require('./html');
+const { suppressedCell, suppressBreakdown } = require('./report');
+
+const RESULT_KEYS = ['enviado', 'fallido', 'rechazado'];
+
+// Versión hablada de una celda suprimida, para el aria-label — nunca el
+// número real, y en palabras en vez del signo "<" (más claro leído por un
+// lector de pantalla que "menor que cinco" con un símbolo de por medio).
+function spoken(cell) {
+  if (!cell) return 'sin dato';
+  if (cell.hidden) return 'cifra no publicada';
+  if (cell.suppressed) return 'menos de 5';
+  return String(cell.value);
+}
 
 const COLOR = {
   primary: '#2b6cb0', // var(--accent) del sitio — una sola serie (coincidencias)
@@ -51,11 +64,21 @@ function legend(items, x, y) {
   return out;
 }
 
-// `groups`: [{ label, segments: [{ key, value, color }], available }]
+// `groups`: [{ label, segments: [{ key, value, color, suppressed?, hidden? }], available, totalDisplay? }]
 // `available: false` dibuja un placeholder rayado con "—" en vez de una
 // barra — nunca una barra de altura 0 para un día sin instrumentación (eso
 // sería el mismo error de fondo que un cero disfrazado de dato, ahora en un
 // dibujo en vez de en una celda).
+//
+// Supresión de celdas pequeñas (#132): un segmento `suppressed` (valor 1-4)
+// o `hidden` (valor real posiblemente grande, ocultado para que no se
+// deduzca por resta un vecino pequeño — ver report.js, suppressBreakdown) se
+// dibuja con la MISMA altura fija rayada que ya usa `available: false`,
+// nunca proporcional a su valor real — una barra de altura 1 delataría el
+// dato aunque la etiqueta dijera "<5". `totalDisplay`, cuando viene, es la
+// etiqueta YA decidida por report.js para el total de la pila (puede ser el
+// número exacto, "<5" o "—"); si no viene, se recalcula sumando segmentos
+// (camino que usa funnelChart, sin datos suprimibles).
 function columnChart({ title, ariaLabel, groups, legendItems, height = 200, maxValue }) {
   const barSlot = 64;
   const barWidth = 24; // spec: bar ≤24px
@@ -94,18 +117,30 @@ function columnChart({ title, ariaLabel, groups, legendItems, height = 200, maxV
       let stackTop = baseline;
       const segs = g.segments.filter((s) => s.value > 0);
       segs.forEach((seg, si) => {
-        const h = Math.max(barH(seg.value), seg.value > 0 ? 2 : 0);
-        const segY = stackTop - h;
-        // Gap de 2px en el color de superficie entre segmentos apilados —
-        // nunca un borde: el gap es el mecanismo, un stroke sería tinta que
-        // no es dato.
         const gapAdjust = si > 0 ? 2 : 0;
-        bars += `<rect x="${bx}" y="${segY + gapAdjust}" width="${barWidth}" height="${Math.max(h - gapAdjust, 0)}" rx="${si === segs.length - 1 ? 4 : 0}" fill="${seg.color}"></rect>`;
-        stackTop = segY;
+        if (seg.suppressed || seg.hidden) {
+          // Altura FIJA, no proporcional — ver la nota sobre `groups` arriba.
+          const phH = 14;
+          const segY = stackTop - phH;
+          bars += `<rect x="${bx}" y="${segY + gapAdjust}" width="${barWidth}" height="${Math.max(phH - gapAdjust, 0)}" rx="${si === segs.length - 1 ? 4 : 0}" fill="${COLOR.unavailableFill}" stroke="${seg.color}" stroke-width="1" stroke-dasharray="3,2"></rect>`;
+          stackTop = segY;
+        } else {
+          const h = Math.max(barH(seg.value), 2);
+          const segY = stackTop - h;
+          // Gap de 2px en el color de superficie entre segmentos apilados —
+          // nunca un borde: el gap es el mecanismo, un stroke sería tinta que
+          // no es dato.
+          bars += `<rect x="${bx}" y="${segY + gapAdjust}" width="${barWidth}" height="${Math.max(h - gapAdjust, 0)}" rx="${si === segs.length - 1 ? 4 : 0}" fill="${seg.color}"></rect>`;
+          stackTop = segY;
+        }
       });
-      const total = g.segments.reduce((s, seg) => s + seg.value, 0);
-      if (total > 0) {
-        bars += `<text x="${cx}" y="${stackTop - 6}" font-size="10" fill="${COLOR.textPrimary}" text-anchor="middle">${total.toLocaleString('es-CO')}</text>`;
+      const totalLabel =
+        g.totalDisplay != null ? g.totalDisplay : (() => {
+          const total = g.segments.reduce((s, seg) => s + seg.value, 0);
+          return total > 0 ? total.toLocaleString('es-CO') : null;
+        })();
+      if (totalLabel) {
+        bars += `<text x="${cx}" y="${stackTop - 6}" font-size="10" fill="${COLOR.textPrimary}" text-anchor="middle">${totalLabel}</text>`;
       }
     }
 
@@ -126,39 +161,49 @@ ${bars}
 </svg>`;
 }
 
-// Serie de 7 días — coincidencias (una sola serie, azul, sin leyenda).
+// Serie de 7 días — coincidencias (una sola serie, azul, sin leyenda). Un
+// solo valor por barra: no hay un total-vs-partes que proteger, así que
+// alcanza con la supresión primaria (suppressedCell) por día.
 function dailyMatchesChart(daily) {
-  const groups = daily.map((d) => ({
+  const cells = daily.map((d) => suppressedCell(d.matches));
+  const groups = daily.map((d, i) => ({
     label: d.day.slice(5), // MM-DD, el año no aporta acá
     available: d.matchesAvailable,
-    segments: [{ key: 'matches', value: d.matches, color: COLOR.primary }]
+    segments: [
+      { key: 'matches', value: cells[i].value, color: COLOR.primary, suppressed: cells[i].suppressed, hidden: cells[i].hidden }
+    ],
+    totalDisplay: d.matchesAvailable ? cells[i].display : null
   }));
   const ariaLabel =
     'Coincidencias registradas por día, últimos 7 días: ' +
-    daily.map((d) => `${d.day} ${d.matchesAvailable ? d.matches : 'sin instrumentación'}`).join(', ');
+    daily.map((d, i) => `${d.day} ${d.matchesAvailable ? spoken(cells[i]) : 'sin instrumentación'}`).join(', ');
   return columnChart({ title: 'Coincidencias por día', ariaLabel, groups });
 }
 
-// Serie de 7 días — envíos por resultado (apilado, paleta de estado).
+// Serie de 7 días — envíos por resultado (apilado, paleta de estado). Tres
+// partes que suman un total mostrado arriba de la pila: supresión completa
+// (suppressBreakdown) por día, para que una parte pequeña no se pueda
+// deducir restando las otras dos del total.
 function dailyContactChart(daily) {
-  const groups = daily.map((d) => ({
+  const perDay = daily.map((d) => {
+    const parts = RESULT_KEYS.map((k) => ({ key: k, value: d.contact[k] || 0 }));
+    return suppressBreakdown(parts, parts.reduce((s, p) => s + p.value, 0));
+  });
+  const groups = daily.map((d, i) => ({
     label: d.day.slice(5),
     available: d.contactAvailable,
-    segments: ['enviado', 'fallido', 'rechazado'].map((k) => ({
-      key: k,
-      value: d.contact[k] || 0,
-      color: RESULT_COLOR[k]
-    }))
+    segments: perDay[i].cells.map((c) => ({ key: c.key, value: c.value, color: RESULT_COLOR[c.key], suppressed: c.suppressed, hidden: c.hidden })),
+    totalDisplay: d.contactAvailable ? perDay[i].total.display : null
   }));
-  const legendItems = ['enviado', 'fallido', 'rechazado'].map((k) => ({ label: RESULT_LABEL[k], color: RESULT_COLOR[k] }));
+  const legendItems = RESULT_KEYS.map((k) => ({ label: RESULT_LABEL[k], color: RESULT_COLOR[k] }));
   const ariaLabel =
     'Envíos intentados por día y resultado, últimos 7 días: ' +
     daily
-      .map((d) =>
-        d.contactAvailable
-          ? `${d.day} enviados ${d.contact.enviado}, fallidos ${d.contact.fallido}, rechazados ${d.contact.rechazado}`
-          : `${d.day} sin instrumentación`
-      )
+      .map((d, i) => {
+        if (!d.contactAvailable) return `${d.day} sin instrumentación`;
+        const byKey = Object.fromEntries(perDay[i].cells.map((c) => [c.key, c]));
+        return `${d.day} enviados ${spoken(byKey.enviado)}, fallidos ${spoken(byKey.fallido)}, rechazados ${spoken(byKey.rechazado)}`;
+      })
       .join(', ');
   return columnChart({ title: 'Envíos por día y resultado', ariaLabel, groups, legendItems });
 }
@@ -166,20 +211,25 @@ function dailyContactChart(daily) {
 // Envíos por canal — acumulado (apilado, paleta de estado). No tiene
 // problema de "sin instrumentación": es un total desde que existe la
 // bitácora, la fecha de corte ya va en el texto que acompaña la sección.
+// Mismo tratamiento de supresión que dailyContactChart, por canal.
 function contactByChannelChart(contactPivot, channelLabels) {
   const channels = ['email', 'whatsapp', 'relevo'];
-  const groups = channels.map((ch) => ({
+  const perChannel = channels.map((ch) => {
+    const parts = RESULT_KEYS.map((k) => ({ key: k, value: contactPivot[ch][k] || 0 }));
+    return suppressBreakdown(parts, parts.reduce((s, p) => s + p.value, 0));
+  });
+  const groups = channels.map((ch, i) => ({
     label: channelLabels[ch],
     available: true,
-    segments: ['enviado', 'fallido', 'rechazado'].map((k) => ({
-      key: k,
-      value: contactPivot[ch][k] || 0,
-      color: RESULT_COLOR[k]
-    }))
+    segments: perChannel[i].cells.map((c) => ({ key: c.key, value: c.value, color: RESULT_COLOR[c.key], suppressed: c.suppressed, hidden: c.hidden })),
+    totalDisplay: perChannel[i].total.display
   }));
-  const legendItems = ['enviado', 'fallido', 'rechazado'].map((k) => ({ label: RESULT_LABEL[k], color: RESULT_COLOR[k] }));
+  const legendItems = RESULT_KEYS.map((k) => ({ label: RESULT_LABEL[k], color: RESULT_COLOR[k] }));
   const ariaLabel = channels
-    .map((ch) => `${channelLabels[ch]}: enviados ${contactPivot[ch].enviado}, fallidos ${contactPivot[ch].fallido}, rechazados ${contactPivot[ch].rechazado}`)
+    .map((ch, i) => {
+      const byKey = Object.fromEntries(perChannel[i].cells.map((c) => [c.key, c]));
+      return `${channelLabels[ch]}: enviados ${spoken(byKey.enviado)}, fallidos ${spoken(byKey.fallido)}, rechazados ${spoken(byKey.rechazado)}`;
+    })
     .join(', ');
   return columnChart({ title: 'Envíos por canal (acumulado)', ariaLabel, groups, legendItems });
 }

@@ -34,13 +34,23 @@ const {
   sumContact,
   SURFACE_LABEL,
   CHANNEL_LABEL,
+  SOURCE_LABEL,
+  SIMILARITY_TIERS,
   n,
   bogotaClock,
-  instrumentedSinceNote
+  instrumentedSinceNote,
+  suppressedCell,
+  suppressBreakdown,
+  SUPPRESSION_NOTE
 } = require('./report');
 const { dailyMatchesChart, dailyContactChart, contactByChannelChart, funnelChart } = require('./charts');
 
 const ISSUE_URL = 'https://github.com/encontradosco/encontrados/issues/116';
+const DEDUP_ISSUE_URL = 'https://github.com/encontradosco/encontrados/issues/132';
+
+// Punto 1 del issue #132, desglosado por canal de entrada — orden estable
+// para que la tabla siempre salga en el mismo orden.
+const SOURCE_ORDER = ['web', 'whatsapp', 'api', 'aggregator', 'rescate'];
 
 function publicBanner() {
   return `<div class="stats-banner">⚠️ <strong>Vista temporal sin autenticación.</strong> El acceso de administración
@@ -74,16 +84,32 @@ function detailsBlock(summaryText, innerHtml, { open = false } = {}) {
 </details>`;
 }
 
+// Supresión de celdas pequeñas (#132): la MISMA lógica pura que ya corre
+// dentro de dailyContactChart (charts.js) sobre el mismo `d.contact` —
+// suppressBreakdown es determinística, así que llamarla otra vez acá con las
+// mismas partes en el mismo orden da exactamente el mismo resultado. No hace
+// falta pasarse el cálculo de un archivo a otro para que tabla y gráfica
+// coincidan.
+function contactCells(contact) {
+  const parts = ['enviado', 'fallido', 'rechazado'].map((k) => ({ key: k, value: contact[k] || 0 }));
+  const { cells } = suppressBreakdown(parts, parts.reduce((s, p) => s + p.value, 0));
+  return Object.fromEntries(cells.map((c) => [c.key, c]));
+}
+
 function dailyTable(daily) {
   return table(
     ['Día', 'Coincidencias', 'Enviados', 'Fallidos', 'Rechazados'],
-    daily.map((d) => [
-      esc(d.day),
-      d.matchesAvailable ? n(d.matches) : '—',
-      d.contactAvailable ? n(d.contact.enviado) : '—',
-      d.contactAvailable ? n(d.contact.fallido) : '—',
-      d.contactAvailable ? n(d.contact.rechazado) : '—'
-    ])
+    daily.map((d) => {
+      const matches = suppressedCell(d.matches);
+      const c = contactCells(d.contact);
+      return [
+        esc(d.day),
+        d.matchesAvailable ? matches.display : '—',
+        d.contactAvailable ? c.enviado.display : '—',
+        d.contactAvailable ? c.fallido.display : '—',
+        d.contactAvailable ? c.rechazado.display : '—'
+      ];
+    })
   );
 }
 
@@ -202,7 +228,7 @@ const FUNNEL_SCRIPT = `<script>
 
 // `data` es gatherCheapReportData(store, matcher) — SIN stats: el embudo se
 // pide aparte (ver FUNNEL_SCRIPT). `daily` es gatherDailySeries().
-function buildStatsPageHtml({ generatedAt, counts, activity, matcherStatus }, daily, { isPublic }) {
+function buildStatsPageHtml({ generatedAt, counts, activity, matcherStatus, extras }, daily, { isPublic }) {
   const { day, month, hm } = bogotaClock(generatedAt);
 
   const banner = isPublic ? publicBanner() : '';
@@ -211,25 +237,52 @@ function buildStatsPageHtml({ generatedAt, counts, activity, matcherStatus }, da
   const contactPivot = pivotContact(activity.contact);
   const contactTotals = sumContact(contactPivot);
 
+  // Supresión de celdas pequeñas (#132) — ver report.js, suppressBreakdown.
+  // Se calcula UNA vez acá y se reutiliza en la card y en la tabla de
+  // detalle de abajo, para que la misma cifra nunca salga distinta en dos
+  // sitios de la misma página.
+  const matchSuppression = suppressBreakdown(
+    ['rescate', 'report', 'api'].map((s) => ({ key: s, value: matchPivot[s] || 0 })),
+    matchPivot.total || 0
+  );
+  const matchByKey = Object.fromEntries(matchSuppression.cells.map((c) => [c.key, c]));
+
+  const contactResultSuppression = suppressBreakdown(
+    [
+      { key: 'enviado', value: pivotSum(contactPivot, 'enviado') },
+      { key: 'fallido', value: pivotSum(contactPivot, 'fallido') },
+      { key: 'rechazado', value: pivotSum(contactPivot, 'rechazado') }
+    ],
+    contactTotals.total
+  );
+  const contactByKey = Object.fromEntries(contactResultSuppression.cells.map((c) => [c.key, c]));
+
+  const peopleCell = suppressedCell(counts.people);
+  const updatesCell = suppressedCell(counts.updates);
+  const photosIndexedCell = suppressedCell(counts.photos_indexed);
+  const photosCell = suppressedCell(counts.photos);
+  const subscriptionsCell = suppressedCell(counts.subscriptions);
+  const subscriptionsVerifiedCell = suppressedCell(counts.subscriptions_verified);
+
   // Las 3 cards que SÍ pueden ir de inmediato (datos baratos, de la base) +
   // el 4to slot, que arranca en "calculando" y lo llena FUNNEL_SCRIPT.
   const heroCards =
     `<div class="stats-hero">` +
     statCard({
       label: 'Coincidencias registradas',
-      value: n(matchPivot.total),
-      detail: `Rescate ${n(matchPivot.rescate)} · Reporte ${n(matchPivot.report)} · API ${n(matchPivot.api)}`
+      value: matchSuppression.total.display,
+      detail: `Rescate ${matchByKey.rescate.display} · Reporte ${matchByKey.report.display} · API ${matchByKey.api.display}`
     }) +
     statCard({
       label: 'Envíos intentados',
-      value: n(contactTotals.total),
-      detail: `${dot('#4a7c59')}${n(contactTotals.enviados)} enviados &nbsp; ${dot('#c0392b')}${n(pivotSum(contactPivot, 'fallido'))} fallidos &nbsp; ${dot('#c8863c')}${n(pivotSum(contactPivot, 'rechazado'))} rechazados`,
+      value: contactResultSuppression.total.display,
+      detail: `${dot('#4a7c59')}${contactByKey.enviado.display} enviados &nbsp; ${dot('#c0392b')}${contactByKey.fallido.display} fallidos &nbsp; ${dot('#c8863c')}${contactByKey.rechazado.display} rechazados`,
       variant: pivotSum(contactPivot, 'fallido') > 0 ? 'bad' : pivotSum(contactPivot, 'rechazado') > 0 ? 'warn' : undefined
     }) +
     statCard({
       label: 'Personas en la base',
-      value: n(counts.people),
-      detail: `${n(counts.updates)} actualizaciones · ${n(counts.photos_indexed)} de ${n(counts.photos)} fotos indexadas`
+      value: peopleCell.display,
+      detail: `${updatesCell.display} actualizaciones · ${photosIndexedCell.display} de ${photosCell.display} fotos indexadas`
     }) +
     statCard({ id: 'salud-card-slot', label: 'Salud de la medición', value: '…', detail: 'Calculando contra Rekognition…', loading: true }) +
     `</div>`;
@@ -240,18 +293,16 @@ function buildStatsPageHtml({ generatedAt, counts, activity, matcherStatus }, da
       table(
         ['Superficie', 'Coincidencias registradas'],
         [
-          ...['rescate', 'report', 'api'].map((s) => [SURFACE_LABEL[s], n(matchPivot[s] || 0)]),
-          ['<strong>Total</strong>', `<strong>${n(matchPivot.total || 0)}</strong>`]
+          ...['rescate', 'report', 'api'].map((s) => [SURFACE_LABEL[s], matchByKey[s].display]),
+          ['<strong>Total</strong>', `<strong>${matchSuppression.total.display}</strong>`]
         ]
       ) +
       table(
         ['Canal', 'Enviados', 'Fallidos', 'Rechazados'],
-        ['email', 'whatsapp', 'relevo'].map((ch) => [
-          CHANNEL_LABEL[ch],
-          n(contactPivot[ch].enviado),
-          n(contactPivot[ch].fallido),
-          n(contactPivot[ch].rechazado)
-        ])
+        ['email', 'whatsapp', 'relevo'].map((ch) => {
+          const c = contactCells(contactPivot[ch]);
+          return [CHANNEL_LABEL[ch], c.enviado.display, c.fallido.display, c.rechazado.display];
+        })
       ) +
       `<p class="stats-note">"${esc(CHANNEL_LABEL.relevo)}" es todo lo que fue al buzón del <strong>equipo</strong>, nunca a una familia ni a un rescatista: coincidencias pendientes de revisión (modo relevo), solicitudes de publicar en Colombia Te Busca, y avisos de rescatista.</p>`
   );
@@ -295,22 +346,22 @@ function buildStatsPageHtml({ generatedAt, counts, activity, matcherStatus }, da
         [
           [
             'Personas registradas',
-            n(counts.people),
-            'Personas únicas en la base. Es menor que las fichas de las fuentes porque una misma persona puede tener varias fichas — al entrar se fusionan.'
+            peopleCell.display,
+            'Personas únicas en la base. Es menor que las fichas de las fuentes porque una misma persona puede tener varias fichas — al entrar se fusionan (ver el desglose completo más arriba, en «Personas reportadas y duplicados»).'
           ],
           [
             'Actualizaciones',
-            n(counts.updates),
+            updatesCell.display,
             'Cada ficha de una fuente externa y cada reporte directo en la web entra como una actualización de una persona.'
           ],
           [
             'Suscripciones (verificadas)',
-            `${n(counts.subscriptions)} (${n(counts.subscriptions_verified)})`,
+            `${subscriptionsCell.display} (${subscriptionsVerifiedCell.display})`,
             'Familiares que pidieron aviso si su persona aparece. Solo las verificadas reciben correo.'
           ],
           [
             'Fotos (en el índice facial)',
-            `${n(counts.photos)} (${n(counts.photos_indexed)})`,
+            `${photosCell.display} (${photosIndexedCell.display})`,
             'Fotos en la base; las del índice son las que ya pueden producir coincidencias.'
           ]
         ]
@@ -319,17 +370,122 @@ function buildStatsPageHtml({ generatedAt, counts, activity, matcherStatus }, da
     )}
   </div>`;
 
+  // Punto 1 del issue #132 — "las dos caras": fichas recibidas y personas
+  // resultantes, JUNTAS y arriba de la página (no solo en el detalle de "La
+  // base en general", que sigue existiendo con el mismo par de números). El
+  // desglose de abajo NO es "fichas − personas": cuenta filas de `updates`
+  // que no fueron la primera de su persona, un universo relacionado pero
+  // distinto — ver la nota en report.js (gatherDuplicateBreakdown).
+  // suppressBreakdown, NO suppressedCell suelta por fuente — el total de
+  // abajo es exacto (extras.duplicates.total), así que una sola fuente chica
+  // sería deducible por resta de las demás si cada celda se suprimiera por
+  // su cuenta. Bug real, encontrado renderizando el panel contra
+  // `npm run seed` antes de abrir este PR (ver el cuerpo del PR).
+  const dedupBreakdown = suppressBreakdown(
+    SOURCE_ORDER.map((src) => ({ key: src, value: extras.duplicates.bySource[src] || 0 })),
+    extras.duplicates.total
+  );
+  const dedupByKey = Object.fromEntries(dedupBreakdown.cells.map((c) => [c.key, c]));
+  const dedupSourceRows = SOURCE_ORDER.map((src) => [SOURCE_LABEL[src], dedupByKey[src].display]);
+  const dedupSection = `<div class="stats-section">
+    ${section('Personas reportadas, y qué pasó con los duplicados')}
+    <p class="stats-note">Entraron <strong>${updatesCell.display}</strong> ficha(s) (actualizaciones) y resultaron <strong>${peopleCell.display}</strong> persona(s) únicas en el registro — la diferencia es el trabajo de deduplicación: una misma persona apareció en más de una ficha, y esas fichas se fusionaron en un solo registro al entrar.</p>
+    ${detailsBlock(
+      'Ver las fichas que se sumaron a un registro ya existente, por canal de entrada',
+      `<p class="stats-note">De esas fichas, <strong>${dedupBreakdown.total.display}</strong> no fueron la primera actualización de su persona — se sumaron a un registro que ya existía. Incluye tanto los duplicados de fuentes externas (agregador) como los que se generan del lado nuestro (web, WhatsApp, API, avisos de rescate):</p>` +
+        table(['Canal de entrada', 'Fichas sumadas a un registro existente'], dedupSourceRows) +
+        `<p class="stats-note">Esta cuenta no distingue una ficha duplicada por error (la misma persona reportada dos veces) de un seguimiento legítimo (un cambio de estado de la misma persona, reportado después) — el esquema de hoy no guarda esa diferencia entre las dos.</p>`
+    )}
+  </div>`;
+
+  // Punto 2 del issue #132.
+  const rescuedCell = suppressedCell(extras.rescuedPeople);
+  const rescuedPeopleSection = `<div class="stats-section">
+    ${section('Personas buscadas por rescatistas')}
+    <p class="stats-note">Personas fotografiadas por un rescatista en campo, con firma facial guardada: <strong>${rescuedCell.display}</strong>.</p>
+    ${detailsBlock(
+      'Qué significa exactamente esta cifra',
+      `<p class="stats-note">Es el otro lado del cruce, hoy opacado por el volumen del registro de personas desaparecidas. Dos honestidades: no incluye las consultas en modo «no guarden nada» (esa opción no deja ningún rastro que contar — ver «Lo que todavía no podemos medir» más abajo), y no deduplica entre rescates — si dos rescatistas fotografiaron a la misma persona, o el mismo rescatista repitió la consulta, cada intento guardado cuenta por separado.</p>`
+    )}
+  </div>`;
+
+  // Puntos 3-4 del issue #132: tramos de confianza, cada uno desglosado por
+  // superficie. El tramo 100% se señala aparte como lo que es — una alarma
+  // de calidad, no un logro (misma firma facial, casi siempre la misma foto
+  // subida dos veces por el formulario equivocado).
+  const tier100 = suppressedCell(extras.similarity.tiers['100'].total);
+  const similarityRows = SIMILARITY_TIERS.map((t) => {
+    const bucket = extras.similarity.tiers[t.key];
+    const totalCell = suppressedCell(bucket.total);
+    const bySurfaceSuppression = suppressBreakdown(
+      ['rescate', 'report', 'api'].map((s) => ({ key: s, value: bucket.bySurface[s] || 0 })),
+      bucket.total
+    );
+    const byKey = Object.fromEntries(bySurfaceSuppression.cells.map((c) => [c.key, c]));
+    return [t.label, byKey.rescate.display, byKey.report.display, byKey.api.display, totalCell.display];
+  });
+  const similaritySection = `<div class="stats-section">
+    ${section('Coincidencias por tramo de confianza')}
+    ${instrumentedSinceNote(activity.instrumentedSince)}
+    ${
+      tier100.value > 0
+        ? `<p class="stats-note">⚠️ <strong>${tier100.display}</strong> coincidencia(s) al 100% — misma firma facial, casi siempre la misma foto subida dos veces (alguien usó el formulario equivocado: reportó por el de rescatista siendo familia, o al revés). <strong>No es un encuentro: es un dato para corregir</strong>, no un logro.</p>`
+        : ''
+    }
+    ${table([`Tramo`, SURFACE_LABEL.rescate, SURFACE_LABEL.report, SURFACE_LABEL.api, 'Total'], similarityRows)}
+    <p class="stats-note">El umbral del matcher es 90% (<code>FACE_MATCH_THRESHOLD</code>) — el reconocimiento facial nunca devuelve nada por debajo, así que no hay tramos menores.${
+      extras.similarity.belowThreshold > 0
+        ? ` (${suppressedCell(extras.similarity.belowThreshold).display} coincidencia(s) histórica(s) quedaron fuera de estos tramos — de antes de que el umbral actual estuviera vigente.)`
+        : ''
+    }</p>
+  </div>`;
+
+  // El principio que gobierna todo el issue #132: un cero nunca puede
+  // parecer un hecho medido cuando es un punto ciego. Estos son los puntos
+  // ciegos que introduce ESTA pasada — no un inventario de todo lo que la
+  // app no mide (eso sigue viviendo en el correo, sección 4).
+  const notYetSection = `<div class="stats-section">
+    ${section('Lo que todavía no podemos medir')}
+    ${detailsBlock(
+      'Ver los puntos ciegos declarados en esta pasada',
+      table(
+        ['Señal', 'Por qué sigue afuera'],
+        [
+          [
+            'Personas fotografiadas por un rescatista en modo «no guarden nada»',
+            'Esa opción no guarda ni la firma facial ni ninguna fila — no queda ningún rastro que contar.'
+          ],
+          [
+            'Si una ficha «de más» de una persona es un duplicado real o un seguimiento legítimo',
+            'El esquema no distingue las dos cosas: un cambio de estado reportado después y un duplicado por error se ven exactamente igual — una fila adicional de `updates` para la misma persona.'
+          ],
+          [
+            'El embudo del encuentro (coincidencia → entregada → avisada → persona a salvo)',
+            `Punto 6 del issue — queda para un PR aparte, referenciado desde <a href="${esc(DEDUP_ISSUE_URL)}">#132</a>.`
+          ]
+        ]
+      )
+    )}
+  </div>`;
+
+  const suppressionNote = `<p class="stats-note" style="font-style:italic;">${SUPPRESSION_NOTE}</p>`;
+
   const footer = `<p class="stats-note" style="font-style:italic;">Generado ${esc(day)} ${esc(month)}, ${esc(hm)} Bogotá · Mismas cifras que el reporte por correo (#116) · Sin drill-down por ID — eso vive detrás de sesión en /api/admin/*, no acá.</p>`;
 
   const body = `
     <h1>Panel de estadísticas</h1>
     ${banner}
+    ${suppressionNote}
     ${heroCards}
     ${deltaNote}
+    ${dedupSection}
+    ${rescuedPeopleSection}
     ${dailySection}
     ${channelSection}
+    ${similaritySection}
     ${funnelPlaceholder}
     ${baseSection}
+    ${notYetSection}
     ${footer}
     ${FUNNEL_SCRIPT}
   `;

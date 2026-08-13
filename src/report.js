@@ -14,6 +14,7 @@ const env = require('./env');
 const { esc } = require('./html');
 const { sendEmail } = require('./notify');
 const { computeMatchStats } = require('./facematch');
+const { RESCUE_ANCHOR_NORMALIZED_PREFIX } = require('./people');
 
 const BOGOTA_TZ = 'America/Bogota';
 
@@ -580,6 +581,179 @@ async function sendReport(store, matcher) {
   };
 }
 
+// ---------------------------------------------------------------- #132: el
+// panel debe responder "cuántos encuentros hemos hecho posibles" — esta
+// sección junta las cifras nuevas: personas reportadas y duplicados (punto 1
+// del issue), personas fotografiadas por rescatistas (punto 2), y las
+// coincidencias por tramo de confianza (puntos 3-4). El embudo del encuentro
+// (puntos 5-6) queda para un PR aparte — ver el cuerpo del PR de esta pasada.
+//
+// Deliberadamente SOLO para el panel (src/adminStats.js), no para el correo
+// (#116): son consultas de agregación baratas, pero el correo ya tiene su
+// propio tamaño aprobado por @ni500 y este detalle no cabía ahí sin
+// alargarlo — decisión consciente, no un olvido (ver la nota de la
+// restricción del issue sobre "qué entra al correo y qué es solo del panel").
+
+const SOURCE_LABEL = {
+  web: 'Web (/report)',
+  whatsapp: 'WhatsApp (bot)',
+  api: 'API',
+  aggregator: 'Agregador (fuente externa, p. ej. Colombia Te Busca)',
+  rescate: 'Aviso de rescatista (/rescate/aviso)'
+};
+
+// Tramos aprobados en el issue #132. El umbral del matcher es 90%
+// (FACE_MATCH_THRESHOLD, src/faces.js) — Rekognition nunca devuelve nada por
+// debajo, así que no hay tramos menores. `test` decide el tramo con el mismo
+// número que ya trae cada fila de match_log.similarity — sin redondear antes
+// de comparar, para que un 98.95% no se lea "99%" y salte de tramo.
+const SIMILARITY_TIERS = [
+  { key: '100', label: '100%', test: (s) => s >= 99.9995 },
+  { key: '99-99.9', label: '99–99,9%', test: (s) => s >= 99 && s < 99.9995 },
+  { key: '95-99', label: '95–99%', test: (s) => s >= 95 && s < 99 },
+  { key: '90-95', label: '90–95%', test: (s) => s >= 90 && s < 95 }
+];
+
+// -------------------------------------------------------- supresión de celdas
+//
+// Decisión de privacidad (11/12-ago-2026, sobre #132): el panel es hoy
+// PÚBLICO (bandera PUBLIC_STATS, ver adminAuth.js). En una app de personas
+// desaparecidas, un conteo de 1 en un desglose fino (un tramo de similitud,
+// un canal, un día) deja de ser un agregado: describe a UNA persona puntual
+// — cuántas coincidencias tuvo, en qué tramo, por cuál formulario, qué pasó
+// después. Con reportes públicos al lado, eso es un caso identificable.
+//
+// Regla: 0 se muestra tal cual (no describe a nadie). 1-4 se oculta detrás
+// de "<5". 5 o más sale exacto. Ningún consumidor de estas funciones debe
+// volver a formatear el valor crudo — siempre a través de acá, para que la
+// misma cifra salga igual en la tarjeta y en la tabla de detalle de abajo.
+const SUPPRESS_BELOW = 5;
+
+// `display` sale YA seguro para insertarse crudo en HTML/SVG (las tablas de
+// este repo, ver `table()` arriba, no escapan el contenido de cada celda —
+// el llamador es responsable). "<5" lleva un "<" literal que rompería el
+// marcado si se insertara sin escapar, así que la entidad va horneada acá:
+// ningún consumidor tiene que acordarse de llamar esc() para esta cifra en
+// particular.
+function suppressedCell(value) {
+  const v = Number(value) || 0;
+  if (v <= 0) return { value: 0, display: '0', suppressed: false, hidden: false };
+  if (v < SUPPRESS_BELOW) return { value: v, display: '&lt;5', suppressed: true, hidden: false };
+  return { value: v, display: n(v), suppressed: false, hidden: false };
+}
+
+// Un desglose (partes que suman un total) con supresión secundaria: si SOLO
+// una parte quedó oculta detrás de "<5" mientras el resto —incluido el
+// total— sale exacto, esa parte es deducible por resta (total menos las
+// partes conocidas). Así que se empuja una segunda parte (la más chica de
+// las que sí eran exactas y mayores que cero) a un estado "oculto" — no
+// "<5", porque puede valer mucho más que eso; la etiqueta dice que no se
+// publica, no que sea pequeña.
+//
+// Con dos o más partes ya suprimidas no se toca nada más: un total no
+// resuelve dos incógnitas a un valor único, salvo un caso borde poco común
+// (el resto solo admite una descomposición dentro de 1-4 cada una, p. ej.
+// remanente=8 fuerza 4+4). Ese caso queda como riesgo residual aceptado y
+// documentado — cerrarlo del todo pide una segunda capa de rangos que no
+// entra en esta pasada; ver el cuerpo del PR.
+function suppressBreakdown(parts, total) {
+  const cells = parts.map((p) => ({ ...p, ...suppressedCell(p.value) }));
+  const totalCell = suppressedCell(total);
+  const suppressedCount = cells.filter((c) => c.suppressed).length;
+  if (!totalCell.suppressed && suppressedCount === 1) {
+    const candidate = cells
+      .filter((c) => !c.suppressed && c.value > 0)
+      .sort((a, b) => a.value - b.value)[0];
+    if (candidate) {
+      candidate.display = '—';
+      candidate.suppressed = true;
+      candidate.hidden = true;
+    }
+  }
+  return { cells, total: totalCell };
+}
+
+const SUPPRESSION_NOTE =
+  'Los conteos entre 1 y 4 se muestran como «&lt;5», nunca el número exacto — y a veces una cifra vecina se oculta como «—» aunque sea grande, para que no se pueda deducir por resta. No es un error ni un dato faltante: es una decisión deliberada para que ningún número de este panel describa a una sola persona.';
+
+// Punto 1 del issue: cuántas fichas se sumaron a un registro que YA existía
+// (no fueron la primera ficha de esa persona), desglosadas por el canal de
+// entrada. No es lo mismo que "fichas − personas" (ver la nota en
+// adminStats.js): esto cuenta filas de `updates`, esa otra cuenta viene de
+// `people`, y una persona ancla del flujo de rescate puede existir sin
+// ninguna actualización todavía.
+async function gatherDuplicateBreakdown(store) {
+  const rows = await store.updatesBeyondFirstBySource();
+  const bySource = { web: 0, whatsapp: 0, api: 0, aggregator: 0, rescate: 0 };
+  let total = 0;
+  for (const r of rows || []) {
+    const count = Number(r.n) || 0;
+    if (r.source in bySource) bySource[r.source] = count;
+    total += count;
+  }
+  return { total, bySource };
+}
+
+// Punto 2 del issue: personas fotografiadas por un rescatista en campo, con
+// firma facial guardada. La única señal que existe sin tocar el esquema es
+// el prefijo de nombre sintético que le da POST /rescate a su persona ancla
+// (RESCUE_ANCHOR_PREFIX, src/people.js) — ver la nota completa ahí sobre
+// las dos honestidades que le faltan a este número: no cuenta las consultas
+// en modo "no guarden nada" (no dejan ningún rastro) y no deduplica entre
+// rescates (cada envío crea su propia persona ancla, así que la misma
+// persona física fotografiada por dos rescatistas cuenta dos veces).
+async function gatherRescuedPeopleCount(store) {
+  const rows = await store.queryPhotoPeople();
+  let count = 0;
+  for (const r of rows || []) {
+    const normalized = r.normalized_name || '';
+    if (normalized.startsWith(RESCUE_ANCHOR_NORMALIZED_PREFIX)) count++;
+  }
+  return count;
+}
+
+// Puntos 3-4 del issue: coincidencias por tramo de confianza, cada tramo
+// desglosado por superficie (match_log.surface — ya existe, sin cambio de
+// esquema). `similarity` puede venir null en filas viejas (la columna es
+// nullable desde el esquema original); esas se cuentan aparte, nunca se les
+// inventa un tramo.
+async function gatherSimilarityTierBreakdown(store) {
+  const rows = await store.matchLogSimilarityRows();
+  const tiers = {};
+  for (const t of SIMILARITY_TIERS) {
+    tiers[t.key] = { label: t.label, bySurface: { rescate: 0, report: 0, api: 0 }, total: 0 };
+  }
+  let belowThreshold = 0;
+  let missingScore = 0;
+  for (const r of rows || []) {
+    if (r.similarity == null) {
+      missingScore++;
+      continue;
+    }
+    const s = Number(r.similarity);
+    const tier = SIMILARITY_TIERS.find((t) => t.test(s));
+    if (!tier) {
+      belowThreshold++;
+      continue;
+    }
+    tiers[tier.key].total++;
+    if (['rescate', 'report', 'api'].includes(r.surface)) {
+      tiers[tier.key].bySurface[r.surface]++;
+    }
+  }
+  return { tiers, belowThreshold, missingScore };
+}
+
+// Las tres cifras nuevas de #132, juntas — una sola llamada para el panel.
+async function gatherPanelExtras(store) {
+  const [duplicates, rescuedPeople, similarity] = await Promise.all([
+    gatherDuplicateBreakdown(store),
+    gatherRescuedPeopleCount(store),
+    gatherSimilarityTierBreakdown(store)
+  ]);
+  return { duplicates, rescuedPeople, similarity };
+}
+
 module.exports = {
   buildReportHtml,
   buildReportText,
@@ -600,8 +774,18 @@ module.exports = {
   sumContact,
   SURFACE_LABEL,
   CHANNEL_LABEL,
+  SOURCE_LABEL,
+  SIMILARITY_TIERS,
   n,
   bogotaClock,
   bogotaDayKey,
-  instrumentedSinceNote
+  instrumentedSinceNote,
+  // #132
+  suppressedCell,
+  suppressBreakdown,
+  SUPPRESSION_NOTE,
+  gatherDuplicateBreakdown,
+  gatherRescuedPeopleCount,
+  gatherSimilarityTierBreakdown,
+  gatherPanelExtras
 };

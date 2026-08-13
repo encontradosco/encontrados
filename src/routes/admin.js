@@ -13,7 +13,7 @@ const {
   statsGate,
   publicStatsOpen
 } = require('../adminAuth');
-const { gatherCheapReportData, gatherFunnelStats, gatherDailySeries } = require('../report');
+const { gatherCheapReportData, gatherFunnelStats, gatherDailySeries, gatherPanelExtras } = require('../report');
 const { buildStatsPageHtml, buildFunnelFragmentHtml } = require('../adminStats');
 
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
@@ -74,11 +74,20 @@ function adminRoutes(store, matcher) {
     '/stats',
     statsGate,
     wrap(async (req, res) => {
-      const [data, daily] = await Promise.all([gatherCheapReportData(store, matcher), gatherDailySeries(store)]);
+      // #132: las tres cifras nuevas (duplicados, personas fotografiadas por
+      // rescatistas, tramos de confianza) son tan baratas como
+      // gatherCheapReportData — nada de esto toca Rekognition, así que se
+      // piden en paralelo con el resto del camino síncrono, no aparte como
+      // el embudo.
+      const [data, daily, extras] = await Promise.all([
+        gatherCheapReportData(store, matcher),
+        gatherDailySeries(store),
+        gatherPanelExtras(store)
+      ]);
       // Cabecera además del <meta robots> del layout — dos capas, porque un
       // crawler puede no ejecutar/leer el <head> completo.
       res.set('X-Robots-Tag', 'noindex, nofollow');
-      res.send(buildStatsPageHtml(data, daily, { isPublic: publicStatsOpen() }));
+      res.send(buildStatsPageHtml({ ...data, extras }, daily, { isPublic: publicStatsOpen() }));
     })
   );
 
