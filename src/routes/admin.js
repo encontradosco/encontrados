@@ -1,14 +1,24 @@
-// Rutas de /admin (#116, PR 5) — el login con Vercel, el gate, y un stub
-// mínimo detrás de él para probar el flujo completo en preview. El panel de
-// verdad es el PR 6; esto es a propósito un "en construcción" honesto, no
-// una promesa vacía.
+// Rutas de /admin (#116, PR 5 + PR 6) — el login con Vercel, el gate, y el
+// panel de estadísticas. El drill-down por ID (resolver nombres/contactos en
+// vivo) NO existe todavía — cuando exista, nace en /api/admin/* con
+// requireAdminSession, nunca en esta superficie.
 const express = require('express');
 const { layout, esc } = require('../html');
-const { beginLogin, completeLogin, logout, requireAdminSession, adminEmails } = require('../adminAuth');
+const {
+  beginLogin,
+  completeLogin,
+  logout,
+  requireAdminSession,
+  adminEmails,
+  statsGate,
+  publicStatsOpen
+} = require('../adminAuth');
+const { gatherReportData, gatherDailySeries } = require('../report');
+const { buildStatsPageHtml } = require('../adminStats');
 
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
-function adminRoutes() {
+function adminRoutes(store, matcher) {
   const router = express.Router();
 
   router.get('/login', (req, res) => {
@@ -42,12 +52,28 @@ function adminRoutes() {
     const body = `
       <h1>Panel de administración</h1>
       <p>Sesión: <strong>${esc(req.adminEmail)}</strong></p>
-      <p>🚧 Panel en construcción — llega en el PR 6 de la secuencia de <a href="https://github.com/encontradosco/encontrados/issues/116">#116</a>.
-      Esta página confirma que el login con Vercel y el gate de <code>/admin</code> funcionan de punta a punta.</p>
+      <p>📊 <a href="/admin/stats">Estadísticas</a> — coincidencias, envíos y la base en general.</p>
+      <p>El drill-down por ID (nombres y contactos en vivo) todavía no existe.</p>
       <form method="post" action="/admin/logout"><button type="submit">Cerrar sesión</button></form>
     `;
     res.send(layout('Panel de administración', body, { path: '/admin' }));
   });
+
+  // #116, PR 6 — SOLO cifras agregadas, la misma clase de dato que ya es
+  // pública en GET /api/diag. statsGate decide si hace falta sesión: abierta
+  // solo si PUBLIC_STATS='1' (ventana temporal mientras se termina de
+  // configurar el auth de verdad), cerrada por omisión como todo lo demás.
+  router.get(
+    '/stats',
+    statsGate,
+    wrap(async (req, res) => {
+      const [data, daily] = await Promise.all([gatherReportData(store, matcher), gatherDailySeries(store)]);
+      // Cabecera además del <meta robots> del layout — dos capas, porque un
+      // crawler puede no ejecutar/leer el <head> completo.
+      res.set('X-Robots-Tag', 'noindex, nofollow');
+      res.send(buildStatsPageHtml(data, daily, { isPublic: publicStatsOpen() }));
+    })
+  );
 
   return router;
 }

@@ -54,6 +54,13 @@ module.exports = {
   // Allowlist de correos, separados por coma — NUNCA hardcodeados (repo
   // público). Vacía = /admin queda cerrada para todos, nunca abierta.
   ADMIN_EMAILS: (process.env.ADMIN_EMAILS || '').trim(),
+  // Ventana pública temporal de /admin/stats (#116, PR 6) — SOLO mientras el
+  // auth de verdad termina de configurarse. '1' es el único valor que abre;
+  // cualquier otro valor, o su ausencia, deja la vista detrás de
+  // requireAdminSession como siempre. Cerrarla es borrar esta variable, no
+  // un PR. El drill-down por ID nunca lee esta variable — siempre exige
+  // sesión.
+  PUBLIC_STATS: (process.env.PUBLIC_STATS || '').trim(),
 
   WHATSAPP_TOKEN: process.env.WHATSAPP_TOKEN || '',
   WHATSAPP_PHONE_NUMBER_ID: process.env.WHATSAPP_PHONE_NUMBER_ID || '',

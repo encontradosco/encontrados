@@ -102,7 +102,7 @@ test('un correo en ADMIN_EMAILS completa el login y entra a /admin', async (t) =
   assert.equal(adminRes.status, 200);
   const html = await adminRes.text();
   assert.match(html, /nic@ejemplo\.com/);
-  assert.match(html, /Panel en construcción/);
+  assert.match(html, /admin\/stats/);
 });
 
 test('un correo FUERA de ADMIN_EMAILS recibe 403 en el callback, sin sesión emitida', async (t) => {

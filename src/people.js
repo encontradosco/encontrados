@@ -281,6 +281,14 @@ function createStore(adapter) {
     return adapter.contactLogCounts(opts);
   }
 
+  async function matchLogDaily(opts) {
+    return adapter.matchLogDaily(opts);
+  }
+
+  async function contactLogDaily(opts) {
+    return adapter.contactLogDaily(opts);
+  }
+
   return {
     STATUSES,
     SOURCES,
@@ -323,6 +331,8 @@ function createStore(adapter) {
     insertContactLog,
     matchLogCounts,
     contactLogCounts,
+    matchLogDaily,
+    contactLogDaily,
     close: () => adapter.close()
   };
 }
