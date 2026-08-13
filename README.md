@@ -94,6 +94,9 @@ npm run dev     # SQLite local, http://localhost:3000
 - [**SECURITY.md**](SECURITY.md) — un hallazgo de seguridad o privacidad **no va
   en un issue público**.
 - [**CODE_OF_CONDUCT.md**](CODE_OF_CONDUCT.md).
+- [**CLAUDE.md**](CLAUDE.md) y [**.claude/**](.claude/README.md) — si trabajas
+  con un agente: las reglas que carga solo, los comandos de lo que más se
+  repite, y un arranque rápido para el primer día.
 
 Buenos puntos de entrada: los issues marcados
 [`good first issue`](https://github.com/encontradosco/encontrados/labels/good%20first%20issue)
