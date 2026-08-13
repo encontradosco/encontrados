@@ -692,3 +692,17 @@ details.stats-detail table { font-size: 0.85rem; }
   .stats-hero { grid-template-columns: repeat(2, 1fr); }
   .stat-card__value { font-size: 1.6rem; }
 }
+
+/* El enlace a la noticia que respalda un update. Cuando confirma que la
+   persona apareció es lo más importante de la tarjeta, así que se lee como
+   una afirmación y no como un pie de página. */
+.source-link { margin: 0.35rem 0 0; font-size: 0.9rem; }
+.source-link a { color: var(--accent-dark); font-weight: 600; }
+.source-link.found {
+  padding: 0.5rem 0.7rem;
+  background: rgba(34, 122, 62, 0.08);
+  border-left: 3px solid #227a3e;
+  border-radius: 6px;
+}
+.source-link.found a { color: #1b5e31; text-decoration: none; }
+.source-link.found a:hover { text-decoration: underline; }

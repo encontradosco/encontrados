@@ -109,7 +109,7 @@ function apiRoutes(store, matcher) {
   );
 
   // POST /api/updates — report status by name (creates the person if new)
-  // { name, status, message?, location?, reporter?, source?, external_id?,
+  // { name, status, message?, location?, reporter?, source?, source_url?, external_id?,
   //   photo?: { base64, content_type } }
   // The photo is used ONLY for face matching; it is never displayed or shared.
   // - source: one of 'web'|'whatsapp'|'api'|'aggregator'; defaults to 'api' if
@@ -127,6 +127,23 @@ function apiRoutes(store, matcher) {
         return res.status(400).json({ error: `status debe ser uno de: ${STATUSES.join(', ')}` });
       }
       const source = SOURCES.includes(req.body.source) ? req.body.source : 'api';
+      // El enlace a la noticia que confirma el estado. Se valida en vez de
+      // guardarse crudo: esto termina siendo un enlace clickeable en la ficha
+      // de una persona desaparecida, así que un `javascript:` o un `data:`
+      // guardado acá sería un hueco de seguridad servido a una familia.
+      // Solo http(s), y se descarta en silencio lo que no lo sea — un enlace
+      // malo no debe tumbar un reporte que por lo demás es válido.
+      let sourceUrl = null;
+      if (req.body.source_url != null && String(req.body.source_url).trim()) {
+        const raw = String(req.body.source_url).trim();
+        try {
+          const parsed = new URL(raw);
+          if (parsed.protocol === 'http:' || parsed.protocol === 'https:') sourceUrl = parsed.href;
+          else console.warn(`[api] source_url descartado, protocolo ${parsed.protocol}`);
+        } catch {
+          console.warn('[api] source_url descartado, no es una URL');
+        }
+      }
       const externalId =
         req.body.external_id != null && String(req.body.external_id).trim()
           ? String(req.body.external_id).trim()
@@ -135,6 +152,7 @@ function apiRoutes(store, matcher) {
       const update = await store.addUpdate(person.id, {
         status,
         message,
+        sourceUrl,
         location,
         lat: typeof req.body.lat === 'number' ? req.body.lat : parseFloat(req.body.lat),
         lng: typeof req.body.lng === 'number' ? req.body.lng : parseFloat(req.body.lng),
