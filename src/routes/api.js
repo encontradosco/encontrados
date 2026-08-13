@@ -19,6 +19,7 @@ const {
 const { publicUpdate } = require('../privacy');
 const { findDuplicateCandidates, duplicateWarning } = require('../duplicates');
 const gh = require('../github');
+const { sendReport } = require('../report');
 
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
@@ -375,6 +376,34 @@ function apiRoutes(store, matcher) {
           .json({ error: `El matcher facial no está disponible: ${matcher.status}` });
       }
       res.json(stats);
+    })
+  );
+
+  // ALL /api/report/send — arma y manda el reporte operativo recurrente
+  // (#116, PR 2). Lo dispara el cron de Vercel 3×/día y, a mano, un operador
+  // con la API key (el primer envío real lo dispara un humano apenas mergee).
+  //
+  // A diferencia del resto de esta ruta, acá NO aplica "las lecturas quedan
+  // abiertas": esto tiene efecto de lado (manda correos vía SendGrid, que
+  // cuesta y tiene cuota) y expone cifras de operación, así que falla CERRADO
+  // — a diferencia de requireKey, que si no hay API_KEY configurada deja
+  // pasar. Acepta la API key existente (Authorization: Bearer <API_KEY>) o el
+  // secreto que Vercel Cron manda solo (Authorization: Bearer <CRON_SECRET>,
+  // ver https://vercel.com/docs/cron-jobs/manage-cron-jobs#securing-cron-jobs)
+  // — nunca ambos sin configurar.
+  function requireKeyOrCron(req, res, next) {
+    const auth = req.get('authorization') || '';
+    if (env.API_KEY && auth === `Bearer ${env.API_KEY}`) return next();
+    const cronSecret = (process.env.CRON_SECRET || '').trim();
+    if (cronSecret && auth === `Bearer ${cronSecret}`) return next();
+    res.status(401).json({ error: 'Credencial inválida o ausente (API key o CRON_SECRET)' });
+  }
+  router.all(
+    '/report/send',
+    requireKeyOrCron,
+    wrap(async (req, res) => {
+      const result = await sendReport(store, matcher);
+      res.status(result.ok ? 200 : 502).json(result);
     })
   );
 

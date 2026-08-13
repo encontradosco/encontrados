@@ -148,7 +148,18 @@ hay framework de frontend ni paso de build: lo que se lee es lo que corre.
 - `src/store/postgres.js` y `src/store/sqlite.js` — el mismo contrato sobre dos
   motores. El esquema se crea solo al arrancar (`CREATE TABLE IF NOT EXISTS` +
   `ALTER TABLE … ADD COLUMN IF NOT EXISTS`): **no hay carpeta de migraciones**,
-  así que una columna nueva se agrega ahí y hay que agregarla en los dos.
+  así que una columna nueva se agrega ahí y hay que agregarla en los dos. Desde
+  #116 (PR 3) también viven ahí `match_log` y `contact_log` — la bitácora de
+  coincidencias y de envíos, solo IDs y enums, sin PII, con `ON DELETE CASCADE`
+  sobre `people(id)` (misma retención que el resto del esquema). Desde PR 4
+  tienen escritor: `insertMatchLog`/`insertContactLog` (escritura) y
+  `matchLogCounts`/`contactLogCounts` (agregados, con `since` opcional para
+  ventanas — los usa el reporte por correo).
+- `src/logbook.js` — `logMatch`/`logContact` (#116, PR 4): la capa que
+  instrumenta `facematch.js` y `notify.js` escribiendo en `match_log`/
+  `contact_log`. Regla de oro, aplicada acá una sola vez para todo el árbol de
+  llamadas: **un fallo escribiendo la bitácora nunca tumba ni retrasa el flujo
+  principal** — cada función atrapa su propio error y sigue.
 - `src/people.js` — `createStore(adapter)`, la capa de dominio encima del
   adaptador (búsqueda, merge, suscripciones, fotos). Exporta `STATUSES` y
   `SOURCES`.
@@ -160,7 +171,10 @@ hay framework de frontend ni paso de build: lo que se lee es lo que corre.
 - `src/facematch.js` — la orquestación encima del proveedor: `processPhoto`,
   `identifyRescuedPerson` (el flujo del rescatista), `forgetPersonFaces` (el
   borrado) y los dos barridos, `backfillUnindexedPhotos` y
-  `backfillPhotoDerivatives`.
+  `backfillPhotoDerivatives`. Cada camino que produce una coincidencia real
+  (`matchStoredPhoto`, `identifyRescuedPerson`) y cada intento de aviso
+  (`notifyFaceMatch`, `requestRescueConfirmation`, `resolveRescueAnswer`) llama
+  a `src/logbook.js` (#116, PR 4).
 - `src/thumbs.js` — el recorte cuadrado sobre el rostro, con `sharp`, en dos
   tamaños (240 para la lista, 480 para la ficha).
 - `src/html.js` — `layout()`, `esc()`, `facePlate()`, `statusBadge()` y los
