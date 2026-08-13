@@ -1,6 +1,7 @@
 // Outbound notifications: email (SendGrid) and WhatsApp (Meta Cloud API).
 // All fire-and-forget with logging — a failed notification must never block a report.
 const env = require('./env');
+const { logContact, resultFromSend } = require('./logbook');
 
 const STATUS_LABEL = {
   safe: 'A SALVO',
@@ -312,6 +313,12 @@ async function sendWhatsApp(to, text, { template } = {}) {
       );
       return { ok: false, status: res.status, error: body.slice(0, 500) };
     }
+    // Antes de #116 (PR 4) esto era el hueco exacto que hacía invisible un
+    // envío exitoso de WhatsApp: ni un console.log, y menos una fila en la
+    // bitácora. sendEmail ya loggeaba su éxito; esto lo empareja.
+    console.log(
+      `[notify:whatsapp] sent to=${to} tipo=${template ? `plantilla:${template.name}` : 'texto'}`
+    );
     return { ok: true, status: res.status };
   } catch (e) {
     console.error(
@@ -365,11 +372,12 @@ async function notifySubscribers(store, person, update, { skipAddress, skipAddre
   const relay = relayEnabled();
   const jobs = subs
     .filter((s) => s.verified && !skip.has(s.address))
-    .map((s) => {
-      if (s.channel !== 'email' && s.channel !== 'whatsapp') return Promise.resolve(false);
+    .map(async (s) => {
+      if (s.channel !== 'email' && s.channel !== 'whatsapp') return false;
       const text = `${baseText}\n\nPara dejar de recibir estos avisos: ${unsubscribeLink(s)}`;
+      let res;
       if (relay) {
-        return relayToOperators({
+        res = await relayToOperators({
           reason: 'Actualización de estado para quien sigue a esta persona',
           channel: s.channel,
           address: s.address,
@@ -377,9 +385,21 @@ async function notifySubscribers(store, person, update, { skipAddress, skipAddre
           text,
           person
         });
+      } else if (s.channel === 'email') {
+        res = await sendEmail(s.address, subject, text);
+      } else {
+        res = await sendWhatsApp(s.address, text);
       }
-      if (s.channel === 'email') return sendEmail(s.address, subject, text);
-      return sendWhatsApp(s.address, text);
+      // Bitácora de envíos (#116, PR 4). El canal que queda es 'relevo' en
+      // modo relevo, sin importar si el suscriptor original era email o
+      // whatsapp — es lo que de verdad se intentó.
+      await logContact(store, {
+        personId: person.id,
+        updateId: update.id,
+        channel: relay ? 'relevo' : s.channel,
+        result: resultFromSend(res)
+      });
+      return res;
     });
   const results = await Promise.allSettled(jobs);
   let sent = 0;

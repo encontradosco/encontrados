@@ -13,6 +13,7 @@ const { createSqliteAdapter } = require('../src/store/sqlite');
 const { createApp } = require('../src/server');
 const { nullMatcher } = require('../src/faces');
 const { fakeSendgrid } = require('./helpers');
+const { previousScheduledBogota } = require('../src/report');
 
 function fakeMatcher(answers = {}) {
   return {
@@ -100,8 +101,9 @@ test('trae las secciones aprobadas, con las cifras vivas de la corrida', async (
     '¿Cómo se calcula esto?',
     '1 · ¿Podemos confiar en los números de abajo?',
     '2 · Coincidencias (el embudo, acumulado)',
-    '3 · Lo que todavía NO podemos medir',
-    '4 · La base en general'
+    '3 · Envíos y coincidencias registradas en el momento',
+    '4 · Lo que todavía NO podemos medir',
+    '5 · La base en general'
   ]) {
     assert.ok(html.includes(section), `falta la sección "${section}"`);
   }
@@ -228,8 +230,10 @@ test('con el matcher apagado, el reporte se manda igual — degradado, no callad
   assert.match(mail.body.subject, /reconocimiento facial no disponible/);
   const html = mail.body.content.find((c) => c.type === 'text/html').value;
   assert.ok(html.includes('El reconocimiento facial no está disponible en esta corrida'));
-  // La tabla 4 (base general) no depende de Rekognition y sigue viva.
-  assert.ok(html.includes('4 · La base en general'));
+  // La bitácora (sección 3) y la base general (sección 5) no dependen de
+  // Rekognition y siguen vivas aunque el matcher esté apagado.
+  assert.ok(html.includes('3 · Envíos y coincidencias registradas en el momento'));
+  assert.ok(html.includes('5 · La base en general'));
 });
 
 test('REPORT_RECIPIENTS con varios destinos manda un correo por cada uno, sin exponerlos entre sí', async (t) => {
@@ -257,4 +261,54 @@ test('REPORT_RECIPIENTS con varios destinos manda un correo por cada uno, sin ex
   }
   const addresses = tos.flat().sort();
   assert.deepEqual(addresses, ['operador1@ejemplo.com', 'operador2@ejemplo.com', 'operador3@ejemplo.com']);
+});
+
+// previousScheduledBogota (#116, PR 4) — la ventana de "cambio desde el
+// reporte anterior". Horarios fijos 7 / 13 / 19 Bogotá = UTC-5 sin horario de
+// verano, así que los casos se escriben directo en UTC (hora Bogotá + 5).
+test('previousScheduledBogota: a las 13:00 Bogotá, el anterior fue las 7:00 del mismo día', () => {
+  const generatedAt = new Date('2026-08-12T18:00:00Z'); // 13:00 Bogotá
+  const prev = previousScheduledBogota(generatedAt);
+  assert.equal(prev.toISOString(), '2026-08-12T12:00:00.000Z'); // 7:00 Bogotá
+});
+
+test('previousScheduledBogota: a las 19:00 Bogotá, el anterior fue las 13:00 del mismo día', () => {
+  const generatedAt = new Date('2026-08-13T00:00:00Z'); // 19:00 Bogotá 12-ago
+  const prev = previousScheduledBogota(generatedAt);
+  assert.equal(prev.toISOString(), '2026-08-12T18:00:00.000Z'); // 13:00 Bogotá
+});
+
+test('previousScheduledBogota: a las 7:00 Bogotá, el anterior fue las 19:00 del día ANTERIOR (brecha de 12h)', () => {
+  const generatedAt = new Date('2026-08-12T12:00:00Z'); // 7:00 Bogotá 12-ago
+  const prev = previousScheduledBogota(generatedAt);
+  assert.equal(prev.toISOString(), '2026-08-12T00:00:00.000Z'); // 19:00 Bogotá 11-ago
+});
+
+test('previousScheduledBogota: con jitter del cron (unos minutos después del horario nominal) igual resuelve al horario anterior correcto', () => {
+  const generatedAt = new Date('2026-08-12T18:04:12Z'); // 13:04:12 Bogotá — cron con unos minutos de atraso
+  const prev = previousScheduledBogota(generatedAt);
+  assert.equal(prev.toISOString(), '2026-08-12T12:00:00.000Z'); // sigue siendo 7:00 Bogotá
+});
+
+test('el correo enciende la línea de "cambio desde el reporte anterior" con cifras reales', async (t) => {
+  const sg = await fakeSendgrid();
+  const { server, base } = await startApp(fakeMatcher({}));
+  t.after(() => {
+    server.close();
+    sg.stop();
+    cleanupEnv();
+  });
+  process.env.REPORT_RECIPIENTS = 'operador1@ejemplo.com';
+  env.API_KEY = 'secreta-de-prueba';
+
+  const res = await fetch(`${base}/api/report/send`, {
+    headers: { Authorization: 'Bearer secreta-de-prueba' }
+  });
+  assert.equal(res.status, 200);
+
+  const mail = sg.received[0];
+  const html = mail.body.content.find((c) => c.type === 'text/html').value;
+  assert.match(html, /Cambio desde el reporte anterior/);
+  assert.doesNotMatch(html, /disponible cuando entre la bitácora/, 'la línea ya no debe decir que está pendiente');
+  assert.match(html, /coincidencia\(s\) nueva\(s\) registrada\(s\)/);
 });
