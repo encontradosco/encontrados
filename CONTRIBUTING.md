@@ -32,6 +32,15 @@ npm test         # node --test, sin red y sin servicios externos
 > Node. `npm rebuild better-sqlite3` y vuelve a correr. Es tu entorno, no tu
 > cambio.
 
+## Si trabajas con un agente
+
+Va a leer [`CLAUDE.md`](CLAUDE.md) solo al abrir el repo: ahí están las reglas
+que no se pueden ignorar y a dónde ir por cada cosa. En
+[`.claude/`](.claude/README.md) están los comandos de lo que más se repite acá
+(`/pruebas`, `/pr-chico`, `/revision-privacidad`, `/cambio-de-esquema`) y un
+arranque rápido para el primer día. Todo lo de este archivo aplica igual: quien
+manda el PR responde por él, lo haya escrito a mano o no.
+
 ## Qué trabajar
 
 - Los issues marcados [`good first issue`](https://github.com/encontradosco/encontrados/labels/good%20first%20issue)

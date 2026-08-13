@@ -7,13 +7,17 @@ modificación al código:
 
 1. Corre las pruebas: `npm test` (deben quedar en verde).
 2. Haz commit con mensaje claro y push a la rama de trabajo.
-3. **Lleva el cambio a `main` de inmediato** (merge del PR, o push directo a
-   `main` si no hay PR). Vercel despliega `main` a producción automáticamente.
+3. **Abre el PR de inmediato y llévalo a `main`.** `main` está protegida: todo
+   entra por PR, con CI en verde y la aprobación de un mantenedor distinto de
+   quien lo escribió; el push directo ya no existe. Vercel despliega `main` a
+   producción automáticamente, así que **mergear *es* desplegar**.
 4. No dejes trabajo "pendiente de deploy": si está en `main`, está vivo; si no
    está en `main`, no existe.
 
 Este es un servicio de emergencias: un cambio útil que no está publicado no
-ayuda a nadie.
+ayuda a nadie. La otra cara de la misma moneda: lo que cambia comportamiento de
+cara al usuario, el esquema de la base o privacidad **espera a que lo decida una
+persona** — ver [`CONTRIBUTING.md`](CONTRIBUTING.md) y [`CLAUDE.md`](CLAUDE.md).
 
 ## Contexto del proyecto
 
