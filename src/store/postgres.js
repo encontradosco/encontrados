@@ -503,15 +503,20 @@ async function createPostgresAdapter(connectionString) {
     },
 
     // Series por día (#116, PR 6 — el panel). `since` (ISO) siempre viene del
-    // llamador ya calculado en JS, igual que en SQLite — misma razón. La
-    // conversión a UTC es explícita: sin ella, to_char formatea en el huso de
-    // la sesión de Postgres, y el corte de "día" tiene que ser el mismo en
-    // los dos motores.
+    // llamador ya calculado en JS, igual que en SQLite — misma razón. El
+    // corte de "día" es el de Bogotá, no UTC (hotfix): toda la superficie
+    // (el pie del correo, el cron, el panel) habla en hora de Bogotá, y entre
+    // las 19:00 y la medianoche Bogotá caía en el día SIGUIENTE bajo UTC —
+    // cinco horas de cada día contadas en la fila equivocada. La conversión
+    // explícita es igual de necesaria que antes: sin ella, to_char formatea
+    // en el huso de la sesión de Postgres, y el corte de "día" tiene que ser
+    // el mismo en los dos motores (ver sqlite.js: `date(created_at, '-5 hours')`,
+    // el mismo desplazamiento fijo — Colombia no tiene horario de verano).
     async matchLogDaily({ since } = {}) {
       const clause = since ? 'WHERE created_at >= $1' : '';
       const params = since ? [since] : [];
       return all(
-        `SELECT to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day, COUNT(*)::int AS count
+        `SELECT to_char(created_at AT TIME ZONE 'America/Bogota', 'YYYY-MM-DD') AS day, COUNT(*)::int AS count
          FROM match_log ${clause} GROUP BY day ORDER BY day`,
         params
       );
@@ -520,7 +525,7 @@ async function createPostgresAdapter(connectionString) {
       const clause = since ? 'WHERE created_at >= $1' : '';
       const params = since ? [since] : [];
       return all(
-        `SELECT to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day, result, COUNT(*)::int AS count
+        `SELECT to_char(created_at AT TIME ZONE 'America/Bogota', 'YYYY-MM-DD') AS day, result, COUNT(*)::int AS count
          FROM contact_log ${clause} GROUP BY day, result ORDER BY day`,
         params
       );
@@ -530,8 +535,14 @@ async function createPostgresAdapter(connectionString) {
     // pre-instrumentación son una mentira por omisión"). Antes de esta fecha
     // la bitácora no existía: no es que no pasó nada, es que no se medía.
     // null si la tabla está vacía — todavía no hay ningún registro. Se
-    // devuelve como ISO (to_char, igual que matchLogDaily) para que el
-    // llamador nunca tenga que distinguir Date vs string entre los motores.
+    // devuelve como ISO EN UTC, a propósito (a diferencia de matchLogDaily):
+    // esto no es un bucket de "día", es un INSTANTE — new Date(...) lo parsea
+    // en report.js y el que localiza a Bogotá para mostrarlo es bogotaClock(),
+    // no esta función. Cambiarlo a Bogotá acá y seguir marcándolo "Z" mentiría
+    // sobre el offset y correría el instante 5 horas. El único punto que sí
+    // necesitaba a Bogotá era el bucket de DÍA que deriva de este instante en
+    // gatherDailySeries (report.js) — ahí es donde vivía el mismo desfase, y
+    // ahí es donde se corrigió (bogotaDayKey), no en el motor de datos.
     async matchLogEarliest() {
       const r = await one("SELECT to_char(MIN(created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS min FROM match_log", []);
       return r.min || null;
