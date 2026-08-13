@@ -134,6 +134,46 @@ test('no match tells the rescuer nobody is looking yet', async (t) => {
   fd.set('photo', new File([await photoBytes('nadie')], 'r.jpg', { type: 'image/jpeg' }));
   const html = await (await fetch(`${base}/rescate`, { method: 'POST', body: fd })).text();
   assert.match(html, /Nadie ha reportado a esta persona/);
+
+  // …y no es un callejón sin salida. Quien llega acá buscando a alguien —el
+  // caso más común de esta pantalla— tiene el formulario de reporte enfrente,
+  // no escondido en el menú. La pregunta va antes del botón, condicional, para
+  // que un rescatista con una persona sin identificar al lado pase de largo.
+  assert.match(html, /¿Eres tú quien la está buscando\?/);
+  assert.match(html, /class="big-btn search" href="\/report">📢 Reporta a la persona que buscas/);
+});
+
+// Las tres pantallas del rescatista devolvían todas a /rescate, así que una
+// familia que llegaba acá por equivocación se iba del sitio sin reportar a
+// nadie. El pie ofrece las dos salidas en todas.
+test('las pantallas del rescatista siempre ofrecen también la salida a reportar', async (t) => {
+  const matcher = fakeMatcher();
+  const { server, base } = await startApp(matcher);
+  t.after(() => server.close());
+
+  const conFoto = async () => {
+    const fd = new FormData();
+    fd.set('photo', new File([await photoBytes('nadie')], 'r.jpg', { type: 'image/jpeg' }));
+    return (await fetch(`${base}/rescate`, { method: 'POST', body: fd })).text();
+  };
+
+  // Sin coincidencia: las dos salidas en el pie.
+  const sinMatch = await conFoto();
+  assert.match(sinMatch, /href="\/rescate">🔍 Consultar otra persona/);
+  assert.match(sinMatch, /href="\/report">📢 Reporta a la persona que buscas/);
+
+  // Con Rekognition caído tampoco se queda sin salida: hasta acá esa pantalla
+  // era una frase de error y nada más. Se comprueba primero que estamos EN esa
+  // rama (`available: false`) y no en la de «nadie la ha reportado», que ahora
+  // trae el mismo bloque y taparía el fallo.
+  matcher.searchByImage = async () => {
+    throw new Error('rekognition caído');
+  };
+  const caido = await conFoto();
+  assert.match(caido, /El reconocimiento facial no está disponible/, 'esta es la rama del matcher caído');
+  assert.doesNotMatch(caido, /Nadie ha reportado a esta persona/);
+  assert.match(caido, /¿Eres tú quien la está buscando\?/);
+  assert.match(caido, /href="\/report">📢 Reporta a la persona que buscas/);
 });
 
 // NOTIFY_MODE=direct: la cadena completa sin relevo, tal como quedaba antes.

@@ -231,6 +231,28 @@ const searchOnlyCheckbox = (checked = false) => `<label class="share-check">
 // they are not promised here as "coming soon".
 const SOURCES_NOTE = `<p class="sources-note">Fuentes de información de desaparecidos: Encontrados.co y <a href="https://colombiatebusca.com" target="_blank" rel="noopener">Colombia Te Busca</a>, el registro público donde las familias publican fotos y buscan a sus desaparecidos.</p>`;
 
+// La salida para quien llegó a /rescate y en realidad está BUSCANDO a alguien.
+//
+// Hasta acá el flujo del rescatista no tenía ninguna: los tres botones de sus
+// pantallas —resultado, error, aviso enviado— devolvían todos a /rescate. Una
+// familia subía la foto de su familiar, leía «nadie ha reportado a esta
+// persona» y se iba del sitio sin reportarla. Justo la persona que más
+// necesitaba el formulario de reporte era la única a la que no se lo
+// ofrecíamos.
+//
+// La pregunta va primero y es condicional a propósito: un rescatista con una
+// persona sin identificar al lado NO debe reportarla como desaparecida, así
+// que el texto tiene que dejarlo pasar de largo sin dudar.
+const REPORT_EXIT_BLOCK = `<div class="notice">
+  <p><strong>¿Eres tú quien la está buscando?</strong></p>
+  <p>Repórtala acá: dejas su foto y tu teléfono, y el rescatista que la encuentre te llama directo.</p>
+  <a class="big-btn search" href="/report">📢 Reporta a la persona que buscas</a>
+</div>`;
+
+// El pie de las pantallas del rescatista. Dos salidas, no una.
+const RESCUE_FOOTER = `<p><a class="big-btn report" href="/rescate">🔍 Consultar otra persona</a></p>
+<p><a class="big-btn search" href="/report">📢 Reporta a la persona que buscas</a></p>`;
+
 // What the rescuer can DO with a match depends on what the report carries.
 // Reports typed into the app bring the family's contact; the fichas imported
 // from public registries bring none — and a match that ends in "sin datos de
@@ -848,7 +870,9 @@ ${rescueForm(typed)}`
   }
 </div>` + retry;
       } else if (!available) {
-        body = `<div class="error"><p>El reconocimiento facial no está disponible en este momento. Inténtalo de nuevo en unos minutos.</p></div>`;
+        body =
+          `<div class="error"><p>El reconocimiento facial no está disponible en este momento. Inténtalo de nuevo en unos minutos.</p></div>` +
+          REPORT_EXIT_BLOCK;
       } else if (!matches.length) {
         body = `<div class="error">
   <p><strong>Nadie ha reportado a esta persona como desaparecida todavía.</strong></p>
@@ -871,7 +895,8 @@ ${rescueForm(typed)}`
             'Guardamos tu número, pero <strong>no podemos confirmarlo</strong>, así que no te vamos a escribir solos: si alguien reporta a esta persona, una persona del equipo revisa el caso y te contacta por ahí. Si quieres el aviso por un canal que sí podemos confirmar de una vez, déjanos también tu correo.'
           : 'Vuelve a intentarlo más tarde, o déjanos tu correo o tu WhatsApp para avisarte cuando alguien la busque.'
   }</p>
-</div>`;
+</div>
+${REPORT_EXIT_BLOCK}`;
       } else {
         body =
           `<h2>${matches.length === 1 ? 'La están buscando' : 'Coincidencias encontradas'}</h2>` +
@@ -898,7 +923,7 @@ ${body}
               ? ' Tampoco guardamos su firma facial, como pediste: de esta consulta no quedó nada, y por eso no vamos a poder avisarte si alguien reporta a esta persona después.'
               : ''
           }</p>
-<p><a class="big-btn report" href="/rescate">🔍 Consultar otra persona</a></p>`
+${RESCUE_FOOTER}`
         )
       );
     })
@@ -986,7 +1011,7 @@ ${body}
           `<h1 class="compact">Aviso enviado ✅</h1>
 <p><strong>Nos encargamos de hacerle llegar tu aviso a quien busca a ${esc(person.full_name)}.</strong> Te contactarán al número que dejaste.</p>
 <p class="subtle">Tu teléfono no se muestra públicamente: solo se comparte para coordinar el reencuentro.</p>
-<p><a class="big-btn report" href="/rescate">🔍 Consultar otra persona</a></p>`
+${RESCUE_FOOTER}`
         )
       );
     })
