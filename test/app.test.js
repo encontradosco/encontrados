@@ -82,9 +82,9 @@ test('home lists missing people and offers both actions', async (t) => {
   t.after(() => server.close());
 
   const html = await (await fetch(base)).text();
-  assert.match(html, /mira quién está buscando la persona que rescataste/i);
+  assert.match(html, /tengo a alguien conmigo — mira quién lo busca/i);
   assert.match(html, /href="\/rescate"/);
-  assert.match(html, /📢 Reporta desaparecido/);
+  assert.match(html, /📢 Reporta a la persona que buscas/);
   // The sources line lives small under the listing, present even when empty.
   assert.match(html, /Fuentes de información de desaparecidos/);
 

@@ -266,6 +266,20 @@ h1.compact .subtle { font-family: var(--font-sans); font-weight: 400; font-size:
 }
 .sticky-cta .big-btn { box-shadow: 0 6px 20px rgba(31, 30, 29, 0.25); }
 
+/* Dos caminos, no uno. Acá abajo está la ficha de una persona desaparecida, y
+   quien la mira es casi siempre su familia — que hasta ahora solo tenía un
+   botón, y decía «¿la tienes contigo?». Medimos a dónde llevaba eso: de 23
+   avisos de rescatista recibidos, uno solo venía de un rescate. Los demás los
+   mandó gente que estaba buscando a esa persona y no tenía otro botón que
+   tocar. Los dos tienen el mismo tamaño a propósito: el segundo no es una
+   salida de emergencia escondida al pie, es la mitad de la pregunta.
+   Lado a lado apenas hay ancho; apilados en un teléfono, que es donde se lee
+   esta página. */
+.cta-par { display: grid; gap: 0.5rem; }
+@media (min-width: 520px) {
+  .cta-par { grid-template-columns: 1fr 1fr; }
+}
+
 /* Person page: name and reports on the left, a bigger version of the same face
    spanning both on the right — so it starts level with the title. */
 .person-body {

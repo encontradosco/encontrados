@@ -63,8 +63,8 @@ test('la donación nunca le gana la atención a reportar un desaparecido', async
   t.after(() => server.close());
 
   const html = await (await fetch(`${base}/`)).text();
-  const reportar = html.indexOf('📢 Reporta desaparecido');
-  const rescate = html.indexOf('Mira quién está buscando la persona que rescataste');
+  const reportar = html.indexOf('📢 Reporta a la persona que buscas');
+  const rescate = html.indexOf('Tengo a alguien conmigo — mira quién lo busca');
   const asks = html.indexOf('¿Eres parte del equipo de ColombiaTeBusca?');
   const donar = html.indexOf('Este sitio no recibe donaciones');
 

@@ -570,13 +570,18 @@ function webRoutes(store, matcher) {
               // #65: the whole card is a tap target for the ficha (stretched
               // link in CSS), and the rescuer's action sits right on the card
               // instead of waiting at the end of the ficha. The aria-label
-              // carries the name — twenty identical "¿La tienes contigo?"
-              // links would be indistinguishable to a screen reader.
+              // carries the name — twenty identical links would be
+              // indistinguishable to a screen reader.
+              //
+              // El texto es una AFIRMACIÓN, no una pregunta, y ese es el
+              // arreglo: «¿la tienes contigo?» sobre la card del familiar que
+              // alguien está buscando se lee como una invitación a decir que
+              // sí. Nadie toca «la tengo conmigo» si no la tiene.
               return `<article class="card person">
   <div class="person-info">
     <h3><a class="card-link" href="/person/${p.id}">${esc(p.full_name)}</a></h3>
     <p class="meta">Último reporte: ${timeTag(p.last_report)}</p>
-    <a class="card-cta" href="/rescate" aria-label="¿Tienes contigo a ${esc(p.full_name)}? Mira quién la busca">🔍 ¿La tienes contigo?</a>
+    <a class="card-cta" href="/rescate" aria-label="Tengo conmigo a ${esc(p.full_name)}: mira quién la busca">🔍 La tengo conmigo</a>
   </div>
   ${facePlate(photos.get(p.id), p.full_name)}
 </article>`;
@@ -593,14 +598,15 @@ function webRoutes(store, matcher) {
 <section class="action-group">
   <h1>Voluntarios, rescatistas, bomberos, policías y hospitales:</h1>
   <a class="big-btn report" href="/rescate">
-    <span class="btn-title">🔍 Mira quién está buscando la persona que rescataste</span>
+    <span class="btn-title">🔍 Tengo a alguien conmigo — mira quién lo busca</span>
     <span class="btn-sub">Subes una foto, la comparamos con IA y la borramos al instante</span>
   </a>
 </section>
 <section class="action-group">
-  <h2>¿Buscas un ser querido?</h2>
-  <a class="big-btn search" href="/report">
-    <span class="btn-title">📢 Reporta desaparecido</span>
+  <h2>¿Estás buscando a alguien?</h2>
+  <a class="big-btn secondary" href="/report">
+    <span class="btn-title">📢 Reporta a la persona que buscas</span>
+    <span class="btn-sub">Deja su foto y tu teléfono: quien la encuentre te llama directo</span>
   </a>
 </section>
 ${list}
@@ -1299,7 +1305,10 @@ ${updates.length ? updates.map((u) => updateCard(u)).join('') : '<p class="subtl
   ${facePlate(photo, person.full_name, { large: true })}
 </div>
 <p class="subtle">Los datos de contacto de quien reporta solo se muestran a un rescatista cuando el rostro coincide.</p>
-<div class="sticky-cta"><a class="big-btn report" href="/rescate">🔍 ¿La tienes contigo? Mira quién la busca</a></div>`,
+<div class="sticky-cta cta-par">
+  <a class="big-btn report" href="/rescate">🔍 La tengo conmigo</a>
+  <a class="big-btn secondary" href="/report?name=${encodeURIComponent(person.full_name)}">🙋 Yo la estoy buscando</a>
+</div>`,
           {
             fullTitle: `${person.full_name} — reportada como desaparecida · encontrados.co`,
             description: `${person.full_name} fue reportada como desaparecida tras el terremoto en Colombia. Si la rescataste, encontrados.co te dice quién la está buscando.`,
