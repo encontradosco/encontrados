@@ -11,7 +11,7 @@ const { createSqliteAdapter } = require('../src/store/sqlite');
 const { createApp } = require('../src/server');
 const { nullMatcher } = require('../src/faces');
 const { logMatch, logContact } = require('../src/logbook');
-const { gatherDailySeries, gatherCheapReportData, buildReportHtml, buildReportText } = require('../src/report');
+const { gatherDailySeries, gatherCheapReportData, buildReportHtml, buildReportText, bogotaDayKey } = require('../src/report');
 
 async function startApp() {
   const app = await createApp(await createSqliteAdapter(':memory:'), nullMatcher);
@@ -57,7 +57,9 @@ test('gatherDailySeries: los días antes del primer registro quedan marcados com
   await logMatch(store, { personId: person.id, updateId: null, faceId: 'a', similarity: 90, surface: 'rescate' });
 
   const daily = await gatherDailySeries(store, { days: 7 });
-  const today = new Date().toISOString().slice(0, 10);
+  // Día de BOGOTÁ, no UTC — es el mismo corte que usa gatherDailySeries
+  // ahora, y difieren entre las 19:00 y la medianoche Bogotá.
+  const today = bogotaDayKey(new Date());
   const todayRow = daily.find((d) => d.day === today);
   const earlierRows = daily.filter((d) => d.day !== today);
 

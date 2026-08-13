@@ -595,6 +595,14 @@ test('a match without family contact offers the aviso form and stores the aviso'
   assert.ok(mail, 'debe llegar el correo del aviso al buzón del operador');
   assert.match(mail, /300 999 8877/);
 
+  // Bitácora (#116): el aviso de rescatista es un relevo OPERATIVO al
+  // equipo, no un envío a una persona — debe quedar contado bajo 'relevo',
+  // nunca perdido (antes este camino no escribía nada en contact_log).
+  const contactCounts = await store.contactLogCounts();
+  const relevo = contactCounts.find((r) => r.channel === 'relevo');
+  assert.ok(relevo, 'el aviso de rescatista debía quedar registrado como relevo al operador');
+  assert.equal(relevo.result, 'enviado', 'con AVISO_EMAIL configurada y SendGrid respondiendo bien, el relevo cuenta como enviado');
+
   // A SECOND rescuer matching the same person now sees the first rescuer's
   // contact, labelled as what it is — a rescuer, not the family.
   const fd2 = new FormData();

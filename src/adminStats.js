@@ -252,7 +252,8 @@ function buildStatsPageHtml({ generatedAt, counts, activity, matcherStatus }, da
           n(contactPivot[ch].fallido),
           n(contactPivot[ch].rechazado)
         ])
-      )
+      ) +
+      `<p class="stats-note">"${esc(CHANNEL_LABEL.relevo)}" es todo lo que fue al buzón del <strong>equipo</strong>, nunca a una familia ni a un rescatista: coincidencias pendientes de revisión (modo relevo), solicitudes de publicar en Colombia Te Busca, y avisos de rescatista.</p>`
   );
 
   const since = activity.since;

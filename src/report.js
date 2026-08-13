@@ -78,6 +78,24 @@ function bogotaClock(date) {
   return { day: get('day'), month: get('month'), hm: `${get('hour')}:${get('minute')}` };
 }
 
+// 'YYYY-MM-DD' del DÍA DE BOGOTÁ que contiene este instante — el mismo corte
+// que usan matchLogDaily/contactLogDaily en los dos adapters (hotfix: antes
+// se armaba con `toISOString().slice(0, 10)`, que es el día en UTC, y entre
+// las 19:00 y la medianoche Bogotá eso es el día SIGUIENTE — el bucket de
+// gatherDailySeries quedaba desalineado del bucket real de la bitácora).
+// formatToParts (no to_char ni parseo de string) para no depender de que la
+// build de ICU del runtime formatee 'en-CA' con guiones en el orden esperado.
+function bogotaDayKey(date) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: BOGOTA_TZ,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(date);
+  const get = (t) => parts.find((p) => p.type === t)?.value || '';
+  return `${get('year')}-${get('month')}-${get('day')}`;
+}
+
 function persona(count) {
   return count === 1 ? 'persona' : 'personas';
 }
@@ -244,7 +262,7 @@ esto <strong>no significa que sean cero</strong>, significa que no se pudieron m
     instrumentedSinceNote(activity.instrumentedSince) +
     '<p style="font-size:13px;color:#555;margin:0 0 4px;">Coincidencias — cada vez que el matcher encuentra a alguien, en el momento en que pasa (ya no es el recálculo del embudo de arriba):</p>' +
     matchTable +
-    '<p style="font-size:13px;color:#555;margin:12px 0 4px;">Envíos intentados, por canal — <strong>los fallos y rechazos importan más que los enviados</strong>: un canal que solo cuenta lo que salió bien siempre se ve sano.</p>' +
+    `<p style="font-size:13px;color:#555;margin:12px 0 4px;">Envíos intentados, por canal — <strong>los fallos y rechazos importan más que los enviados</strong>: un canal que solo cuenta lo que salió bien siempre se ve sano. "${esc(CHANNEL_LABEL.relevo)}" es todo lo que fue al buzón del <strong>equipo</strong>, nunca a una familia ni a un rescatista: coincidencias pendientes de revisión (modo relevo), solicitudes de publicar en Colombia Te Busca, y avisos de rescatista.</p>` +
     contactTable;
 
   const notYet =
@@ -253,12 +271,16 @@ esto <strong>no significa que sean cero</strong>, significa que no se pudieron m
       ['Señal', 'Por qué sigue afuera'],
       [
         [
-          'Avisos operativos manuales al operador (relevo a Colombia Te Busca, aviso de rescatista, respaldo de /ideas y /bug)',
-          'Van por sendEmail directo, fuera del pipeline de notifyFaceMatch/notifySubscribers que instrumentó este PR — quedan pendientes de una pasada aparte.'
+          'Respaldo de /ideas y /bug cuando GitHub falla (correo directo al equipo)',
+          'No tiene ninguna persona asociada — es un formulario de feedback general, no un reporte sobre alguien — y la bitácora de envíos exige por diseño una persona vinculada a cada fila (hereda la misma retención ligada a la persona que el resto del esquema). Contarlo sin forzar esa columna es un cambio de esquema; queda afuera hasta que el equipo decida cómo modelarlo.'
         ],
         [
           'Respuestas del bot conversacional de WhatsApp',
           'Son diálogo (confirmaciones, ayuda), no avisos sobre una coincidencia o una actualización — categoría distinta a la que cubre contact_log hoy.'
+        ],
+        [
+          'Envíos manuales del operador (por fuera de la app)',
+          'Los avisos que el equipo manda a mano desde su propio correo/WhatsApp — por ejemplo, 48 personas contactadas así en dos días — no pasan por ningún endpoint de encontrados.co, así que no hay dónde registrarlos hoy. Necesitarían un endpoint propio; fuera de alcance de esta pasada.'
         ]
       ]
     );
@@ -470,14 +492,18 @@ async function gatherDailySeries(store, { days = 7 } = {}) {
     store.matchLogEarliest(),
     store.contactLogEarliest()
   ]);
-  // 'YYYY-MM-DD...' → 'YYYY-MM-DD': comparable como texto contra `day`
-  // (mismo formato que arma matchLogDaily/contactLogDaily, ver los adapters).
-  const matchEarliestDay = matchEarliest ? matchEarliest.slice(0, 10) : null;
-  const contactEarliestDay = contactEarliest ? contactEarliest.slice(0, 10) : null;
+  // matchLogEarliest/contactLogEarliest devuelven un INSTANTE en UTC (no un
+  // bucket de día) — bogotaDayKey lo pasa por el mismo corte de Bogotá que
+  // usan matchLogDaily/contactLogDaily, para que "disponible desde" compare
+  // contra el mismo calendario que las filas que está comparando (hotfix:
+  // antes se armaba con `.slice(0, 10)` sobre el string UTC, que es el día
+  // en UTC — desalineado del bucket de Bogotá que arman los adapters).
+  const matchEarliestDay = matchEarliest ? bogotaDayKey(new Date(matchEarliest)) : null;
+  const contactEarliestDay = contactEarliest ? bogotaDayKey(new Date(contactEarliest)) : null;
 
   const dayKeys = [];
   for (let i = days - 1; i >= 0; i--) {
-    dayKeys.push(new Date(Date.now() - i * 24 * 3600 * 1000).toISOString().slice(0, 10));
+    dayKeys.push(bogotaDayKey(new Date(Date.now() - i * 24 * 3600 * 1000)));
   }
 
   const matchByDay = new Map(matchDaily.map((r) => [r.day, Number(r.count)]));
@@ -576,5 +602,6 @@ module.exports = {
   CHANNEL_LABEL,
   n,
   bogotaClock,
+  bogotaDayKey,
   instrumentedSinceNote
 };

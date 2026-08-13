@@ -14,6 +14,7 @@ const { esc, layout, updateCard, timeTag, facePlate, LOCATION_SCRIPT } = require
 const { findDuplicateCandidates } = require('../duplicates');
 const { isReadyToShow } = require('../report-photo');
 const gh = require('../github');
+const { logContact, resultFromSend } = require('../logbook');
 
 // Express 4 doesn't catch async errors on its own.
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
@@ -933,7 +934,7 @@ ${body}
         );
       }
 
-      await store.addUpdate(person.id, {
+      const update = await store.addUpdate(person.id, {
         status: 'missing',
         message:
           'Aviso de un rescatista: la persona fue vista y sabemos dónde puede ser localizada. Estamos haciendo llegar el aviso a quien la busca.',
@@ -945,9 +946,10 @@ ${body}
       // operators' real-time signal to go relay it to the source registry. An
       // email failure must never lose the aviso.
       const operators = avisoEmail();
+      let relayResult;
       if (operators) {
         try {
-          await sendEmail(
+          relayResult = await sendEmail(
             operators,
             `Aviso de rescatista — ${person.full_name}`,
             [
@@ -965,8 +967,17 @@ ${body}
           );
         } catch (e) {
           console.error('[rescate:aviso] email failed:', e.message);
+          relayResult = { ok: false, error: e.message };
         }
+      } else {
+        relayResult = { ok: false, error: 'AVISO_EMAIL no configurada' };
       }
+      // Bitácora (#116): esto es un aviso OPERATIVO al equipo — pide que un
+      // operador verifique y reenvíe a la fuente — no un aviso a una persona.
+      // Mismo canal 'relevo' que ya usa el relevo de coincidencias pendientes
+      // de revisión (src/facematch.js): el enum existente ya significa "esto
+      // fue al buzón del equipo, no a un tercero".
+      await logContact(store, { personId: person.id, updateId: update.id, channel: 'relevo', result: resultFromSend(relayResult) });
 
       res.send(
         layout(
@@ -1127,7 +1138,14 @@ ${LOCATION_SCRIPT}`,
       // Best effort, and last on purpose: the report is already stored and
       // public by now, so a SendGrid outage costs the relay, never the report.
       if (req.body.colombiatebusca) {
-        await relayToColombiaTeBusca({ person, update, photos, contact, location, message, relay });
+        const relayRes = await relayToColombiaTeBusca({ person, update, photos, contact, location, message, relay });
+        // Bitácora (#116): esto es un aviso OPERATIVO al equipo — pide que un
+        // operador publique a mano en Colombia Te Busca — no un aviso a una
+        // persona. Mismo canal 'relevo' que ya usa el relevo de coincidencias
+        // pendientes de revisión (src/facematch.js): el enum existente ya
+        // significa "esto fue al buzón del equipo, no a un tercero", que es
+        // exactamente lo que es esta solicitud.
+        await logContact(store, { personId: person.id, updateId: update.id, channel: 'relevo', result: resultFromSend(relayRes) });
       }
 
       // Duplicate detection runs LAST, once the report is durable. Everything

@@ -485,11 +485,22 @@ async function createSqliteAdapter(dbPath) {
     // no depender de qué funciones de fecha trae la versión de SQLite en
     // este runtime. `date(created_at)` sí parsea bien el ISO con 'T'/'Z' que
     // ya usa el resto de este esquema.
+    //
+    // El corte de "día" es el de Bogotá, no UTC (hotfix): toda la superficie
+    // (el pie del correo, el cron, el panel) habla en hora de Bogotá, y entre
+    // las 19:00 y la medianoche Bogotá caía en el día SIGUIENTE bajo UTC —
+    // cinco horas de cada día contadas en la fila equivocada. El modificador
+    // '-5 hours' es el mismo desplazamiento fijo que usa el resto del repo
+    // (Colombia no tiene horario de verano — ver report.js) y debe quedar
+    // igual al `AT TIME ZONE 'America/Bogota'` del adapter de Postgres:
+    // mismo corte de día en los dos motores.
     async matchLogDaily({ since } = {}) {
       const where = since ? 'WHERE created_at >= ?' : '';
       const params = since ? [since] : [];
       return db
-        .prepare(`SELECT date(created_at) AS day, COUNT(*) AS count FROM match_log ${where} GROUP BY day ORDER BY day`)
+        .prepare(
+          `SELECT date(created_at, '-5 hours') AS day, COUNT(*) AS count FROM match_log ${where} GROUP BY day ORDER BY day`
+        )
         .all(...params);
     },
     async contactLogDaily({ since } = {}) {
@@ -497,7 +508,7 @@ async function createSqliteAdapter(dbPath) {
       const params = since ? [since] : [];
       return db
         .prepare(
-          `SELECT date(created_at) AS day, result, COUNT(*) AS count FROM contact_log ${where} GROUP BY day, result ORDER BY day`
+          `SELECT date(created_at, '-5 hours') AS day, result, COUNT(*) AS count FROM contact_log ${where} GROUP BY day, result ORDER BY day`
         )
         .all(...params);
     },
