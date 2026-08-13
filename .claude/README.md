@@ -32,6 +32,7 @@ git clone https://github.com/encontradosco/encontrados.git
 cd encontrados
 npm install
 npm test        # debe quedar en verde
+npm run seed    # datos sintéticos: sin esto la base arranca vacía y /admin/stats muestra ceros
 npm run dev     # http://localhost:3000
 claude          # y ya: CLAUDE.md se carga solo
 ```

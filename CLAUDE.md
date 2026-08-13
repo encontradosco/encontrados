@@ -81,6 +81,39 @@ No es un aviso legal al pie. Es lo que gobierna el código:
 
 ---
 
+## El panel: agregado, y solo agregado
+
+La regla 4 cubre lo que sale por una respuesta o un mensaje. Falta la
+superficie donde es más fácil filtrar sin darse cuenta, porque uno no siente
+que esté publicando nada: **una cifra**. En `/admin/stats` el primer prompt
+razonable —«muéstrame las últimas coincidencias para depurar esto»— devuelve
+una tabla de personas reales.
+
+- **Nunca un individuo en pantalla.** Ni nombres, ni teléfonos, ni correos, ni
+  `person_id` / `face_id` / `update_id`, ni visibles ni en el HTML. El detalle
+  por persona vive detrás de sesión, en `/api/admin/*`, y hoy ni siquiera
+  existe.
+- **Supresión de celdas pequeñas: un conteo entre 1 y 4 se muestra `<5`.** Un
+  uno no describe a un agregado, describe a una persona.
+- **Dos métricas prohibidas**, escritas precisamente porque a alguien le van a
+  parecer buenas ideas:
+  1. Cualquier corte de **«buscadas sin coincidencia hace más de N días»**. Eso
+     no es una métrica de operación: es una lista priorizada de las familias
+     más desesperadas, ordenada por desesperación.
+  2. Cualquier cifra de **«familias con contacto disponible vs. sin contacto»**.
+     Le dice a quien quiera cosechar contactos si vale la pena intentarlo.
+
+  El riesgo de extorsión a familiares en un desastre no es hipotético — es la
+  razón por la que `NOTIFY_MODE` está en `relay` (regla 4).
+- **Cada cifra dice qué unidad cuenta y de qué lado del cruce** («fotos de quien
+  busca», no «personas»), y **un cero nunca puede parecer un hecho medido cuando
+  es un punto ciego**: si no se pudo medir, la página lo dice con esas palabras.
+
+Agregar o cambiar una cifra del panel cae en **privacidad**: se declara en el PR
+y lo decide una persona (regla 3).
+
+---
+
 ## Antes de tocar algo, lee
 
 | Vas a… | Lee primero |
@@ -89,6 +122,7 @@ No es un aviso legal al pie. Es lo que gobierna el código:
 | agregar o cambiar una prueba | [`agent.md`](agent.md) → «Correr y probar», y una prueba vecina en `test/` |
 | tocar la base de datos | [`agent.md`](agent.md) → `src/store/` — **no hay carpeta de migraciones** |
 | tocar fotos, contacto o notificaciones | la regla 4 de arriba, [`src/privacy.js`](src/privacy.js) y `test/privacy.test.js` |
+| tocar una cifra de `/admin/stats` | «El panel: agregado, y solo agregado», arriba — y `npm run seed` para tener qué mirar |
 | mandar el cambio | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
 | entender el producto de cara al usuario | [`README.md`](README.md) |
 | reportar algo de seguridad | [`SECURITY.md`](SECURITY.md) — **nunca en un issue público** |
@@ -110,9 +144,14 @@ señal; los comentarios explican **por qué**, no qué.
 
 ```bash
 npm install
+npm run seed    # datos sintéticos en la base local — sin esto arranca vacía
 npm run dev     # SQLite en ./data/encontrados.db → http://localhost:3000
 npm test        # node --test, sin red y sin servicios externos
 ```
+
+`npm run seed` se niega a correr si detecta Postgres, Vercel o
+`NODE_ENV=production`: solo siembra la base local, y borra su propia siembra
+anterior antes de repetir.
 
 **No necesitas credenciales de nada.** Sin AWS el reconocimiento facial queda
 apagado (las fotos igual se guardan), sin SendGrid no sale correo, sin
