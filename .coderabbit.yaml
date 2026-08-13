@@ -2,7 +2,11 @@
 # CodeRabbit — revisión automática de PRs. Ver propuesta en el issue #92.
 # Gratis en repos públicos open source. Requiere que el dueño instale la app:
 # https://github.com/apps/coderabbitai
-language: es-CO
+# `es-CO` no existe en el enum del esquema; las únicas variantes de español
+# válidas son `es`, `es-AR` (voseo) y `es-ES`. El esquema es estricto
+# (additionalProperties: false), así que un valor inválido puede tumbar el
+# archivo entero — y con él las path_instructions de abajo.
+language: es
 tone_instructions: >-
   Servicio de emergencias. Sé directo y conciso. Prioriza correctitud,
   privacidad y las reglas de agent.md por encima de estilo.
