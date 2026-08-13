@@ -260,6 +260,10 @@ function layout(title, body, meta = {}) {
   // el panel de /admin/stats en su ventana pública temporal, #116 PR 6). Sin
   // esto, cualquier página se indexa igual que siempre.
   const robots = meta.robots ? `\n<meta name="robots" content="${esc(meta.robots)}">` : '';
+  // meta.mainClass: para una página que necesita más ancho que el formulario
+  // angosto por el que está pensado <main> (hoy solo /admin/stats, denso en
+  // datos) — sin tocar el <main> de todas las demás páginas.
+  const mainClass = meta.mainClass ? ` class="${esc(meta.mainClass)}"` : '';
   return `<!doctype html>
 <html lang="es">
 <head>
@@ -289,7 +293,7 @@ function layout(title, body, meta = {}) {
   </nav>
 </header>
 <div class="banner">🇨🇴 <strong>Terremoto en Colombia — lunes 10 de agosto.</strong></div>
-<main>
+<main${mainClass}>
 ${body}
 </main>
 <footer>

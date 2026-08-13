@@ -184,14 +184,14 @@ esto <strong>no significa que sean cero</strong>, significa que no se pudieron m
         ['Señal', 'Cuántos', 'Qué significa'],
         [
           [
-            'Comparaciones que fallaron',
+            'Fotos que no se pudieron comparar',
             n(stats.failed),
-            'Estas personas no se pudieron comparar en esta corrida. Los números de abajo son el <strong>mínimo real</strong> — pueden ser más.'
+            'Son fotos subidas por <strong>quien busca</strong> a alguien —un rescatista, o quien se suscribe con una foto— no de las personas buscadas. Falló la consulta al reconocimiento facial para esa foto puntual; si tenía alguna coincidencia, no quedó contada. Por eso los números de abajo son el <strong>mínimo real</strong> — pueden ser más.'
           ],
           [
-            'Fotos huérfanas en el índice',
+            'Coincidencias contra firmas huérfanas',
             n(stats.dangling_face_matches),
-            'Caras de personas ya borradas de la base que siguen en el índice facial. Hay que limpiarlas (#71).'
+            'Golpes contra la firma facial de una persona ya borrada de la base, que sigue en el índice (#71). Si una misma firma huérfana golpea más de una vez, cuenta cada vez — puede haber menos firmas distintas por limpiar que este número.'
           ]
         ]
       ) +
@@ -340,8 +340,8 @@ function buildReportText(generatedAt, counts, stats, matcherStatus, activity, fu
       `Personas buscadas con foto utilizable: ${n(stats.reported_people_indexed)}`,
       `Con al menos una coincidencia: ${n(stats.reported_people_matched)}`,
       `Coincidencias en total: ${n(stats.report_matches_total)}`,
-      `Fotos que no se pudieron comparar: ${n(stats.failed)}`,
-      `Coincidencias contra firmas huérfanas: ${n(stats.dangling_face_matches)}`,
+      `Fotos que no se pudieron comparar (de quien busca, no de las personas buscadas): ${n(stats.failed)}`,
+      `Coincidencias contra firmas huérfanas (golpes, no firmas distintas): ${n(stats.dangling_face_matches)}`,
       ''
     );
   }
