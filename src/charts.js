@@ -5,24 +5,26 @@
 // que cargue igual de rápido que cualquier otra página de encontrados.co y
 // para que no haya nada que romperse en un navegador viejo a las 3am.
 //
-// Paleta y specs de marca tomados del skill de dataviz del operador
-// (categórico slot 1 = azul para una sola serie; paleta de estado —
-// good/warning/critical— para enviado/fallido/rechazado, porque eso es
-// exactamente lo que son: estados de un intento de envío, no identidades
-// arbitrarias). Barras ≤24px, extremo redondeado de 4px, gap de 2px entre
-// segmentos, grid en gris recesivo, sin doble eje.
+// Specs de marca (barras ≤24px, extremo redondeado de 4px, gap de 2px entre
+// segmentos, grid recesivo, sin doble eje) del skill de dataviz del
+// operador — pero la PALETA es la que ya usa este sitio, no la genérica del
+// skill: encontrados.co ya tiene tres colores de estado en public/styles.css
+// (.badge.ok/.warn/.bad, los mismos que pintan "a salvo"/"herido"/
+// "desaparecido" en cada ficha), así que enviado/fallido/rechazado los
+// reusan tal cual — respeta la identidad visual existente en vez de traer
+// un vocabulario de color nuevo para una sección más del sitio.
 const { esc } = require('./html');
 
 const COLOR = {
-  primary: '#2a78d6', // categórico slot 1 — una sola serie (coincidencias)
-  good: '#0ca30c', // enviado
-  warning: '#fab219', // rechazado
-  critical: '#d03b3b', // fallido
-  grid: '#e2e2e0',
-  textPrimary: '#0b0b0b',
-  textSecondary: '#52514e',
-  unavailableFill: '#eeeeec',
-  unavailableStroke: '#c9c9c5'
+  primary: '#2b6cb0', // var(--accent) del sitio — una sola serie (coincidencias)
+  good: '#4a7c59', // .badge.ok — enviado
+  warning: '#c8863c', // .badge.warn — rechazado
+  critical: '#c0392b', // .badge.bad — fallido
+  grid: '#e8e4da', // var(--border)
+  textPrimary: '#1f1e1d', // var(--ink)
+  textSecondary: '#73726c', // var(--muted)
+  unavailableFill: '#f4f1ea', // var(--paper)
+  unavailableStroke: '#d8d3c6' // var(--border-strong)
 };
 
 const RESULT_COLOR = { enviado: COLOR.good, rechazado: COLOR.warning, fallido: COLOR.critical };

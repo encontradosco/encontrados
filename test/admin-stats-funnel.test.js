@@ -69,13 +69,15 @@ test('GET /admin/stats renderiza rápido y bien SIN invocar el recompute caro', 
   assert.ok(elapsedMs < 2000, `la página debía responder rápido (fue ${elapsedMs}ms) — si tardó, algo la sigue bloqueando en el recompute`);
 
   const html = await res.text();
-  // La sección cara queda diferida: el placeholder y el script están, pero
-  // NINGÚN número del embudo (que solo existiría si se hubiera llamado al
-  // matcher) aparece en este primer render.
-  assert.match(html, /id="funnel-async"/);
+  // La sección cara queda diferida: los DOS placeholders (la card de salud
+  // arriba, el detalle del embudo más abajo) y el script están, pero NINGÚN
+  // número del embudo (que solo existiría si se hubiera llamado al matcher)
+  // aparece en este primer render.
+  assert.match(html, /id="salud-card-slot"/);
+  assert.match(html, /id="funnel-details-slot"/);
   assert.match(html, /Calculando el embudo/);
   assert.match(html, /fetch\('\/admin\/stats\/funnel'\)/);
-  assert.doesNotMatch(html, /¿Podemos confiar en los números de abajo\?/, 'el embudo no debe venir en el HTML inicial — se pide aparte');
+  assert.doesNotMatch(html, /El embudo \(acumulado\)<\/h2><svg/, 'el embudo no debe venir renderizado en el HTML inicial — se pide aparte');
 });
 
 test('GET /admin/stats/funnel calcula el embudo de verdad y lo devuelve como fragmento', async (t) => {
@@ -98,8 +100,10 @@ test('GET /admin/stats/funnel calcula el embudo de verdad y lo devuelve como fra
   assert.equal(res.status, 200);
   assert.equal(res.headers.get('x-robots-tag'), 'noindex, nofollow');
   const html = await res.text();
-  assert.match(html, /¿Podemos confiar en los números de abajo\?/);
-  assert.match(html, /Coincidencias \(el embudo, acumulado\)/);
+  assert.match(html, /id="salud-card-slot"/);
+  assert.match(html, /id="funnel-details-fragment"/);
+  assert.match(html, /El embudo \(acumulado\)/);
+  assert.match(html, /Señal de confiabilidad/);
 });
 
 test('si el recompute revienta, /admin/stats/funnel lo dice con claridad — nunca un cero que parezca un dato real', async (t) => {
