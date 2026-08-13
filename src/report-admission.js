@@ -11,11 +11,11 @@
 //      a different person than the name lookup returned; from here on the owner
 //      is the one thing every downstream step must agree on. This used to be
 //      done only in the API route even though it is a system invariant.
-//   5. Run duplicate detection BEFORE indexing this report's own photos —
-//      afterwards a freshly-indexed photo would match itself.
-//   6. Index the report photos.
-//   7. Notify eligible subscribers, skipping the reporter's own addresses so
+//   5. Index the report photos.
+//   6. Notify eligible subscribers, skipping the reporter's own addresses so
 //      nobody gets their own report echoed back.
+//   7. Run duplicate detection LAST, once the report is durable, indexed and
+//      notified — see the note on `checkDuplicates` below for why.
 //   8. Return a structured result the caller renders as HTML, JSON or WhatsApp
 //      text. No transport detail leaks in here.
 //
@@ -49,6 +49,12 @@ function createReportAdmission({
   // photos: array of { bytes, contentType } already decoded by the caller. The
   // service never touches multipart, base64 or WhatsApp media APIs — that is
   // transport detail the handler owns.
+  //
+  // checkDuplicates / includePriorPhoto: each is its own Rekognition call or
+  // extra store read, and only the web form and (for duplicates) the JSON API
+  // render anything from them — the WhatsApp bot's reply never mentions a
+  // possible duplicate. Both default to off so a caller that won't use the
+  // result doesn't pay for it; web.js and api.js opt in explicitly.
   async function admitReport({
     name,
     status,
@@ -61,7 +67,9 @@ function createReportAdmission({
     contact = null,
     externalId,
     photos = [],
-    skipAddresses = []
+    skipAddresses = [],
+    checkDuplicates = false,
+    includePriorPhoto = false
   }) {
     // ---- 1. Validate and normalize -------------------------------------
     const errors = [];
@@ -82,10 +90,12 @@ function createReportAdmission({
     // Read the record's existing report photo BEFORE this report's own photos
     // are stored — afterwards there is no way to tell which face was already
     // there and which one just arrived. That pre-existing face is the whole
-    // point of the "possible duplicate" comparison the web page draws.
-    const priorPhoto = created
-      ? null
-      : (await store.reportPhotoByPerson([person.id])).get(person.id) || null;
+    // point of the "possible duplicate" comparison the web page draws, which
+    // is the only caller that asks for it.
+    const priorPhoto =
+      includePriorPhoto && !created
+        ? (await store.reportPhotoByPerson([person.id])).get(person.id) || null
+        : null;
 
     // ---- 3. Add / upsert the update ------------------------------------
     const update = await store.addUpdate(person.id, {
@@ -117,17 +127,7 @@ function createReportAdmission({
     // findOrCreatePerson inserted a fresh row for the drifted name.
     const mergedIntoExisting = !created || String(owner.id) !== String(person.id);
 
-    // ---- 5. Duplicate detection BEFORE indexing this report's photos ----
-    // Advisory only and NEVER throws (see src/duplicates.js). Running it before
-    // indexing keeps a freshly-stored photo from matching itself; excludePersonId
-    // drops every hit on this record as a second line of defense.
-    const candidates = await findDuplicateCandidates(store, matcher, {
-      name: cleanName,
-      photos: usablePhotos.map((p) => p.bytes),
-      excludePersonId: owner.id
-    });
-
-    // ---- 6. Index the report photos ------------------------------------
+    // ---- 5. Index the report photos ------------------------------------
     // processPhoto never throws for a matcher/Rekognition failure — it stores
     // the photo and marks it unreadable at worst, so the report stays intact.
     const storedPhotos = [];
@@ -144,7 +144,7 @@ function createReportAdmission({
     }
     const unreadablePhotos = storedPhotos.filter((p) => p && p.unreadable).length;
 
-    // ---- 7. Notify eligible subscribers --------------------------------
+    // ---- 6. Notify eligible subscribers --------------------------------
     // Skip the reporter's own addresses so they don't get their own report
     // echoed back. A notification failure must never break the report, so any
     // throw here is swallowed — the write above is already durable.
@@ -156,6 +156,24 @@ function createReportAdmission({
     } catch (e) {
       console.error('[report-admission] notificación falló:', e && e.message);
     }
+
+    // ---- 7. Duplicate detection LAST, once the report is durable -------
+    // Everything above is the family's data and a courtesy already delivered;
+    // this is a courtesy still pending. Running the face searches first meant
+    // a slow Rekognition call — or a serverless timeout inside it — could take
+    // the whole report down with it, or at least take photo indexing and
+    // subscriber notification down with it. Advisory only and NEVER throws
+    // (see src/duplicates.js). By the time this runs the photos are already
+    // indexed and would match themselves; excludePersonId drops every hit on
+    // this record, so self-matching is a non-issue, exactly as it was before
+    // this flow was unified (#87).
+    const candidates = checkDuplicates
+      ? await findDuplicateCandidates(store, matcher, {
+          name: cleanName,
+          photos: usablePhotos.map((p) => p.bytes),
+          excludePersonId: owner.id
+        })
+      : [];
 
     // ---- 8. Structured result ------------------------------------------
     return {

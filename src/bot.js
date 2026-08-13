@@ -177,6 +177,12 @@ async function handleInbound(store, { channel, from, text, photo, matcher = null
       photos: photo ? [photo] : [],
       skipAddresses: [from]
     });
+    // Unreachable today — parseMessage only reaches intent 'report' with a
+    // name (checked above) and a status straight from COMMANDS, always one of
+    // STATUSES — but the WhatsApp reply text assumes `result.person` exists,
+    // so a validation rule that ever diverges must get a message back instead
+    // of throwing mid-conversation.
+    if (!result.ok) return HELP;
     return [
       `✅ Registrado: *${result.person.full_name}* — ${STATUS_LABEL[parsed.status]}.`,
       result.personCreated ? null : 'Se agregó a los reportes existentes de esta persona.',

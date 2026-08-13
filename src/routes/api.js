@@ -148,8 +148,17 @@ function apiRoutes(store, matcher) {
         reporter,
         contact,
         externalId,
-        photos: photo ? [photo] : []
+        photos: photo ? [photo] : [],
+        checkDuplicates: true
       });
+      // Unreachable today — the checks above already cover exactly what the
+      // service validates — but the service is the single source of truth for
+      // its own contract: a caller that stops prevalidating, or a validation
+      // rule that changes only on one side, must get a 400 with `errors` here
+      // instead of a TypeError on `result.person`.
+      if (!result.ok) {
+        return res.status(400).json({ error: result.errors.join(' ') });
+      }
 
       res.status(201).json({
         person_id: result.person.id,

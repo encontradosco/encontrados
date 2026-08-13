@@ -7,7 +7,9 @@
 //   - Subscriber notification is consistent across web, API and WhatsApp.
 //   - The reporter's own contact is skipped (self-echo) for email and WhatsApp.
 //   - external_id upsert resolves the real owner before notifying.
-//   - The duplicate check runs before a report photo is indexed on every path.
+//   - A face duplicate never self-matches, no matter when it is indexed.
+//   - A structured validation failure from the service reaches the caller as
+//     a 400, not a TypeError on `result.person` turned into a 500.
 //
 // Runs against the real Express app + in-memory SQLite, with fake SendGrid /
 // WhatsApp / matcher. NOTIFY_MODE=direct so a verified subscriber's alert
@@ -227,9 +229,9 @@ test('external_id upsert notifies the REAL owner, not the drifted name lookup', 
   assert.deepEqual(emailTos(sg), ['sigue-al-owner@ejemplo.com'], 'el aviso va al suscriptor del owner real');
 });
 
-// ------------------------------- duplicate check before indexing (API + web)
+// ------------------------ duplicate check self-match protection (API + web)
 
-test('a face duplicate surfaces without a photo matching itself (dup check before indexing)', async (t) => {
+test('a face duplicate surfaces without a photo matching itself (excludePersonId, regardless of order)', async (t) => {
   const sg = await fakeSendgrid();
   const matcher = fakeMatcher();
   const app = await startApp(matcher);
@@ -252,9 +254,11 @@ test('a face duplicate surfaces without a photo matching itself (dup check befor
   });
 
   // A SECOND person, different name, same face — the API should flag a face
-  // duplicate. If the dup check ran AFTER indexing, this report's own freshly
-  // indexed photo would match itself; excludePersonId + before-index ordering
-  // means the only face hit is the OTHER person.
+  // duplicate. The duplicate check now runs LAST (after this report's own
+  // photo is already indexed, see src/report-admission.js), so without
+  // excludePersonId this report's own freshly indexed photo would match
+  // itself; excludePersonId drops every hit on the just-created person, so
+  // the only face hit that survives is the OTHER (first) person.
   const res = await fetch(`${app.base}/api/updates`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -270,4 +274,29 @@ test('a face duplicate surfaces without a photo matching itself (dup check befor
   assert.equal(faceHits[0].full_name, 'Primera Persona Reportada');
   // The candidate is never the person just created (no self-match).
   assert.notEqual(String(faceHits[0].person_id), String(body.person_id));
+});
+
+// ------------------------- result.ok propagates as 400, not a 500 (API)
+//
+// api.js prevalidates `name`/`status` with the exact same conditions the
+// service validates, so under normal input the two paths never diverge. A
+// non-string `name` is the gap: `!name || !String(name).trim()` treats
+// `name: 42` as present (`String(42).trim()` is truthy), but the service's
+// own check (`typeof name === 'string'`) rejects it — the one case that
+// reaches `admitReport` with input the route's check let through and the
+// service's check does not. Before this fix that meant a TypeError on
+// `result.person.id` (turned into a 500 by the generic error handler); now
+// api.js checks `result.ok` and returns the structured 400 the service built.
+test('a non-string name reaches the service and comes back as 400 with errors, not a 500', async (t) => {
+  const app = await startApp(nullMatcher);
+  t.after(() => app.server.close());
+
+  const res = await fetch(`${app.base}/api/updates`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 42, status: 'safe' })
+  });
+  assert.equal(res.status, 400);
+  const body = await res.json();
+  assert.match(body.error, /nombre/i);
 });

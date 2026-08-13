@@ -126,13 +126,71 @@ test('web, API and WhatsApp shaped inputs produce the same core report behavior'
     assert.equal(res.personCreated, true);
     assert.equal(res.update.status, 'missing');
     assert.equal(res.update.person_id, res.person.id);
-    // Every entry point runs the SAME courtesy steps.
+    // Every entry point runs the SAME courtesy step. None of these inputs
+    // asked for the duplicate check, so it never runs — that decision is the
+    // caller's, not the source's (see the "no dead work" section below).
     assert.deepEqual(
       t.calls.map((c) => c.step),
-      ['dup', 'notify'],
+      ['notify'],
       `mismo flujo para source=${input.source}`
     );
   }
+});
+
+// ---------------------------------- no dead work: opt-in duplicate check ----
+//
+// The duplicate check is a Rekognition call per photo, and the prior-photo
+// read is an extra store query. Neither is free, and neither is used by every
+// caller: the WhatsApp reply never mentions a possible duplicate, and only
+// the web page renders the pre-existing photo for comparison. Both are
+// opt-in so a caller that won't render the result doesn't pay for it.
+
+test('checkDuplicates defaults to off — no Rekognition call for a caller that never asked (WhatsApp shape)', async () => {
+  const store = fakeStore();
+  const t = tracker();
+  const svc = buildService(store, t);
+  const res = await svc.admitReport({
+    name: 'Ana Gómez',
+    status: 'missing',
+    source: 'whatsapp',
+    photos: [{ bytes: Buffer.from('foto'), contentType: 'image/jpeg' }]
+  });
+  assert.equal(res.ok, true);
+  assert.deepEqual(res.candidates, []);
+  assert.equal(res.warning, null);
+  assert.ok(!t.calls.some((c) => c.step === 'dup'), 'sin checkDuplicates no debe correr la búsqueda facial de duplicados');
+});
+
+test('includePriorPhoto defaults to off — no extra store read for a caller that never uses it (API shape)', async () => {
+  const existing = { id: 42, full_name: 'Existente Persona' };
+  const priorPhoto = { id: 900, person_id: 42, kind: 'report' };
+  const store = fakeStore({ existingPerson: existing, existingReportPhoto: priorPhoto });
+  const t = tracker();
+  const svc = buildService(store, t);
+  const res = await svc.admitReport({ name: 'Existente Persona', status: 'safe', source: 'api' });
+  assert.equal(res.ok, true);
+  assert.equal(res.priorPhoto, null);
+  assert.ok(
+    !store.events.some((e) => e.op === 'reportPhotoByPerson'),
+    'sin includePriorPhoto no debe leerse la foto previa de la persona'
+  );
+});
+
+test('checkDuplicates + includePriorPhoto opt-in runs both (web/API shape)', async () => {
+  const existing = { id: 43, full_name: 'Existente Persona Dos' };
+  const priorPhoto = { id: 901, person_id: 43, kind: 'report' };
+  const store = fakeStore({ existingPerson: existing, existingReportPhoto: priorPhoto });
+  const t = tracker();
+  const svc = buildService(store, t);
+  const res = await svc.admitReport({
+    name: 'Existente Persona Dos',
+    status: 'safe',
+    source: 'web',
+    checkDuplicates: true,
+    includePriorPhoto: true
+  });
+  assert.equal(res.priorPhoto.id, priorPhoto.id);
+  assert.ok(t.calls.some((c) => c.step === 'dup'), 'con checkDuplicates la búsqueda de duplicados sí debe correr');
 });
 
 test('an unknown/absent source is normalized to api without rejecting the report', async () => {
@@ -163,9 +221,14 @@ test('subscriber notification is consistent — always fires with the reporter s
   assert.deepEqual(notify.opts.skipAddresses, ['3001112222', 'ana@ejemplo.com']);
 });
 
-// -------------------------------------------- ordering: dup check before index
+// ------------------------------ ordering: dup check LAST, once report is durable
+//
+// A slow Rekognition call — or a serverless timeout inside it — must never
+// take photo indexing or subscriber notification down with it: those are the
+// report; the duplicate check is a courtesy on top. See the comment on step 7
+// of src/report-admission.js.
 
-test('duplicate detection runs BEFORE a newly uploaded report photo is indexed', async () => {
+test('duplicate detection runs AFTER photo indexing and subscriber notification, not before', async () => {
   const store = fakeStore();
   const t = tracker();
   const svc = buildService(store, t);
@@ -173,16 +236,19 @@ test('duplicate detection runs BEFORE a newly uploaded report photo is indexed',
     name: 'Ana Gómez',
     status: 'missing',
     source: 'web',
-    photos: [{ bytes: Buffer.from('foto'), contentType: 'image/jpeg' }]
+    photos: [{ bytes: Buffer.from('foto'), contentType: 'image/jpeg' }],
+    checkDuplicates: true
   });
   const steps = t.calls.map((c) => c.step);
   const dupAt = steps.indexOf('dup');
   const photoAt = steps.indexOf('photo');
-  assert.ok(dupAt !== -1 && photoAt !== -1);
-  assert.ok(dupAt < photoAt, 'la detección de duplicados debe correr antes de indexar la foto');
+  const notifyAt = steps.indexOf('notify');
+  assert.ok(dupAt !== -1 && photoAt !== -1 && notifyAt !== -1);
+  assert.ok(dupAt > photoAt, 'la detección de duplicados debe correr después de indexar la foto');
+  assert.ok(dupAt > notifyAt, 'la detección de duplicados debe correr después de notificar');
 });
 
-test('photos without bytes are ignored — no indexing, dup check runs with no photos', async () => {
+test('photos without bytes are ignored — no indexing, dup check (when requested) runs with no photos', async () => {
   const store = fakeStore();
   const t = tracker();
   const svc = buildService(store, t);
@@ -190,7 +256,8 @@ test('photos without bytes are ignored — no indexing, dup check runs with no p
     name: 'Ana Gómez',
     status: 'missing',
     source: 'web',
-    photos: [{ bytes: Buffer.alloc(0), contentType: 'image/jpeg' }, null]
+    photos: [{ bytes: Buffer.alloc(0), contentType: 'image/jpeg' }, null],
+    checkDuplicates: true
   });
   assert.equal(res.photos.length, 0);
   assert.ok(!t.calls.some((c) => c.step === 'photo'));
@@ -217,7 +284,8 @@ test('external_id upsert resolves the ACTUAL owner before notify and response', 
     name: 'Nombre Que Derivó',
     status: 'safe',
     source: 'api',
-    externalId: 'ext-42'
+    externalId: 'ext-42',
+    checkDuplicates: true
   });
   // Owner in the result and in the notification is the real owner, not the
   // drifted name lookup.
@@ -264,7 +332,8 @@ test('the prior report photo is captured before this report stores its own', asy
     name: 'Existente Persona',
     status: 'missing',
     source: 'web',
-    photos: [{ bytes: Buffer.from('foto'), contentType: 'image/jpeg' }]
+    photos: [{ bytes: Buffer.from('foto'), contentType: 'image/jpeg' }],
+    includePriorPhoto: true
   });
   assert.equal(res.priorPhoto.id, priorPhoto.id);
   // The prior-photo read happened before addUpdate / photo indexing.
@@ -321,7 +390,12 @@ test('a matcher/duplicate failure that returns nothing yields no candidates and 
   const store = fakeStore();
   const t = tracker();
   const svc = buildService(store, t, { findDuplicateCandidates: t.findDuplicateCandidates([]) });
-  const res = await svc.admitReport({ name: 'Persona Nueva', status: 'missing', source: 'api' });
+  const res = await svc.admitReport({
+    name: 'Persona Nueva',
+    status: 'missing',
+    source: 'api',
+    checkDuplicates: true
+  });
   assert.deepEqual(res.candidates, []);
   assert.equal(res.warning, null);
 });
@@ -334,7 +408,12 @@ test('face and name duplicate candidates flow through into the structured result
     { person: { id: 12, full_name: 'Persona Parecida' }, reason: 'name', similarity: 61 }
   ];
   const svc = buildService(store, t, { findDuplicateCandidates: t.findDuplicateCandidates(candidates) });
-  const res = await svc.admitReport({ name: 'Persona Nueva', status: 'missing', source: 'api' });
+  const res = await svc.admitReport({
+    name: 'Persona Nueva',
+    status: 'missing',
+    source: 'api',
+    checkDuplicates: true
+  });
   assert.equal(res.candidates.length, 2);
   assert.equal(res.warning, 'aviso de duplicado');
 });
