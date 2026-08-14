@@ -38,7 +38,7 @@ test('#65: cada card del listado trae el CTA de rescatista y el enlace a la fich
   assert.match(home, /🔍 La tengo conmigo/);
   assert.doesNotMatch(home, /¿La tienes contigo\?/);
   assert.match(home, new RegExp(`class="card-link" href="/person/${created.person_id}"`));
-  assert.match(home, /aria-label="Tengo conmigo a Carmen Julia Ríos:/);
+  assert.match(home, /aria-label="La tengo conmigo: a Carmen Julia Ríos —/);
 });
 
 // #65: on a long ficha the action used to live below the whole timeline;
@@ -57,7 +57,7 @@ test('#65: la ficha lleva el CTA en un contenedor sticky, con los dos caminos', 
   assert.match(page, /<a class="big-btn report" href="\/rescate">🔍 La tengo conmigo<\/a>/);
   assert.match(
     page,
-    /<a class="big-btn secondary" href="\/report\?name=Jorge%20Iv%C3%A1n%20Mora">🙋 Yo la estoy buscando<\/a>/,
+    /<a class="big-btn secondary" href="\/report\?name=Jorge%20Iv%C3%A1n%20Mora&desde=\d+">🙋 Yo la estoy buscando — dejar mi contacto<\/a>/,
     'quien la busca tiene su propio botón, del mismo tamaño y con el nombre ya puesto'
   );
 });

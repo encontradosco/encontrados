@@ -290,7 +290,7 @@ function matchContactBlock(m) {
       </form>
     </div>
   </details>
-  <a class="big-btn secondary" href="/report?name=${encodeURIComponent(m.person.full_name)}">🙋 No — yo soy quien la está buscando</a>
+  <a class="big-btn secondary" href="/report?name=${encodeURIComponent(m.person.full_name)}&desde=${m.person.id}">🙋 No — yo soy quien la está buscando</a>
   <p class="subtle">Si la estás buscando, agrega tu teléfono al reporte: así el rescatista que la encuentre te llama directo, sin que nadie más tenga que intermediar.</p>
 </div>`;
 }
@@ -345,6 +345,26 @@ function readDuplicateFinding(req, personId) {
 // deliberately absent: those are irreversible mutations of public records and
 // there is no way to prove, from a cookie, that the caller is entitled to make
 // them. That belongs behind a real authorization, not here.
+// Cuando alguien llega a /report desde la ficha de una persona concreta —el
+// botón «Yo la estoy buscando», o el «No, yo soy quien la está buscando» de una
+// coincidencia— el nombre viene precargado y el destino es, a propósito, ESE
+// registro. La cadena es determinista: el nombre exacto → `exactByNormalized`
+// encuentra siempre a la misma persona → `created: false` → salta la alarma de
+// nombre duplicado. Es decir: una madre que reporta a su hijo desde su ficha
+// leería, el 100% de las veces, que le escriba al mantenedor para separar dos
+// reportes que en realidad son uno, y que un rescatista podría ver los datos de
+// otra familia. La alarma es falsa por construcción y hay que apagarla.
+//
+// Viaja el ID y no un simple booleano porque lo que hay que comprobar es que
+// aterrizó en la MISMA persona de la que salió: si `findOrCreatePerson` resolvió
+// otro registro (dos personas con el mismo nombre), la advertencia vuelve a ser
+// verdadera y tiene que salir.
+function fichaOriginField(raw) {
+  const id = Number(raw);
+  if (!Number.isInteger(id) || id <= 0) return '';
+  return `<input type="hidden" name="desde_ficha" value="${id}">`;
+}
+
 function duplicateNotice({ person, sameName, priorPhoto, candidates }) {
   // The question only makes sense next to a face — ask on the SAME condition
   // `facePlate` draws on, from the one place that owns it, instead of a local
@@ -587,7 +607,7 @@ function webRoutes(store, matcher) {
   <div class="person-info">
     <h3><a class="card-link" href="/person/${p.id}">${esc(p.full_name)}</a></h3>
     <p class="meta">Último reporte: ${timeTag(p.last_report)}</p>
-    <a class="card-cta" href="/rescate" aria-label="Tengo conmigo a ${esc(p.full_name)}: mira quién la busca">🔍 La tengo conmigo</a>
+    <a class="card-cta" href="/rescate" aria-label="La tengo conmigo: a ${esc(p.full_name)} — mira quién la busca">🔍 La tengo conmigo</a>
   </div>
   ${facePlate(photos.get(p.id), p.full_name)}
 </article>`;
@@ -610,7 +630,13 @@ function webRoutes(store, matcher) {
 </section>
 <section class="action-group">
   <h2>¿Estás buscando a alguien?</h2>
-  <a class="big-btn secondary" href="/report">
+  <!-- Relleno sólido, no contorno: acá NO compite con el botón del rescatista
+       —está en su propia sección, con su propio encabezado— así que ponerlo en
+       contorno solo lo hacía menos visible que en producción hoy, justo el
+       camino que estos cambios existen para volver más visible. El contorno se
+       reserva para donde los dos botones sí comparten el ojo (la pareja de la
+       ficha), que es donde su trabajo es diferenciar. -->
+  <a class="big-btn search" href="/report">
     <span class="btn-title">📢 Reporta a la persona que buscas</span>
     <span class="btn-sub">Deja su foto y tu teléfono: quien la encuentre te llama directo</span>
   </a>
@@ -1041,6 +1067,7 @@ ${body}
   ${REPORT_PRIVACY}
   <label class="field-label"><span>Nombre completo de la persona *</span>
     <input name="name" required value="${esc(req.query.name || '')}" placeholder="Ej. María Fernanda López" autocomplete="off"></label>
+  ${fichaOriginField(req.query.desde)}
   <label class="field-label"><span>Dónde crees que estaba *</span>
     <span id="location-field">
       <input name="location" id="location" list="location-options" autocomplete="off" placeholder="Ej. Barrio San José, Armenia" required>
@@ -1209,10 +1236,18 @@ ${LOCATION_SCRIPT}`,
       // link is shareable and a cookie is not, and this warning asserts that
       // two specific missing people may be the same person — a claim only the
       // server is entitled to make, and only for the visitor who just reported.
-      if (candidates.length || !created) {
+      // Ver fichaOriginField: si este reporte salió de la ficha de esta misma
+      // persona, sumarse a su registro es el objetivo del botón, no un hallazgo
+      // — la alarma de nombre duplicado sería falsa el 100% de las veces. Solo
+      // se apaga esa: los `candidates` por ROSTRO son información nueva y real
+      // (un reporte con otro nombre y la misma cara), y siguen saliendo.
+      const desdeFicha = String(req.body.desde_ficha || '').trim();
+      const sameNameIsExpected = !created && desdeFicha && desdeFicha === String(person.id);
+      const sameName = !created && !sameNameIsExpected;
+      if (candidates.length || sameName) {
         rememberDuplicateFinding(res, {
           p: person.id,
-          n: created ? 0 : 1,
+          n: sameName ? 1 : 0,
           f: priorPhoto ? priorPhoto.id : 0,
           c: candidates.map((c) => ({ i: c.person.id, r: c.reason, s: c.similarity }))
         });
@@ -1313,7 +1348,7 @@ ${updates.length ? updates.map((u) => updateCard(u)).join('') : '<p class="subtl
 <p class="subtle">Los datos de contacto de quien reporta solo se muestran a un rescatista cuando el rostro coincide.</p>
 <div class="sticky-cta cta-par">
   <a class="big-btn report" href="/rescate">🔍 La tengo conmigo</a>
-  <a class="big-btn secondary" href="/report?name=${encodeURIComponent(person.full_name)}">🙋 Yo la estoy buscando</a>
+  <a class="big-btn secondary" href="/report?name=${encodeURIComponent(person.full_name)}&desde=${person.id}">🙋 Yo la estoy buscando — dejar mi contacto</a>
 </div>`,
           {
             fullTitle: `${person.full_name} — reportada como desaparecida · encontrados.co`,

@@ -386,6 +386,70 @@ test('a report filed under an existing name is appended, and the reporter is tol
   assert.match(page, /a@torrenegra\.com/);
 });
 
+// El botón «Yo la estoy buscando» de la ficha lleva a /report con el nombre YA
+// precargado, así que sumarse a ese registro es el objetivo del botón — no un
+// hallazgo. Sin esta supresión la cadena es determinista y la alarma salía el
+// 100% de las veces: una madre que reporta a su hijo desde su ficha leía que le
+// escribiera al mantenedor para separar dos reportes que son uno, y que un
+// rescatista podría ver los datos de otra familia.
+test('reportar desde la ficha de esa misma persona no dispara la alarma de nombre duplicado', async (t) => {
+  const { server, base } = await startApp();
+  t.after(() => server.close());
+
+  const first = await post(base, reportForm({ name: 'Pedro Pablo Ramírez' }));
+  const personId = first.headers.get('location').match(/\/person\/(\d+)/)[1];
+
+  // Exactamente lo que manda el botón de la ficha: mismo nombre + de dónde salió.
+  const fd = await reportForm({ name: 'Pedro Pablo Ramírez', contact: 'otra@familia.com' });
+  fd.set('desde_ficha', personId);
+  const second = await post(base, fd);
+
+  assert.equal(second.headers.get('location').split('?')[0], `/person/${personId}`, 'sigue siendo el mismo registro');
+  const page = await (await follow(base, second)).text();
+  assert.doesNotMatch(page, /Ya había un reporte con este mismo nombre/);
+  assert.doesNotMatch(page, /Puede que esta persona ya estuviera reportada/);
+});
+
+// La otra mitad, y la que no se puede perder al apagar la alarma de nombre: un
+// ROSTRO que coincide con un reporte hecho bajo OTRO nombre es información nueva
+// y real —dos fichas para una sola persona—, y eso sigue saliendo aunque el
+// reporte venga de la ficha.
+test('reportar desde la ficha sigue mostrando una coincidencia por rostro con otro nombre', async (t) => {
+  const { server, base } = await startApp(fakeMatcher());
+  t.after(() => server.close());
+
+  // Una ficha con otro nombre y la misma cara: el candidato por rostro.
+  await post(base, reportForm({ name: 'Ana Sofía Molina' }));
+
+  const first = await post(base, reportForm({ name: 'Pedro Pablo Ramírez' }));
+  const personId = first.headers.get('location').match(/\/person\/(\d+)/)[1];
+
+  const fd = await reportForm({ name: 'Pedro Pablo Ramírez', contact: 'otra@familia.com' });
+  fd.set('desde_ficha', personId);
+  const page = await (await follow(base, await post(base, fd))).text();
+
+  assert.doesNotMatch(page, /Ya había un reporte con este mismo nombre/, 'la alarma falsa sigue apagada');
+  assert.match(page, /Puede que esta persona ya estuviera reportada/, 'pero el hallazgo real sí se anuncia');
+  assert.match(page, /Ana Sofía Molina/);
+  assert.match(page, /coincide en un/);
+});
+
+// El candado de la supresión: viaja el ID, no un booleano. Si el reporte
+// aterrizó en OTRO registro que el de la ficha de la que salió, la advertencia
+// vuelve a ser verdadera y tiene que salir.
+test('un desde_ficha que no corresponde a la persona resuelta no apaga la alarma', async (t) => {
+  const { server, base } = await startApp();
+  t.after(() => server.close());
+
+  await post(base, reportForm({ name: 'Pedro Pablo Ramírez' }));
+  const fd = await reportForm({ name: 'Pedro Pablo Ramírez', contact: 'otra@familia.com' });
+  fd.set('desde_ficha', '999999');
+  const second = await post(base, fd);
+
+  const page = await (await follow(base, second)).text();
+  assert.match(page, /Ya había un reporte con este mismo nombre/);
+});
+
 // Regression: `reportPhotoByPerson` orders derivative-bearing photos first, so
 // the photo the reporter JUST uploaded could win and be shown back to them as
 // "the report that already existed" — guaranteeing a wrong answer.
