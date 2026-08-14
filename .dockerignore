@@ -1,0 +1,12 @@
+# Fuera de la imagen: se instalan/compilan adentro o no aportan al build.
+node_modules
+data
+.git
+.github
+.vercel
+*.db
+*.db-wal
+*.db-shm
+.env
+.env*
+npm-debug.log*

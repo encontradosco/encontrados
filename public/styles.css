@@ -471,6 +471,12 @@ button:disabled { opacity: 0.55; cursor: progress; }
 .search-row input { flex: 1; }
 .search-row button { width: auto; }
 
+/* Rescuer photo field: one native input for no-JS, two buttons when JS runs. */
+.photo-field-label { font-weight: 400; font-size: 0.85rem; color: var(--muted); display: block; margin-bottom: 0.25rem; }
+.photo-buttons-row { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.photo-buttons-row button { flex: 1 1 45%; }
+[data-photo-picked] { margin: 0.35rem 0 0; }
+
 .notice {
   background: #eef3ee;
   border: 1px solid #cfdfd2;
