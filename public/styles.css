@@ -195,6 +195,17 @@ h1.compact .subtle { font-family: var(--font-sans); font-weight: 400; font-size:
 .aviso-si > summary::-webkit-details-marker { display: none; }
 .aviso-si > summary:focus-visible { outline: 3px solid var(--accent-dark); outline-offset: 2px; }
 .aviso-si[open] > summary { border-radius: 12px 12px 0 0; }
+/* Un .big-btn dentro de un recuadro de aviso queda pegado al párrafo de arriba:
+   ni el botón ni el párrafo traían margen porque hasta acá nunca convivieron —
+   el botón siempre había vivido suelto en la página. */
+.notice > .big-btn,
+.error > .big-btn,
+.aviso-si-cuerpo > .big-btn { margin-top: 0.7rem; }
+/* Y la pregunta que abre un recuadro no necesita el margen de arriba: el
+   padding del recuadro ya puso ese aire. */
+.notice > .aviso-pregunta:first-child,
+.error > .aviso-pregunta:first-child { margin-top: 0; }
+
 .aviso-si-cuerpo {
   border: 2px solid var(--accent);
   border-top: none;
