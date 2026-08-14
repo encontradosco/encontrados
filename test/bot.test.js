@@ -21,6 +21,22 @@ test('parseMessage understands report with note and location', () => {
 test('bare text without a command is not a search', () => {
   const p = parseMessage('Juan Pérez');
   assert.equal(p.intent, 'unrecognized');
+  // La otra mitad del arreglo: del fallback no sale ningún nombre. `name` era
+  // el campo que se interpolaba en la respuesta, y por ahí se ecoaba la frase
+  // de la persona de vuelta.
+  assert.ok(!p.name, 'del fallback no puede salir un nombre que alguien interpole');
+});
+
+// Las dos frases que motivaron volver estricto el SÍ (ver ANSWERS en src/bot.js).
+// Ya no confirman un rescate; acá se fija además que tampoco caen en la otra
+// trampa —convertirse en una búsqueda por su texto entero—, que es lo que las
+// dejaba volver como "No encontré reportes sobre «Claro que no es ella»".
+test('las frases que parecen un SÍ tampoco disparan una búsqueda (#118)', () => {
+  for (const frase of ['Claro que no es ella', 'Si la veo te aviso']) {
+    const p = parseMessage(frase);
+    assert.equal(p.intent, 'unrecognized', `"${frase}" no es un comando`);
+    assert.ok(!p.name, `"${frase}" no puede convertirse en un nombre a buscar`);
+  }
 });
 
 test('free text never touches the store and is not echoed back (#118)', async () => {
@@ -56,6 +72,59 @@ test('explicit BUSCAR keyword still searches (#118)', async () => {
   await handleInbound(store, { channel: 'whatsapp', from: '1', text: 'BIEN Persona Prueba Uno' });
   const r = await handleInbound(store, { channel: 'whatsapp', from: '2', text: 'BUSCAR Persona Prueba Uno' });
   assert.match(r, /Persona Prueba Uno/);
+});
+
+// BAJA TODO es la salida de emergencia del canal: es lo que se le ofrece a
+// alguien a quien le estamos escribiendo por error. Pasa por `parsed.name`, el
+// mismo campo que #118 vacía en el fallback, así que roza la condición tocada y
+// no tenía prueba propia en ningún archivo.
+test('BAJA TODO sigue cancelando todas las suscripciones (#118)', async () => {
+  const store = await freshStore();
+  const phone = '573004445566';
+  await handleInbound(store, { channel: 'whatsapp', from: phone, text: 'SUSCRIBIR Ana Prueba Uno' });
+  await handleInbound(store, { channel: 'whatsapp', from: phone, text: 'SUSCRIBIR Beto Prueba Dos' });
+  const r = await handleInbound(store, { channel: 'whatsapp', from: phone, text: 'BAJA TODO' });
+  assert.match(r, /cancelé tus 2 suscripciones/);
+  for (const nombre of ['ana prueba uno', 'beto prueba dos']) {
+    const [persona] = await store.searchPeople(nombre);
+    assert.equal((await store.getSubscriptions(persona.id)).length, 0);
+  }
+});
+
+// Una foto llega con su leyenda como texto. Si la leyenda no es un comando, la
+// foto no se indexa a espaldas de quien la mandó: se le contesta el acuse y se
+// le dice con qué palabra reenviarla. Que el rostro NO entre al índice es lo
+// que se está fijando acá — es una foto de una persona real que nadie pidió
+// guardar.
+test('una foto con leyenda de texto libre no indexa el rostro (#118)', async () => {
+  const store = await freshStore();
+  let tocado = false;
+  const matcher = {
+    enabled: true,
+    async indexFace() {
+      tocado = true;
+      return { faceId: 'cara-de-prueba', geometry: null };
+    },
+    async detectFace() {
+      tocado = true;
+      return null;
+    },
+    async searchByImage() {
+      tocado = true;
+      return [];
+    }
+  };
+  const leyenda = 'la vi cerca del albergue pero no sé cómo se llama';
+  const r = await handleInbound(store, {
+    channel: 'whatsapp',
+    from: '573007778899',
+    text: leyenda,
+    photo: { bytes: Buffer.from('jpeg-de-prueba'), contentType: 'image/jpeg' },
+    matcher
+  });
+  assert.equal(tocado, false, 'una leyenda sin comando no puede indexar un rostro');
+  assert.ok(!r.includes(leyenda), 'la respuesta no ecoa la leyenda');
+  assert.match(r, /BUSCAR/);
 });
 
 test('report then fuzzy find via WhatsApp flow', async () => {
