@@ -249,9 +249,15 @@ function matchContactBlock(m) {
   // El filtro va acá, al PINTAR, y no sobre el dato guardado: así cubre
   // también los avisos que ya estaban escritos, sin tocar la base y sin perder
   // el aviso, que es el insumo con el que un operador hace el relevo.
+  //
+  // `contactUpdate` lo resuelve identifyRescuedPerson (src/facematch.js) y NO
+  // es lo mismo que `m.update`: este último es el más reciente —que puede ser
+  // justamente un aviso—, y aquel es el más reciente cuyo contacto es de quien
+  // la busca. Mirar solo el último dejaba sin mostrar el teléfono que la
+  // familia sí había dejado en un reporte anterior.
   const fromAviso = m.update && m.update.source === 'rescate';
-  if (m.update && m.update.contact && !fromAviso) {
-    return `<p>📞 <strong>Contacta a quien la busca:</strong> ${esc(m.update.contact)}</p>`;
+  if (m.contactUpdate && m.contactUpdate.contact) {
+    return `<p>📞 <strong>Contacta a quien la busca:</strong> ${esc(m.contactUpdate.contact)}</p>`;
   }
   // La bifurcación de acá arriba existe porque medimos quién estaba llenando
   // este formulario: de 23 avisos recibidos, uno solo tenía forma de rescate.

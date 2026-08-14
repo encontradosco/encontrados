@@ -733,10 +733,25 @@ async function identifyRescuedPerson(
     const person = await store.getPerson(mp.person_id);
     if (!person) continue;
     const latest = await store.getLatestUpdate(mp.person_id);
+    // El teléfono al que hay que llamar puede NO estar en el último update, y
+    // eso no es un borde: un aviso de rescatista queda como el más reciente y
+    // su `contact` es de un tercero, así que filtrarlo (#120) tapaba también el
+    // contacto que la familia sí había dejado en un reporte anterior. Que una
+    // familia no reciba la llamada es exactamente el daño que esto existe para
+    // evitar, así que la pantalla busca el contacto más reciente que de verdad
+    // sea de quien la busca, no el del update más nuevo.
+    //
+    // `updatesForPerson` viene ordenado por fecha descendente en los dos
+    // adaptadores, así que el primero que cumple es el más reciente.
+    const contactUpdate =
+      latest && latest.contact && latest.source !== 'rescate'
+        ? latest
+        : (await store.getUpdates(mp.person_id)).find((u) => u.contact && u.source !== 'rescate') || null;
     found.push({
       person,
       similarity: bySimilarity.get(mp.face_id) || 0,
-      update: latest
+      update: latest,
+      contactUpdate
     });
   }
   found.sort((a, b) => b.similarity - a.similarity);
