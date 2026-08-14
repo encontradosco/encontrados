@@ -1,4 +1,4 @@
-# Los tres mantenedores core del proyecto.
-# Cualquiera de los tres satisface la revisión requerida en `main`.
+# Los cuatro mantenedores core del proyecto.
+# Cualquiera de los cuatro satisface la revisión requerida en `main`.
 # Una entrada solo cuenta si esa cuenta tiene acceso de escritura al repo.
-*  @torrenegra @cris-pappcorn @ni500
+*  @torrenegra @cris-pappcorn @ni500 @yesid-lopez
