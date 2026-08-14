@@ -784,10 +784,11 @@ test('una frase que empieza con "sí" o "claro" NO confirma nada, y la búsqueda
   const subs = await app.store.subscriptionsForAddress('whatsapp', '573112223344');
   assert.equal(subs.filter((s) => s.rescue_state === 'confirmed').length, 0);
 
-  // Y no se traga el mensaje: "Rosa Elvira Prueba" es una búsqueda y se contesta
-  // como tal, en vez de desaparecer dentro de una confirmación falsa.
+  // Y no se traga el mensaje: sigue de largo y se procesa como cualquier otro.
+  // Desde #118 un texto sin comando ya no es una búsqueda implícita, así que
+  // la búsqueda se pide con su palabra clave y se contesta como tal.
   wa.received.length = 0;
-  await inbound(app.base, { from: '573112223344', text: 'Rosa Elvira Prueba' });
+  await inbound(app.base, { from: '573112223344', text: 'BUSCAR Rosa Elvira Prueba' });
   assert.match(todoWhatsApp(wa), /Rosa Elvira Prueba/, 'la búsqueda que el usuario pidió corre');
 });
 
