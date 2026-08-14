@@ -55,9 +55,25 @@ function parseMessage(text) {
       };
     }
   }
-  // No keyword: treat the whole message as a lookup by name.
-  return { intent: 'find', name: raw, note: '', location: '' };
+  // Sin comando reconocido: no se asume nada (#118). Antes esto era una
+  // búsqueda por nombre con el mensaje entero, y una frase en lenguaje
+  // natural ("la vi en el albergue pero no sé quién la busca") se convertía
+  // en "No encontré reportes sobre <su frase>" — la peor respuesta posible
+  // para alguien que está al lado de una persona rescatada. Un texto libre
+  // no dispara ninguna acción sobre datos; buscar exige BUSCAR.
+  return { intent: 'unrecognized' };
 }
+
+// Acuse fijo para un mensaje que no es un comando (#118). No repite la frase
+// de la persona (ecoarla sonaba a error suyo) y no promete cosas que este
+// cambio no hace: la bitácora y el escalamiento a una persona son #119.
+const UNRECOGNIZED_REPLY = [
+  'Recibí tu mensaje, pero no lo entendí como un comando, así que no hice ninguna búsqueda ni cambié ningún dato.',
+  '',
+  '• Si buscas a alguien: BUSCAR <nombre>',
+  '• Para ver todos los comandos: AYUDA',
+  '• Para dejar de recibir mensajes: BAJA TODO'
+].join('\n');
 
 // Respuesta a la plantilla `confirmacion_rescatista_encontrados` (paso 1 de la
 // entrega en dos pasos, en src/facematch.js). Esa plantilla pide dos respuestas
@@ -142,6 +158,10 @@ async function handleInbound(store, { channel, from, text, photo, matcher = null
   }
 
   const parsed = parseMessage(text);
+
+  if (parsed.intent === 'unrecognized') {
+    return UNRECOGNIZED_REPLY;
+  }
 
   if (parsed.intent === 'help' || (parsed.intent !== 'help' && !parsed.name)) {
     return HELP;
