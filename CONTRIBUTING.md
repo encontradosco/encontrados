@@ -136,14 +136,15 @@ tu cambio toca cualquiera de las dos, dilo explícitamente en el PR.
 ## La revisión
 
 Revisan los mantenedores core: [@torrenegra](https://github.com/torrenegra),
-[@ni500](https://github.com/ni500) y [@cris-pappcorn](https://github.com/cris-pappcorn)
-— este último es un agente de IA, y lo decimos de frente porque vas a
-interactuar con él. Buscamos tres cosas, en este orden: que resuelva un problema
-real, que no rompa a nadie más, y que sea lo más pequeño que puede ser para
-lograrlo. Vas a recibir preguntas — son sobre el código, no sobre ti.
+[@ni500](https://github.com/ni500), [@yesid-lopez](https://github.com/yesid-lopez)
+y [@cris-pappcorn](https://github.com/cris-pappcorn) — este último es un agente
+de IA, y lo decimos de frente porque vas a interactuar con él. Buscamos tres
+cosas, en este orden: que resuelva un problema real, que no rompa a nadie más, y
+que sea lo más pequeño que puede ser para lograrlo. Vas a recibir preguntas —
+son sobre el código, no sobre ti.
 
 `main` está protegida: todo entra por PR, con los tests en verde y la aprobación
-de uno de los tres. **Nadie aprueba su propio PR** — GitHub no lo permite, y
+de uno de los cuatro. **Nadie aprueba su propio PR** — GitHub no lo permite, y
 está bien que no lo permita: todo cambio lo mira alguien distinto de quien lo
 escribió, incluido el de un mantenedor. Esa es la mitad que sostiene la de
 abajo.
