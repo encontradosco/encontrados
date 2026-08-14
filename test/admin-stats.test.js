@@ -331,3 +331,86 @@ test('#132 puntos 5-6: el embudo del encuentro y "nadie a quien avisar" contra d
     assert.ok(!html.includes(leak), `el panel no debe contener "${leak}"`);
   }
 });
+
+// La sección "Qué sabemos de cada coincidencia — y qué pudo haber pasado".
+//
+// Lo que esta prueba protege NO es una cifra bonita: es que el panel siga
+// separando el único desenlace comprobable (se mostró en una pantalla) del
+// resto, y que los límites declarados no se caigan solos en un refactor. Un
+// panel que pierda estas frases vuelve a leerse como si cada coincidencia
+// fuera un suceso con desenlace conocido, que es justo lo que no es.
+test('el panel separa las coincidencias que se mostraron en pantalla de las que no, y declara lo que no se puede saber', async (t) => {
+  const sg = await fakeSendgrid();
+  process.env.PUBLIC_STATS = '1';
+  const matcher = fakeMatcher();
+  const { server, base, store } = await startApp(matcher);
+  t.after(() => {
+    sg.stop();
+    server.close();
+    cleanupEnv();
+  });
+
+  // 5 coincidencias de superficie RESCATE: se reporta a alguien y después un
+  // rescatista sube esa misma cara.
+  // Etiquetas verificadas a mano: el hash-a-color de photoBytes es
+  // multiplicativo, así que etiquetas vecinas producen colores que la
+  // compresión JPEG cuantiza a la misma imagen. Y la colisión que de verdad
+  // muerde es más sutil: fakeMatcher indexa por `bytes.toString('utf8')`, y
+  // esa conversión colapsa secuencias binarias inválidas distintas en la
+  // MISMA cadena — dos JPEG que difieren byte a byte pueden ser una sola cara
+  // para el matcher falso. Estas diez se eligieron distintas bajo ESA llave.
+  const RESCATE_FACES = ['saber-0', 'saber-1', 'saber-3', 'saber-5', 'saber-7'];
+  for (let i = 0; i < RESCATE_FACES.length; i++) {
+    const face = RESCATE_FACES[i];
+    await reportMissing(base, { name: `Persona Saber Rescate ${i}`, contact: `saber-r${i}@ejemplo.com`, face });
+    const fd = new FormData();
+    fd.set('photo', new File([await photoBytes(face)], 'r.jpg', { type: 'image/jpeg' }));
+    await fetch(`${base}/rescate`, { method: 'POST', body: fd });
+  }
+
+  // 5 coincidencias de superficie REPORTE: el orden inverso al de arriba —
+  // primero pasa el rescatista (sin nadie reportado todavía, así que su
+  // consulta no coincide con nada) y DESPUÉS la familia reporta esa misma
+  // cara. El cruce se registra del lado del reporte, sin pantalla que nadie
+  // mire: es justo la coincidencia cuyo desenlace esta base no puede probar.
+  const REPORTE_FACES = ['saber-8', 'saber-9', 'saber-10', 'saber-12', 'saber-14'];
+  for (let i = 0; i < REPORTE_FACES.length; i++) {
+    const face = REPORTE_FACES[i];
+    const fd = new FormData();
+    fd.set('photo', new File([await photoBytes(face)], 'r.jpg', { type: 'image/jpeg' }));
+    await fetch(`${base}/rescate`, { method: 'POST', body: fd });
+    await reportMissing(base, { name: `Persona Saber Reporte ${i}`, contact: `saber-p${i}@ejemplo.com`, face });
+  }
+
+  const data = await gatherReportData(store, matcher);
+  assert.equal(data.activity.match.rescate, 5, '5 coincidencias de superficie rescate');
+  assert.equal(data.activity.match.report, 5, '5 coincidencias de superficie reporte');
+  assert.equal(data.activity.match.total, 10);
+
+  const html = await (await fetch(`${base}/admin/stats`)).text();
+  const start = html.indexOf('Qué sabemos de cada coincidencia');
+  const end = html.indexOf('Qué pasó después de cada coincidencia');
+  assert.ok(start >= 0 && end > start, 'la sección debía existir, antes de "Qué pasó después de cada coincidencia"');
+  const s = html.slice(start, end);
+
+  // Las dos casillas del reparto salen exactas: 5 y 5, ambas arriba del
+  // umbral de supresión, y suman el mismo total que la tarjeta de arriba.
+  assert.match(s, /Se mostraron en una pantalla[\s\S]*?>5</, 'las 5 de rescate deben salir como "se mostraron en una pantalla"');
+  assert.match(s, /No tuvieron pantalla[\s\S]*?>5</, 'las 5 de reporte deben salir como "no tuvieron pantalla"');
+
+  // El único desenlace que la base puede probar, dicho con esas palabras.
+  assert.match(s, /único desenlace que esta base puede probar/i);
+
+  // Los límites declarados: si alguno desaparece, el panel promete más
+  // certeza de la que tiene.
+  assert.match(s, /no guarda <code>match_id<\/code>/i, 'debe seguir diciendo por qué no se puede atar aviso y coincidencia');
+  assert.match(s, /falso positivo/i, 'debe seguir nombrando el falso positivo como desenlace posible');
+  assert.match(s, /no puede verlo/i, 'debe seguir diciendo que el reencuentro no es observable');
+  assert.match(s, /indistinguibles entre sí/i, 'debe seguir diciendo cuáles desenlaces no se pueden separar');
+  assert.match(s, /decisión de una persona, no de este panel/i, 'el cambio de esquema se declara como decisión humana');
+
+  // Y nada de PII en el HTML, igual que el resto del panel.
+  for (const leak of ['Saber Rescate', 'Saber Reporte', 'saber-r', 'saber-p', 'saber-q']) {
+    assert.ok(!html.includes(leak), `el panel no debe contener "${leak}"`);
+  }
+});
