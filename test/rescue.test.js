@@ -664,6 +664,56 @@ test('un aviso ya guardado tampoco expone a quien lo dejó', async (t) => {
   assert.doesNotMatch(html, /Calle Falsa 123/);
 });
 
+// La otra cara del filtro, y la que puede costar una llamada: si la familia YA
+// había dejado su teléfono en un reporte y encima de eso entra un aviso, el
+// aviso queda como el update más reciente. Filtrar solo ese —mirando nada más
+// que el último— tapaba también el contacto de la familia, y entonces nadie
+// llama. Se muestra el contacto más reciente que de verdad sea de quien la
+// busca.
+test('un aviso encima no puede tapar el teléfono que la familia ya había dejado', async (t) => {
+  const matcher = fakeMatcher();
+  const { server, base, store } = await startApp(matcher);
+  t.after(() => server.close());
+
+  // Reporte de la familia, con su contacto, y su foto indexada.
+  const { person } = await store.findOrCreatePerson('Amparo Prueba Nieto');
+  const reporte = await store.addUpdate(person.id, {
+    status: 'missing',
+    source: 'web',
+    location: 'Quibdó',
+    contact: '300 111 2233'
+  });
+  const photo = await store.addPhoto({
+    personId: person.id,
+    kind: 'report',
+    updateId: reporte.id,
+    content: await photoBytes('amparo'),
+    contentType: 'image/jpeg'
+  });
+  const { faceId } = await matcher.indexFace(await photoBytes('amparo'));
+  await store.setPhotoFaceId(photo.id, faceId);
+
+  // Y DESPUÉS entra un aviso de un tercero, que pasa a ser el más reciente.
+  await store.addUpdate(person.id, {
+    status: 'missing',
+    source: 'rescate',
+    contact: '322 444 5566 · la persona puede ser localizada en: Calle Falsa 456'
+  });
+  const latest = await store.getLatestUpdate(person.id);
+  assert.equal(latest.source, 'rescate', 'el aviso tiene que ser el update más reciente para que este test pruebe algo');
+
+  const fd = new FormData();
+  fd.set('photo', new File([await photoBytes('amparo')], 'r.jpg', { type: 'image/jpeg' }));
+  const html = await (await fetch(`${base}/rescate`, { method: 'POST', body: fd })).text();
+
+  assert.match(html, /Contacta a quien la busca:<\/strong> 300 111 2233/, 'el teléfono de la familia sí se muestra');
+  assert.doesNotMatch(html, /322 444 5566/, 'el del tercero que avisó, no');
+  assert.doesNotMatch(html, /Calle Falsa 456/);
+  // Y con el contacto de la familia en pantalla, el formulario de aviso no
+  // tiene por qué aparecer: hay a quién llamar.
+  assert.doesNotMatch(html, /action="\/rescate\/aviso"/);
+});
+
 // Rekognition can look at a real photo and find no face (group shots from
 // afar, blurry rubble). Without a mark those photos re-enter the backfill on
 // every run forever: 27 of them were burning a DetectFaces call each sweep in
