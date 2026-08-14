@@ -38,13 +38,17 @@
 # comportamiento observable, pruebas, estilos y documentación.
 *                            @torrenegra @cris-pappcorn @ni500 @yesid-lopez
 
-# Sobre @yesid-lopez, que entró el 14-ago-2026: por ahora está solo acá arriba
-# y NO en los bloques restringidos de abajo. No es un olvido y no es una
-# desconfianza — es que los bloques de abajo son exactamente las tres
-# categorías donde su historial todavía no dice nada: llegó como contribuidor
-# y nunca ha ejercido de portero. Así hace lo rutinario con autonomía completa
-# desde el primer día, y lo delicado sigue con dos pares de ojos humanos.
-# Sumarlo a los bloques de abajo es una línea, y es decisión de @ni500.
+# Sobre @yesid-lopez, que entró el 14-ago-2026: la idea es ampliarle el alcance
+# por anillos, y el primero se decidió el mismo día. Está en este catch-all y,
+# más abajo, en la superficie pública del API — no en biometría, privacidad,
+# esquema, autenticación ni gobierno. No es desconfianza: es que esos bloques
+# son las categorías donde un error no rompe una pantalla, y su historial como
+# portero apenas empieza.
+#
+# El anillo siguiente se decide con un dato, no con una impresión: cuántos PRs
+# quedan esperando a @torrenegra o @ni500. Medido el 14-ago-2026 eran 9 de 10
+# abiertos, y de esos cinco eran biometría. El despertador reporta ese número en
+# su digest, así que la ampliación se discute contra la carga real.
 
 
 # === Esquema de la base ====================================================
@@ -92,15 +96,26 @@
 /src/routes/web.js           @torrenegra @ni500
 
 
-# === Superficie pública, autenticación y despliegue ========================
+# === Superficie pública y despliegue =======================================
 # El contrato del API del que dependen integradores externos, el webhook que
-# escribe sin sesión de usuario, la puerta de /admin, y la configuración con la
-# que Vercel sirve el sitio. Un cambio acá se le rompe a alguien que no está en
-# esta conversación.
-/src/routes/api.js           @torrenegra @ni500
-/src/routes/webhooks.js      @torrenegra @ni500
+# escribe sin sesión de usuario, y la configuración con la que Vercel sirve el
+# sitio. Un cambio acá se le rompe a alguien que no está en esta conversación,
+# así que sigue necesitando un portero — pero es una superficie técnica, no
+# datos de una familia, y es donde @yesid-lopez ya trabaja.
+#
+# Este es su primer anillo (14-ago-2026): tres rutas, elegidas porque un error
+# acá se ve, se reporta y se revierte con un rollback de Vercel. Un error en
+# biometría o en privacidad no se ve y no se revierte.
+/src/routes/api.js           @torrenegra @ni500 @yesid-lopez
+/src/routes/webhooks.js      @torrenegra @ni500 @yesid-lopez
+/vercel.json                 @torrenegra @ni500 @yesid-lopez
+
+
+# === Autenticación =========================================================
+# La puerta de /admin, aparte del bloque de arriba a propósito: quien pueda
+# aprobar un cambio acá puede abrirle el panel a cualquiera, y eso no es una
+# superficie que se revierta mirando el sitio.
 /src/adminAuth.js            @torrenegra @ni500
-/vercel.json                 @torrenegra @ni500
 
 
 # === Gobierno: lo que OTORGA permisos ======================================
