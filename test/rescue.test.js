@@ -636,3 +636,27 @@ test('a photo with no detectable face is marked and leaves the backfill loop', a
   const second = await backfillPhotoDerivatives(store, matcher, 10);
   assert.equal(second.processed, 0, 'la segunda corrida no debe reprocesarla');
 });
+
+// #151: el rescatista que tiene a la persona al lado abre la cámara sin salir
+// de la app. Con JS, dos botones manejan un solo input; sin JS queda el input
+// nativo. El input sigue siendo UNO — /rescate usa upload.single('photo').
+test('#151: /rescate ofrece tomar foto o elegir de galería sobre un solo input', async (t) => {
+  const { server, base } = await startApp();
+  t.after(() => server.close());
+
+  const html = await (await fetch(`${base}/rescate`)).text();
+
+  // Los dos botones que ve el rescatista.
+  assert.match(html, /data-photo-camera[^>]*>📷 Tomar foto/);
+  assert.match(html, /data-photo-gallery[^>]*>🖼️ Elegir de galería/);
+
+  // «Tomar foto» abre la cámara directamente vía capture.
+  assert.match(html, /setAttribute\('capture', 'environment'\)/);
+
+  // Sin JS queda el input nativo, que ya ofrece cámara y galería.
+  assert.match(html, /data-photo-native/);
+
+  // Un solo input de foto: /rescate usa upload.single('photo').
+  const fileInputs = html.match(/<input[^>]*type="file"[^>]*name="photo"/g) || [];
+  assert.equal(fileInputs.length, 1, 'debe haber exactamente un input de foto');
+});
