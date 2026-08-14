@@ -261,31 +261,59 @@ const RESCUE_FOOTER = `<p><a class="big-btn report" href="/rescate">🔍 Consult
 // found, and the operators relay the aviso back to the source registry (for
 // Colombia Te Busca, filling their information form on the rescuer's behalf).
 function matchContactBlock(m) {
-  if (m.update && m.update.contact) {
-    // An aviso's contact is another RESCUER, not the family — say so.
-    const label =
-      m.update.source === 'rescate' ? 'Contacto del rescatista que la tiene' : 'Contacta a quien la busca';
-    return `<p>📞 <strong>${label}:</strong> ${esc(m.update.contact)}</p>`;
+  // El `contact` de un aviso NO es el contacto de quien la busca: es el
+  // teléfono de un tercero que pasó por acá antes, pegado al sitio donde dijo
+  // que estaba la persona. Los dos datos caen en el mismo campo que usa el
+  // reporte de una familia y hasta acá se pintaban igual, así que el siguiente
+  // desconocido que coincidiera con esa cara los veía en pantalla — después de
+  // que a quien los dejó le prometimos que su teléfono no se mostraba (#120).
+  //
+  // El filtro va acá, al PINTAR, y no sobre el dato guardado: así cubre
+  // también los avisos que ya estaban escritos, sin tocar la base y sin perder
+  // el aviso, que es el insumo con el que un operador hace el relevo.
+  //
+  // `contactUpdate` lo resuelve identifyRescuedPerson (src/facematch.js) y NO
+  // es lo mismo que `m.update`: este último es el más reciente —que puede ser
+  // justamente un aviso—, y aquel es el más reciente cuyo contacto es de quien
+  // la busca. Mirar solo el último dejaba sin mostrar el teléfono que la
+  // familia sí había dejado en un reporte anterior.
+  const fromAviso = m.update && m.update.source === 'rescate';
+  if (m.contactUpdate && m.contactUpdate.contact) {
+    return `<p>📞 <strong>Contacta a quien la busca:</strong> ${esc(m.contactUpdate.contact)}</p>`;
   }
-  // El campo del lugar se estaba entendiendo al revés: llegan respuestas con
-  // la ciudad de QUIEN AVISA, o con el nombre de una persona. La
-  // pregunta se hace explícita —el sitio donde está la persona rescatada,
-  // ahora mismo— y se acompaña de un ejemplo del nivel de detalle que sirve.
-  // Sin validación que rechace: un rescatista parado al lado de alguien no
-  // puede quedarse mirando un formulario que no lo deja enviar, y una
-  // respuesta imprecisa que un operador puede repreguntar vale más que un
-  // aviso que nunca se mandó.
+  // La bifurcación de acá arriba existe porque medimos quién estaba llenando
+  // este formulario: de 23 avisos recibidos, uno solo tenía forma de rescate.
+  // Los demás los mandó gente que está BUSCANDO a esa persona y llegó hasta
+  // acá porque el botón que vio decía «¿la tienes contigo?» — y terminaba
+  // escribiendo la dirección de la casa de su familiar en un campo que le
+  // pedía dónde encontrarla. Preguntar de frente es más barato que adivinar
+  // después, y le abre a esa persona la puerta que en realidad venía a buscar.
+  //
+  // El nombre va DENTRO de la pregunta a propósito: «esa persona» es
+  // justamente lo que se venía leyendo al revés.
+  const name = esc(m.person.full_name);
   return `<div class="aviso">
-  <p><strong>La están buscando, pero el reporte no trae un contacto directo.</strong> Déjanos tu número y dónde está ahora esa persona: nosotros nos encargamos de hacerle llegar el aviso a quien la busca.</p>
-  <form class="stack compact" method="post" action="/rescate/aviso">
-    <input type="hidden" name="person_id" value="${m.person.id}">
-    <label class="field-label"><span>Tu teléfono (WhatsApp si tienes) *</span>
-      <input name="phone" required maxlength="60" placeholder="Ej. 300 123 4567" autocomplete="tel" inputmode="tel"></label>
-    <label class="field-label"><span>¿Dónde está ahora esa persona? *</span>
-      <input name="location" required maxlength="160" placeholder="Ej. Hospital San Jorge, Pereira — urgencias"></label>
-    <p class="subtle">El sitio donde está <strong>la persona que rescataste</strong>, no dónde estás tú. Ejemplo: «Hospital San Jorge, Pereira — urgencias» o «Albergue del coliseo, Quibdó».</p>
-    <button class="big-btn report" type="submit">Avisar a quien la busca</button>
-  </form>
+  <p><strong>La están buscando, pero el reporte no trae un teléfono al que llamar.</strong>${
+    fromAviso ? ' Otra persona ya nos avisó por esta misma ficha y el equipo está haciéndole llegar el aviso a quien la busca.' : ''
+  }</p>
+  <p class="aviso-pregunta">¿Tienes a ${name} contigo en este momento?</p>
+  <details class="aviso-si">
+    <summary class="big-btn report">✅ Sí, está aquí conmigo</summary>
+    <div class="aviso-si-cuerpo">
+      <p>Déjanos tu número y dónde está ${name} ahora: nosotros le hacemos llegar el aviso a quien la busca.</p>
+      <form class="stack compact" method="post" action="/rescate/aviso">
+        <input type="hidden" name="person_id" value="${m.person.id}">
+        <label class="field-label"><span>Tu teléfono (WhatsApp si tienes) *</span>
+          <input name="phone" required maxlength="60" placeholder="Ej. 300 123 4567" autocomplete="tel" inputmode="tel"></label>
+        <label class="field-label"><span>¿En qué lugar está ${name} en este momento? *</span>
+          <input name="location" required maxlength="160" placeholder="Ej. Hospital San Jorge, Pereira — urgencias"></label>
+        <p class="subtle">El sitio donde está <strong>${name}</strong>, no dónde estás tú. Ejemplo: «Hospital San Jorge, Pereira — urgencias» o «Albergue del coliseo, Quibdó».</p>
+        <button class="big-btn report" type="submit">Avisar a quien la busca</button>
+      </form>
+    </div>
+  </details>
+  <a class="big-btn secondary" href="/report?name=${encodeURIComponent(m.person.full_name)}">🙋 No — yo soy quien la está buscando</a>
+  <p class="subtle">Si la estás buscando, agrega tu teléfono al reporte: así el rescatista que la encuentre te llama directo, sin que nadie más tenga que intermediar.</p>
 </div>`;
 }
 
