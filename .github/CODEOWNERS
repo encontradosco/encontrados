@@ -32,11 +32,19 @@
 # ---------------------------------------------------------------------------
 
 
-# === Por defecto: los tres mantenedores core ===============================
-# La aprobación de cualquiera de los tres alcanza. Acá vive lo rutinario, que
+# === Por defecto: los cuatro mantenedores core =============================
+# La aprobación de cualquiera de los cuatro alcanza. Acá vive lo rutinario, que
 # es la mayoría del repo: corrección de errores, refactors sin cambio de
 # comportamiento observable, pruebas, estilos y documentación.
-*                            @torrenegra @cris-pappcorn @ni500
+*                            @torrenegra @cris-pappcorn @ni500 @yesid-lopez
+
+# Sobre @yesid-lopez, que entró el 14-ago-2026: por ahora está solo acá arriba
+# y NO en los bloques restringidos de abajo. No es un olvido y no es una
+# desconfianza — es que los bloques de abajo son exactamente las tres
+# categorías donde su historial todavía no dice nada: llegó como contribuidor
+# y nunca ha ejercido de portero. Así hace lo rutinario con autonomía completa
+# desde el primer día, y lo delicado sigue con dos pares de ojos humanos.
+# Sumarlo a los bloques de abajo es una línea, y es decisión de @ni500.
 
 
 # === Esquema de la base ====================================================
