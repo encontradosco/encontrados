@@ -175,3 +175,39 @@ test('backfillUnindexedPetPhotos recoge lo que quedó sin embedding y lo compara
   const stored = (await petStore.petPhotosForMatching('report', 'dog'))[0];
   assert.deepEqual(stored.embedding, VECTOR_A);
 });
+
+test('un error de base al comparar no revienta processPetPhoto ni deja sin borrar los bytes de una foto "encontré"', async () => {
+  const { petStore } = await setup();
+  // Envoltura de mentira: todo lo demás pasa por el petStore real, pero
+  // petPhotosForMatching (la lectura que matchPetPhoto hace para comparar)
+  // revienta — como lo haría un error transitorio de base en un despliegue
+  // serverless. embed() ya tuvo éxito para cuando esto pasa; lo que se prueba
+  // es que ese fallo, DESPUÉS de embed(), no se escapa de processPetPhoto ni
+  // le impide borrar los bytes de una foto 'query' (garantía de privacidad,
+  // no cosmética).
+  const flakyStore = {
+    ...petStore,
+    async petPhotosForMatching() {
+      throw new Error('conexión a la base perdida (de mentira, para la prueba)');
+    }
+  };
+  const { processPetPhoto } = require('../src/petmatch');
+  const buscando = await photoBytes('buscando');
+  const matcher = fakePetMatcherFor({ [buscando.toString('utf8')]: VECTOR_A });
+
+  const { photo, matches } = await processPetPhoto(flakyStore, matcher, {
+    kind: 'query',
+    species: 'dog',
+    bytes: buscando,
+    contentType: 'image/jpeg'
+  });
+
+  assert.deepEqual(matches, [], 'un fallo al comparar se degrada a "sin coincidencias", no revienta');
+
+  const stored = await petStore.getPetPhoto(photo.id);
+  assert.equal(
+    stored.content.length,
+    0,
+    'los bytes de una foto "encontré" se borran igual, aunque falle la comparación'
+  );
+});

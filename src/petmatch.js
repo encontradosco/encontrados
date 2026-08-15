@@ -71,12 +71,26 @@ async function processPetPhoto(petStore, petMatcher, { petId, kind, species, sub
 
   const result = await petMatcher.embed(content, contentType);
   if (!result) return { photo, matches: [] };
-  await petStore.setPetPhotoEmbedding(photo.id, result.embedding, result.model);
 
-  const matches = await matchPetPhoto(petStore, { kind, species, embedding: result.embedding });
+  // Guardar el embedding y comparar pueden fallar por su cuenta (un error de
+  // base transitorio, verosímil en un despliegue serverless) sin que eso sea
+  // motivo para tumbar el reporte ni, sobre todo, para saltarse el borrado de
+  // los bytes de una foto 'query' más abajo — por eso ese borrado vive FUERA
+  // de este try, incondicional una vez que embed() ya tuvo éxito. Mismo
+  // patrón que identifyRescuedPerson en facematch.js: el intento de indexar
+  // puede fallar, pero clearPhotoContent corre igual.
+  let matches = [];
+  try {
+    await petStore.setPetPhotoEmbedding(photo.id, result.embedding, result.model);
+    matches = await matchPetPhoto(petStore, { kind, species, embedding: result.embedding });
+  } catch (e) {
+    console.error(`[petmatch] error guardando o comparando el embedding de la foto ${photo.id}:`, e.message);
+  }
 
   // La foto de quien encontró una mascota nunca se conserva — solo su
-  // embedding, para que un reporte futuro sí pueda coincidir con ella.
+  // embedding, para que un reporte futuro sí pueda coincidir con ella. Corre
+  // pase lo que pase arriba: aunque guardar el embedding o comparar hayan
+  // fallado, los bytes de una foto 'query' no se quedan en la base.
   if (kind === 'query') await petStore.clearPetPhotoContent(photo.id);
 
   if (kind === 'report' && matches.length) {
