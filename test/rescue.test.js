@@ -567,7 +567,7 @@ test('a match without family contact offers the aviso form and stores the aviso'
   assert.match(html, /No — yo soy quien la está buscando/);
   assert.match(
     html,
-    /href="\/report\?name=Mariana%20Prueba%20Torres"/,
+    /href="\/report\?name=Mariana%20Prueba%20Torres&desde=\d+"/,
     'quien la busca sale de acá al formulario de reporte, con el nombre ya puesto'
   );
 
