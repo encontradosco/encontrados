@@ -42,6 +42,9 @@ const nullMatcher = {
   },
   async searchByImage() {
     return [];
+  },
+  async searchByFaceId() {
+    return [];
   }
 };
 
@@ -55,6 +58,7 @@ async function createMatcher() {
     CreateCollectionCommand,
     IndexFacesCommand,
     SearchFacesByImageCommand,
+    SearchFacesCommand,
     DetectFacesCommand
   } = require('@aws-sdk/client-rekognition');
 
@@ -145,6 +149,36 @@ async function createMatcher() {
         console.error('[faces] search failed:', e.name, e.message);
         throw e;
       }
+    },
+    // Same contract as searchByImage — [{ faceId, similarity }] above the
+    // threshold — but keyed by a face already IN the collection instead of by
+    // image bytes. This is what makes recounting history possible: a rescuer's
+    // photo is dropped right after indexing, so its bytes are gone forever,
+    // but its signature is still searchable. The searched face itself is never
+    // part of the result (Rekognition excludes it).
+    async searchByFaceId(faceId) {
+      try {
+        const res = await client.send(
+          new SearchFacesCommand({
+            CollectionId: COLLECTION_ID,
+            FaceId: faceId,
+            FaceMatchThreshold: THRESHOLD,
+            MaxFaces: 20
+          })
+        );
+        return (res.FaceMatches || []).map((m) => ({
+          faceId: m.Face.FaceId,
+          similarity: m.Similarity
+        }));
+      } catch (e) {
+        // The face vanished between listing and searching (deleted person,
+        // concurrent cleanup). A normal outcome for a recount, not an error.
+        if (e.name === 'ResourceNotFoundException' || e.name === 'InvalidParameterException') {
+          return [];
+        }
+        console.error('[faces] searchByFaceId failed:', e.name, e.message);
+        throw e;
+      }
     }
   };
 }
@@ -204,6 +238,9 @@ function createLazyMatcher() {
     },
     async searchByImage(bytes) {
       return (await get(Date.now())).searchByImage(bytes);
+    },
+    async searchByFaceId(faceId) {
+      return (await get(Date.now())).searchByFaceId(faceId);
     },
     async ensureReady() {
       return get(Date.now());

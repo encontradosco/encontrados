@@ -36,6 +36,32 @@ module.exports = {
   // the person's timeline.
   AVISO_EMAIL: (process.env.AVISO_EMAIL || '').trim(),
 
+  // Destinos del reporte operativo recurrente (#116, PR 2), separados por
+  // coma. Nunca hardcodeados — el repo es público. Vacío = el reporte se
+  // niega a enviarse (ver src/report.js), nunca en silencio.
+  REPORT_RECIPIENTS: (process.env.REPORT_RECIPIENTS || '').trim(),
+
+  // Auth de /admin (#116, PR 5) — "Sign in with Vercel". La App (client id +
+  // secret) se crea en el dashboard de Vercel; ver docs/admin-auth-setup.md
+  // para el paso a paso. Vacíos = /admin no arranca el login (ver
+  // src/adminAuth.js), nunca un login roto a medias.
+  VERCEL_APP_CLIENT_ID: (process.env.VERCEL_APP_CLIENT_ID || '').trim(),
+  VERCEL_APP_CLIENT_SECRET: (process.env.VERCEL_APP_CLIENT_SECRET || '').trim(),
+  // Firma la cookie de sesión propia (HMAC) — nada que ver con el client
+  // secret de Vercel. Sin ella, /admin se niega a abrir sesión: firmar con un
+  // secreto vacío o adivinado es peor que no tener sesión.
+  ADMIN_SESSION_SECRET: (process.env.ADMIN_SESSION_SECRET || '').trim(),
+  // Allowlist de correos, separados por coma — NUNCA hardcodeados (repo
+  // público). Vacía = /admin queda cerrada para todos, nunca abierta.
+  ADMIN_EMAILS: (process.env.ADMIN_EMAILS || '').trim(),
+  // Ventana pública temporal de /admin/stats (#116, PR 6) — SOLO mientras el
+  // auth de verdad termina de configurarse. '1' es el único valor que abre;
+  // cualquier otro valor, o su ausencia, deja la vista detrás de
+  // requireAdminSession como siempre. Cerrarla es borrar esta variable, no
+  // un PR. El drill-down por ID nunca lee esta variable — siempre exige
+  // sesión.
+  PUBLIC_STATS: (process.env.PUBLIC_STATS || '').trim(),
+
   WHATSAPP_TOKEN: process.env.WHATSAPP_TOKEN || '',
   WHATSAPP_PHONE_NUMBER_ID: process.env.WHATSAPP_PHONE_NUMBER_ID || '',
   WHATSAPP_VERIFY_TOKEN: process.env.WHATSAPP_VERIFY_TOKEN || 'encontrados-verify',

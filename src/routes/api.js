@@ -12,11 +12,13 @@ const {
   processPhoto,
   backfillUnindexedPhotos,
   backfillPhotoDerivatives,
+  computeMatchStats,
   MAX_QUERY_PHOTOS
 } = require('../facematch');
 const { publicUpdate } = require('../privacy');
 const { findDuplicateCandidates, duplicateWarning } = require('../duplicates');
 const gh = require('../github');
+const { sendReport } = require('../report');
 
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
@@ -310,6 +312,57 @@ function apiRoutes(store, matcher) {
       const indexed = await backfillUnindexedPhotos(store, matcher, limit);
       const derivatives = await backfillPhotoDerivatives(store, matcher, limit);
       res.json({ ...indexed, derivatives });
+    })
+  );
+
+  // GET /api/match-stats — recomputa el cruce facial histórico contra la
+  // colección y devuelve SOLO cifras agregadas (parte 1 de #116). No escribe
+  // nada y no notifica a nadie.
+  //
+  // Va detrás de la API key aunque sea una lectura. La regla de "las lecturas
+  // quedan abiertas" existe porque la información de emergencia quiere ser
+  // encontrada — y esto no es eso: son cifras de operación, y cada llamada
+  // dispara decenas de búsquedas en Rekognition (cuestan plata y tienen tope
+  // por segundo), así que dejarla abierta regala un botón de gasto.
+  router.get(
+    '/match-stats',
+    requireKey,
+    wrap(async (req, res) => {
+      const stats = await computeMatchStats(store, matcher);
+      if (!stats) {
+        return res
+          .status(503)
+          .json({ error: `El matcher facial no está disponible: ${matcher.status}` });
+      }
+      res.json(stats);
+    })
+  );
+
+  // ALL /api/report/send — arma y manda el reporte operativo recurrente
+  // (#116, PR 2). Lo dispara el cron de Vercel 3×/día y, a mano, un operador
+  // con la API key (el primer envío real lo dispara un humano apenas mergee).
+  //
+  // A diferencia del resto de esta ruta, acá NO aplica "las lecturas quedan
+  // abiertas": esto tiene efecto de lado (manda correos vía SendGrid, que
+  // cuesta y tiene cuota) y expone cifras de operación, así que falla CERRADO
+  // — a diferencia de requireKey, que si no hay API_KEY configurada deja
+  // pasar. Acepta la API key existente (Authorization: Bearer <API_KEY>) o el
+  // secreto que Vercel Cron manda solo (Authorization: Bearer <CRON_SECRET>,
+  // ver https://vercel.com/docs/cron-jobs/manage-cron-jobs#securing-cron-jobs)
+  // — nunca ambos sin configurar.
+  function requireKeyOrCron(req, res, next) {
+    const auth = req.get('authorization') || '';
+    if (env.API_KEY && auth === `Bearer ${env.API_KEY}`) return next();
+    const cronSecret = (process.env.CRON_SECRET || '').trim();
+    if (cronSecret && auth === `Bearer ${cronSecret}`) return next();
+    res.status(401).json({ error: 'Credencial inválida o ausente (API key o CRON_SECRET)' });
+  }
+  router.all(
+    '/report/send',
+    requireKeyOrCron,
+    wrap(async (req, res) => {
+      const result = await sendReport(store, matcher);
+      res.status(result.ok ? 200 : 502).json(result);
     })
   );
 

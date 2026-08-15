@@ -8,6 +8,20 @@ const STATUSES = ['safe', 'injured', 'missing', 'deceased', 'unknown'];
 // the app's own web/whatsapp/api channels (see POST /api/updates).
 const SOURCES = ['web', 'whatsapp', 'api', 'aggregator'];
 
+// Nombre ancla que POST /rescate (src/routes/web.js) le da a la persona
+// "encontrada" que un rescatista fotografía en campo — no tiene nombre real,
+// así que se le da uno sintético con un sufijo aleatorio. El panel de
+// estadísticas (#132) necesita reconocer estas personas para contar "personas
+// fotografiadas por un rescatista", y sin tocar el esquema la única señal que
+// existe es este patrón de nombre. Vive acá, exportado, para que web.js (quien
+// lo crea) y report.js (quien lo cuenta) compartan la MISMA constante en vez
+// de dos copias del mismo string que se puedan desincronizar en silencio.
+const RESCUE_ANCHOR_PREFIX = 'Persona rescatada ';
+// La forma en la que ese prefijo queda guardado en normalized_name (minúsculas,
+// sin tildes) — derivada con la misma normalize() que usa el resto del
+// esquema, no una copia a mano de la regla.
+const RESCUE_ANCHOR_NORMALIZED_PREFIX = `${normalize(RESCUE_ANCHOR_PREFIX)} `;
+
 // Postgres returns Date objects; SQLite returns strings. Present ISO strings everywhere.
 function isoRow(row) {
   if (row && row.created_at instanceof Date) {
@@ -242,6 +256,10 @@ function createStore(adapter) {
     return adapter.photosByFaceIds(faceIds);
   }
 
+  async function indexedPhotos() {
+    return adapter.indexedPhotos();
+  }
+
   async function countQueryPhotos(subscriptionId) {
     return adapter.countQueryPhotos(subscriptionId);
   }
@@ -257,6 +275,54 @@ function createStore(adapter) {
   // Deletes the person and, by cascade, their reports, subscriptions and photos.
   async function deletePerson(id) {
     return isoRow(await adapter.deletePerson(id));
+  }
+
+  // Bitácora de coincidencias y envíos (#116, PR 4). Pass-through directo:
+  // src/logbook.js ya se encarga de que un fallo acá nunca suba.
+  async function insertMatchLog(fields) {
+    return adapter.insertMatchLog(fields);
+  }
+
+  async function insertContactLog(fields) {
+    return adapter.insertContactLog(fields);
+  }
+
+  async function matchLogCounts(opts) {
+    return adapter.matchLogCounts(opts);
+  }
+
+  async function contactLogCounts(opts) {
+    return adapter.contactLogCounts(opts);
+  }
+
+  async function matchLogDaily(opts) {
+    return adapter.matchLogDaily(opts);
+  }
+
+  async function contactLogDaily(opts) {
+    return adapter.contactLogDaily(opts);
+  }
+
+  async function matchLogEarliest() {
+    return adapter.matchLogEarliest();
+  }
+
+  async function contactLogEarliest() {
+    return adapter.contactLogEarliest();
+  }
+
+  // Cifras del panel #132 — pass-through directo, igual que el resto de la
+  // bitácora: la lógica de qué significan vive en report.js, no acá.
+  async function updatesBeyondFirstBySource() {
+    return adapter.updatesBeyondFirstBySource();
+  }
+
+  async function queryPhotoPeople() {
+    return adapter.queryPhotoPeople();
+  }
+
+  async function matchLogSimilarityRows() {
+    return adapter.matchLogSimilarityRows();
   }
 
   return {
@@ -291,13 +357,25 @@ function createStore(adapter) {
     reportPhotoByPerson,
     clearPhotoContent,
     photosByFaceIds,
+    indexedPhotos,
     countQueryPhotos,
     photosMissingFaceId,
     photosMissingDerivatives,
     counts,
     deletePerson,
+    insertMatchLog,
+    insertContactLog,
+    matchLogCounts,
+    contactLogCounts,
+    matchLogDaily,
+    contactLogDaily,
+    matchLogEarliest,
+    contactLogEarliest,
+    updatesBeyondFirstBySource,
+    queryPhotoPeople,
+    matchLogSimilarityRows,
     close: () => adapter.close()
   };
 }
 
-module.exports = { createStore, STATUSES, SOURCES };
+module.exports = { createStore, STATUSES, SOURCES, RESCUE_ANCHOR_PREFIX, RESCUE_ANCHOR_NORMALIZED_PREFIX };

@@ -77,6 +77,40 @@ async function createPostgresAdapter(connectionString) {
     );
     CREATE INDEX IF NOT EXISTS idx_photos_face ON photos(face_id);
     CREATE INDEX IF NOT EXISTS idx_photos_subscription ON photos(subscription_id);
+
+    -- Bitácora de coincidencias y de envíos (#116, PR 3 — SOLO esquema; PR 4
+    -- escribe en estas tablas). El diseño aprobado es explícito: "sin
+    -- teléfonos, sin correos, sin nombres" — cada columna es un ID, un enum o
+    -- un número. Un person_id sigue siendo dato vinculable a una persona
+    -- (habeas data, Ley 1581), así que ambas heredan la MISMA retención que ya
+    -- rige el resto del esquema: ON DELETE CASCADE sobre people(id). Hoy esa
+    -- retención es a demanda (DELETE /api/people/:id, la solicitud de borrado
+    -- de la política de privacidad) — no existe un TTL automático por edad en
+    -- ningún lado de este esquema, y estas tablas no inventan uno. created_at
+    -- + su índice quedan listos para que un cleanup job futuro (PR 4 o
+    -- posterior) pueda purgar por antigüedad si hace falta.
+    CREATE TABLE IF NOT EXISTS match_log (
+      id SERIAL PRIMARY KEY,
+      person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+      update_id INTEGER REFERENCES updates(id) ON DELETE CASCADE,
+      face_id TEXT NOT NULL,
+      similarity DOUBLE PRECISION,
+      surface TEXT NOT NULL CHECK (surface IN ('rescate','report','api')),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_match_log_person ON match_log(person_id);
+    CREATE INDEX IF NOT EXISTS idx_match_log_created ON match_log(created_at);
+
+    CREATE TABLE IF NOT EXISTS contact_log (
+      id SERIAL PRIMARY KEY,
+      person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+      update_id INTEGER REFERENCES updates(id) ON DELETE CASCADE,
+      channel TEXT NOT NULL CHECK (channel IN ('email','whatsapp','relevo')),
+      result TEXT NOT NULL CHECK (result IN ('enviado','fallido','rechazado')),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_contact_log_person ON contact_log(person_id);
+    CREATE INDEX IF NOT EXISTS idx_contact_log_created ON contact_log(created_at);
   `);
   if (hasTrgm) {
     await pool.query(`
@@ -405,6 +439,14 @@ async function createPostgresAdapter(connectionString) {
         [faceIds]
       );
     },
+    // Metadatos de toda foto con firma facial — sin contenido ni derivados:
+    // esto alimenta un conteo, no una pantalla.
+    async indexedPhotos() {
+      return all(
+        'SELECT id, person_id, kind, face_id FROM photos WHERE face_id IS NOT NULL ORDER BY id',
+        []
+      );
+    },
     async deletePerson(id) {
       return one('DELETE FROM people WHERE id = $1 RETURNING *', [id]);
     },
@@ -430,6 +472,143 @@ async function createPostgresAdapter(connectionString) {
       );
       return r.n;
     },
+
+    // Bitácora de coincidencias y de envíos (#116, PR 4 — la instrumentación;
+    // las tablas las creó PR 3). Cada escritura la envuelve `src/logbook.js`
+    // en un try/catch — acá abajo no hace falta duplicar esa protección.
+    async insertMatchLog({ personId, updateId, faceId, similarity, surface }) {
+      await pool.query(
+        'INSERT INTO match_log (person_id, update_id, face_id, similarity, surface) VALUES ($1, $2, $3, $4, $5)',
+        [personId, updateId ?? null, faceId, similarity ?? null, surface]
+      );
+    },
+    async insertContactLog({ personId, updateId, channel, result }) {
+      await pool.query(
+        'INSERT INTO contact_log (person_id, update_id, channel, result) VALUES ($1, $2, $3, $4)',
+        [personId, updateId ?? null, channel, result]
+      );
+    },
+    // Cuenta total y por superficie. `since` (ISO) filtra a lo escrito desde
+    // ahí — se usa para la línea de "cambio desde el reporte anterior" del
+    // correo operativo; sin `since`, es el acumulado histórico completo.
+    async matchLogCounts({ since } = {}) {
+      const clause = since ? 'WHERE created_at >= $1' : '';
+      const totalParams = since ? [since] : [];
+      const total = (await one(`SELECT COUNT(*)::int AS n FROM match_log ${clause}`, totalParams)).n;
+      const bySurface = {};
+      for (const surface of ['rescate', 'report', 'api']) {
+        const w = since ? 'WHERE created_at >= $1 AND surface = $2' : 'WHERE surface = $1';
+        const p = since ? [since, surface] : [surface];
+        bySurface[surface] = (await one(`SELECT COUNT(*)::int AS n FROM match_log ${w}`, p)).n;
+      }
+      return { total, ...bySurface };
+    },
+    // Una fila por (channel, result) — el correo pivotea esto en su propia
+    // tabla. `since` con el mismo significado que en matchLogCounts.
+    async contactLogCounts({ since } = {}) {
+      const clause = since ? 'WHERE created_at >= $1' : '';
+      const params = since ? [since] : [];
+      return all(
+        `SELECT channel, result, COUNT(*)::int AS count FROM contact_log ${clause} GROUP BY channel, result ORDER BY channel, result`,
+        params
+      );
+    },
+
+    // Series por día (#116, PR 6 — el panel). `since` (ISO) siempre viene del
+    // llamador ya calculado en JS, igual que en SQLite — misma razón. El
+    // corte de "día" es el de Bogotá, no UTC (hotfix): toda la superficie
+    // (el pie del correo, el cron, el panel) habla en hora de Bogotá, y entre
+    // las 19:00 y la medianoche Bogotá caía en el día SIGUIENTE bajo UTC —
+    // cinco horas de cada día contadas en la fila equivocada. La conversión
+    // explícita es igual de necesaria que antes: sin ella, to_char formatea
+    // en el huso de la sesión de Postgres, y el corte de "día" tiene que ser
+    // el mismo en los dos motores (ver sqlite.js: `date(created_at, '-5 hours')`,
+    // el mismo desplazamiento fijo — Colombia no tiene horario de verano).
+    async matchLogDaily({ since } = {}) {
+      const clause = since ? 'WHERE created_at >= $1' : '';
+      const params = since ? [since] : [];
+      return all(
+        `SELECT to_char(created_at AT TIME ZONE 'America/Bogota', 'YYYY-MM-DD') AS day, COUNT(*)::int AS count
+         FROM match_log ${clause} GROUP BY day ORDER BY day`,
+        params
+      );
+    },
+    async contactLogDaily({ since } = {}) {
+      const clause = since ? 'WHERE created_at >= $1' : '';
+      const params = since ? [since] : [];
+      return all(
+        `SELECT to_char(created_at AT TIME ZONE 'America/Bogota', 'YYYY-MM-DD') AS day, result, COUNT(*)::int AS count
+         FROM contact_log ${clause} GROUP BY day, result ORDER BY day`,
+        params
+      );
+    },
+
+    // El primer registro de cada tabla (hotfix post-#127/#128 — "los ceros
+    // pre-instrumentación son una mentira por omisión"). Antes de esta fecha
+    // la bitácora no existía: no es que no pasó nada, es que no se medía.
+    // null si la tabla está vacía — todavía no hay ningún registro. Se
+    // devuelve como ISO EN UTC, a propósito (a diferencia de matchLogDaily):
+    // esto no es un bucket de "día", es un INSTANTE — new Date(...) lo parsea
+    // en report.js y el que localiza a Bogotá para mostrarlo es bogotaClock(),
+    // no esta función. Cambiarlo a Bogotá acá y seguir marcándolo "Z" mentiría
+    // sobre el offset y correría el instante 5 horas. El único punto que sí
+    // necesitaba a Bogotá era el bucket de DÍA que deriva de este instante en
+    // gatherDailySeries (report.js) — ahí es donde vivía el mismo desfase, y
+    // ahí es donde se corrigió (bogotaDayKey), no en el motor de datos.
+    async matchLogEarliest() {
+      const r = await one("SELECT to_char(MIN(created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS min FROM match_log", []);
+      return r.min || null;
+    },
+    async contactLogEarliest() {
+      const r = await one("SELECT to_char(MIN(created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS min FROM contact_log", []);
+      return r.min || null;
+    },
+
+    // Cifras del panel #132 — tres consultas de agregación, sin PII, sin
+    // recompute contra Rekognition.
+    //
+    // Fichas que se sumaron a un registro que YA existía (no fueron la
+    // primera actualización de esa persona), por canal de entrada. La
+    // clasificación de qué significa cada canal vive en report.js — acá solo
+    // el ranking por antigüedad dentro de cada persona (mismo patrón de
+    // ROW_NUMBER que ya usan reunitedCount/missingPeople arriba).
+    async updatesBeyondFirstBySource() {
+      return all(
+        `WITH ranked AS (
+           SELECT source, ROW_NUMBER() OVER (PARTITION BY person_id ORDER BY created_at ASC, id ASC) AS rn
+           FROM updates
+         )
+         SELECT source, COUNT(*)::int AS n FROM ranked WHERE rn > 1 GROUP BY source`
+      );
+    },
+    // Personas distintas con al menos una foto de CONSULTA (kind='query') —
+    // el universo del que report.js filtra las ancladas por el flujo de
+    // rescate (ver RESCUE_ANCHOR_NORMALIZED_PREFIX en people.js). Sin filtrar
+    // acá por nombre a propósito: ese patrón es una convención de la capa de
+    // negocio, no algo que el adapter deba conocer.
+    // `subscription_id` es nuevo (#132, punto 5): GROUP BY en vez del DISTINCT
+    // de antes, para que una persona con más de una foto de consulta siga
+    // devolviendo UNA sola fila (el conteo de gatherRescuedPeopleCount sigue
+    // siendo "una fila = una persona", sin cambiar su comportamiento). MAX()
+    // ignora los NULL: si CUALQUIERA de sus fotos de consulta quedó atada a
+    // una suscripción, la fila sale con esa suscripción — "esta persona sí
+    // dejó un contacto" es lo único que report.js necesita para clasificar.
+    async queryPhotoPeople() {
+      return all(
+        `SELECT ph.person_id AS person_id, p.normalized_name AS normalized_name, MAX(ph.subscription_id) AS subscription_id
+         FROM photos ph JOIN people p ON p.id = ph.person_id
+         WHERE ph.kind = 'query'
+         GROUP BY ph.person_id, p.normalized_name`
+      );
+    },
+    // Todas las filas de match_log — solo similarity y surface, la materia
+    // prima del desglose por tramo de confianza. report.js hace la
+    // clasificación en JS (una sola fuente de verdad para los tramos, en vez
+    // de repetir los límites en dos motores de SQL distintos).
+    async matchLogSimilarityRows() {
+      return all('SELECT similarity, surface FROM match_log');
+    },
+
     async close() {
       await pool.end();
     }

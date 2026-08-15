@@ -32,6 +32,15 @@ npm test         # node --test, sin red y sin servicios externos
 > Node. `npm rebuild better-sqlite3` y vuelve a correr. Es tu entorno, no tu
 > cambio.
 
+## Si trabajas con un agente
+
+Va a leer [`CLAUDE.md`](CLAUDE.md) solo al abrir el repo: ahí están las reglas
+que no se pueden ignorar y a dónde ir por cada cosa. En
+[`.claude/`](.claude/README.md) están los comandos de lo que más se repite acá
+(`/pruebas`, `/pr-chico`, `/revision-privacidad`, `/cambio-de-esquema`) y un
+arranque rápido para el primer día. Todo lo de este archivo aplica igual: quien
+manda el PR responde por él, lo haya escrito a mano o no.
+
 ## Qué trabajar
 
 - Los issues marcados [`good first issue`](https://github.com/encontradosco/encontrados/labels/good%20first%20issue)
@@ -127,14 +136,15 @@ tu cambio toca cualquiera de las dos, dilo explícitamente en el PR.
 ## La revisión
 
 Revisan los mantenedores core: [@torrenegra](https://github.com/torrenegra),
-[@ni500](https://github.com/ni500) y [@cris-pappcorn](https://github.com/cris-pappcorn)
-— este último es un agente de IA, y lo decimos de frente porque vas a
-interactuar con él. Buscamos tres cosas, en este orden: que resuelva un problema
-real, que no rompa a nadie más, y que sea lo más pequeño que puede ser para
-lograrlo. Vas a recibir preguntas — son sobre el código, no sobre ti.
+[@ni500](https://github.com/ni500), [@yesid-lopez](https://github.com/yesid-lopez)
+y [@cris-pappcorn](https://github.com/cris-pappcorn) — este último es un agente
+de IA, y lo decimos de frente porque vas a interactuar con él. Buscamos tres
+cosas, en este orden: que resuelva un problema real, que no rompa a nadie más, y
+que sea lo más pequeño que puede ser para lograrlo. Vas a recibir preguntas —
+son sobre el código, no sobre ti.
 
 `main` está protegida: todo entra por PR, con los tests en verde y la aprobación
-de uno de los tres. **Nadie aprueba su propio PR** — GitHub no lo permite, y
+de uno de los cuatro. **Nadie aprueba su propio PR** — GitHub no lo permite, y
 está bien que no lo permita: todo cambio lo mira alguien distinto de quien lo
 escribió, incluido el de un mantenedor. Esa es la mitad que sostiene la de
 abajo.

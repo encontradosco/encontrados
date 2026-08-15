@@ -7,13 +7,17 @@ modificación al código:
 
 1. Corre las pruebas: `npm test` (deben quedar en verde).
 2. Haz commit con mensaje claro y push a la rama de trabajo.
-3. **Lleva el cambio a `main` de inmediato** (merge del PR, o push directo a
-   `main` si no hay PR). Vercel despliega `main` a producción automáticamente.
+3. **Abre el PR de inmediato y llévalo a `main`.** `main` está protegida: todo
+   entra por PR, con CI en verde y la aprobación de un mantenedor distinto de
+   quien lo escribió; el push directo ya no existe. Vercel despliega `main` a
+   producción automáticamente, así que **mergear *es* desplegar**.
 4. No dejes trabajo "pendiente de deploy": si está en `main`, está vivo; si no
    está en `main`, no existe.
 
 Este es un servicio de emergencias: un cambio útil que no está publicado no
-ayuda a nadie.
+ayuda a nadie. La otra cara de la misma moneda: lo que cambia comportamiento de
+cara al usuario, el esquema de la base o privacidad **espera a que lo decida una
+persona** — ver [`CONTRIBUTING.md`](CONTRIBUTING.md) y [`CLAUDE.md`](CLAUDE.md).
 
 ## Contexto del proyecto
 
@@ -148,7 +152,18 @@ hay framework de frontend ni paso de build: lo que se lee es lo que corre.
 - `src/store/postgres.js` y `src/store/sqlite.js` — el mismo contrato sobre dos
   motores. El esquema se crea solo al arrancar (`CREATE TABLE IF NOT EXISTS` +
   `ALTER TABLE … ADD COLUMN IF NOT EXISTS`): **no hay carpeta de migraciones**,
-  así que una columna nueva se agrega ahí y hay que agregarla en los dos.
+  así que una columna nueva se agrega ahí y hay que agregarla en los dos. Desde
+  #116 (PR 3) también viven ahí `match_log` y `contact_log` — la bitácora de
+  coincidencias y de envíos, solo IDs y enums, sin PII, con `ON DELETE CASCADE`
+  sobre `people(id)` (misma retención que el resto del esquema). Desde PR 4
+  tienen escritor: `insertMatchLog`/`insertContactLog` (escritura) y
+  `matchLogCounts`/`contactLogCounts` (agregados, con `since` opcional para
+  ventanas — los usa el reporte por correo).
+- `src/logbook.js` — `logMatch`/`logContact` (#116, PR 4): la capa que
+  instrumenta `facematch.js` y `notify.js` escribiendo en `match_log`/
+  `contact_log`. Regla de oro, aplicada acá una sola vez para todo el árbol de
+  llamadas: **un fallo escribiendo la bitácora nunca tumba ni retrasa el flujo
+  principal** — cada función atrapa su propio error y sigue.
 - `src/people.js` — `createStore(adapter)`, la capa de dominio encima del
   adaptador (búsqueda, merge, suscripciones, fotos). Exporta `STATUSES` y
   `SOURCES`.
@@ -159,7 +174,10 @@ hay framework de frontend ni paso de build: lo que se lee es lo que corre.
   cuando no hay credenciales. Nunca tumba la app; degrada.
 - `src/facematch.js` — la orquestación encima del proveedor: `processPhoto`,
   `identifyRescuedPerson` (el flujo del rescatista) y los dos barridos,
-  `backfillUnindexedPhotos` y `backfillPhotoDerivatives`.
+  `backfillUnindexedPhotos` y `backfillPhotoDerivatives`. Cada camino que
+  produce una coincidencia real (`matchStoredPhoto`, `identifyRescuedPerson`)
+  y cada intento de aviso (`notifyFaceMatch`, `requestRescueConfirmation`,
+  `resolveRescueAnswer`) llama a `src/logbook.js` (#116, PR 4).
 - `src/thumbs.js` — el recorte cuadrado sobre el rostro, con `sharp`, en dos
   tamaños (240 para la lista, 480 para la ficha).
 - `src/html.js` — `layout()`, `esc()`, `facePlate()`, `statusBadge()` y los
@@ -169,10 +187,70 @@ hay framework de frontend ni paso de build: lo que se lee es lo que corre.
   `/ideas`, `/bug`, `/privacidad`, `/terminos`, `/api-doc` y
   `/mantenimiento` ≡ `/fotos/actualizar`. Es el archivo más grande del repo.
 - `src/routes/api.js` — el JSON: `/api/people`, `/api/updates`,
-  `/api/people/:id/subscriptions`, `/api/reindex` y los `/api/diag*`.
+  `/api/people/:id/subscriptions`, `/api/reindex`, `/api/match-stats` y los
+  `/api/diag*`.
 - `src/routes/webhooks.js` — WhatsApp (Meta Cloud API), dormido. El `GET` es el
   handshake y es una lectura; el `POST` escribe en la base y exige la
   credencial del relevo (`WHATSAPP_RELAY_SECRET`, cabecera `X-Relay-Secret`).
+- `src/adminAuth.js` + `src/routes/admin.js` — "Sign in with Vercel" para
+  `/admin` (#116, PR 5): login, callback, sesión propia (cookie firmada con
+  HMAC, sin tabla en la base — igual de stateless que `verify_token`), logout
+  y el middleware `requireAdminSession`, montado sobre `/admin` y
+  `/api/admin/*`. El sitio sigue público; solo esas dos rutas quedan detrás
+  del gate. Sin `ADMIN_EMAILS` configurada, cerrado para todos — ver
+  `docs/admin-auth-setup.md` para el setup de dashboard que le toca a un
+  humano.
+- `src/adminStats.js` — el panel de estadísticas (#116, PR 6), montado en
+  `GET /admin/stats`. SOLO cifras agregadas — misma clase de dato que ya es
+  pública en `GET /api/diag`; nunca un nombre, contacto, `person_id`,
+  `face_id` ni `update_id`. Reusa `table()`/`section()`/`pivotContact()`/…
+  de `src/report.js` para que el correo y el panel nunca puedan
+  contradecirse. Detrás de `statsGate` (`src/adminAuth.js`): cerrado por
+  `requireAdminSession` salvo que `PUBLIC_STATS=1` lo abra temporalmente
+  (decisión del operador, mientras el auth de Vercel termina de
+  configurarse) — `noindex` + banner visible cuando está abierto. El
+  drill-down por ID que resolvería nombres/contactos en vivo **no existe
+  todavía**; cuando exista, nace en `/api/admin/*` con `requireAdminSession`
+  — ese prefijo NUNCA lee `PUBLIC_STATS`.
+  **Hotfix post-#127:** el embudo (la sección que depende de
+  `computeMatchStats`, el recompute contra Rekognition — medido en 28,7s en
+  prod con ~110 fotos) casi tumbó `/admin/stats` con un 504
+  (`maxDuration` estaba en 30s). `GET /admin/stats` ahora SOLO llama a
+  `gatherCheapReportData` (`src/report.js` — bitácora + conteos + serie de
+  7 días, todo con índice, nunca Rekognition); el embudo se pide aparte,
+  después de renderizar, a `GET /admin/stats/funnel` (mismo `statsGate`,
+  fragmento HTML inyectado por un script vanilla inline). Si ese fragmento
+  falla o expira, la sección lo dice — nunca un cero que parezca un dato
+  real. `gatherReportData` (el correo, que sí puede pagar el recompute
+  completo porque corre en su propio cron) ahora compone
+  `gatherCheapReportData` + `gatherFunnelStats`, y mide cuánto tarda esa
+  segunda parte — el correo trae esa duración en el pie, y una corrida que
+  pase de 60s deja un `console.warn` con umbral explícito.
+  **Hotfix siguiente (investigación del panel mostrando 4 coincidencias / 0
+  envíos):** confirmado en el código, no supuesto — `/rescate` deja el
+  correo y el WhatsApp del rescatista como **opcionales** (`rescueForm()` en
+  `src/routes/web.js`, y el checkbox "solo búsqueda"), y
+  `notifyRescuerOfMatches` (`src/facematch.js`) solo llama a
+  `notifyFaceMatch`/`requestRescueConfirmation` cuando existe una
+  suscripción — sin correo ni teléfono no hay a quién avisar, así que 0
+  envíos con coincidencias reales es el comportamiento correcto: el
+  rescatista ya vio el contacto de la familia EN PANTALLA (esa es la
+  entrega), y `match_log` (superficie `rescate`) ya captura exactamente eso.
+  No es un hueco de instrumentación — verificado con evidencia de código,
+  no con una corrida.
+  **Hotfix "los ceros pre-instrumentación mienten por omisión" +
+  visualización:** `store.matchLogEarliest()`/`contactLogEarliest()` (`MIN
+  (created_at)`, null si la tabla está vacía) le dan a
+  `gatherCheapReportData`/`gatherDailySeries` (`src/report.js`) un punto de
+  corte real — antes de esa fecha no es "cero", es "sin instrumentación", y
+  el panel lo muestra como `—` (nunca 0) con `instrumentedSinceNote()`
+  declarando desde cuándo se mide, en el correo y en el panel. `src/charts.js`
+  agrega columnas SVG generadas en el servidor (sin dependencias, sin CDN, sin
+  framework) para la serie de 7 días, envíos por canal y el embudo — paleta
+  de estado (bueno/alerta/crítico) para enviado/fallido/rechazado, un único
+  azul para series de un solo valor, `role="img"` + `aria-label` agregado en
+  cada SVG, y las tablas de siempre debajo — nunca reemplazadas — para quien
+  lee sin JS o con lector de pantalla.
 - `src/privacy.js` — `publicUpdate()` y `maskReporter()`: la única puerta por
   la que una fila de `updates` sale a una respuesta pública.
 - `src/duplicates.js` — detección de reportes repetidos. Siempre consultiva.
@@ -255,6 +333,25 @@ sola función. De ahí salen tres reglas que no son negociables:
   apagado para siempre, y por eso todo trabajo de fondo es idempotente y
   reanudable: si la instancia se congela a mitad del barrido, la siguiente
   visita lo retoma sin duplicar nada.
+- **`maxDuration` (`vercel.json`, hoy 120s en plan Pro) es de la función
+  entera, no de una ruta.** Cualquier request que corra dentro de
+  `api/index.js` — una página que un navegador está esperando, o el cron del
+  correo — comparte el mismo presupuesto. `computeMatchStats` (el recompute
+  del embudo contra Rekognition, #117) es lo único caro de esta app y medía
+  28,7s en prod con ~110 fotos, creciendo con el tamaño del registro: **nunca
+  debe correr adentro del camino síncrono de una página** — así fue el 504 de
+  `/admin/stats` que motivó subir `maxDuration` de 30 a 120 y diferir el
+  embudo a `GET /admin/stats/funnel` (hotfix post-#127, ver `src/adminStats.js`).
+  El cron (`POST /api/report/send`, `src/report.js`) sí puede pagarlo porque
+  corre solo, sin nadie esperando — pero corre contra el MISMO techo, y el
+  correo ahora trae su propia duración en el pie para que crecer sea visible
+  antes de volver a rozarlo. Pendiente, declarado y no resuelto: la
+  concurrencia de `computeMatchStats` (`MATCH_STATS_CONCURRENCY = 3`,
+  `src/facematch.js`) nunca se ajustó contra la cuota real de SearchFaces de
+  la cuenta — us-east-1 default hasta 50 TPS según la doc pública de AWS, muy
+  por encima de 3, pero eso es el default de la REGIÓN, no necesariamente la
+  cuota configurada de esta cuenta. Subirla a ciegas en una app de respuesta
+  a emergencia no es una decisión de hotfix.
 
 ## Variables de entorno
 
@@ -268,7 +365,7 @@ presencia y huella, nunca el valor).
 | `PORT` | 3000. Solo aplica a `npm run dev` / `npm start`; en Vercel nadie escucha un puerto. |
 | `DATABASE_URL` (o `POSTGRES_URL`, `STORAGE_URL`, `NEON_DATABASE_URL`…) | SQLite. En local, un archivo; **en Vercel, un `/tmp` efímero que se pierde**. |
 | `DB_PATH` | `./data/encontrados.db`. Solo para SQLite local. |
-| `API_KEY` | Los `POST` del API quedan **abiertos** y `DELETE /api/people/:id` responde 503. Las lecturas son públicas siempre, con o sin llave. |
+| `API_KEY` | Los `POST` del API quedan **abiertos** y `DELETE /api/people/:id` responde 503. Las lecturas de información de personas son públicas siempre, con o sin llave; la excepción es `GET /api/match-stats`, que es operativa y dispara búsquedas en Rekognition, así que pide llave. |
 | `SENDGRID_API_KEY` | No sale ningún correo: ni verificación de suscripción, ni alertas, ni avisos. Se le hace `trim()` porque un salto de línea pegado sin querer devuelve 401. |
 | `EMAIL_FROM` | `a@torrenegra.com`. Tiene que ser un remitente verificado en SendGrid o SendGrid responde 403. |
 | `AVISO_EMAIL` | El aviso del rescatista y el relevo a Colombia Te Busca no se mandan. Falla en silencio: quien reportó ve su página de éxito igual. Y con `NOTIFY_MODE=relay` (el modo por omisión) tampoco sale ningún aviso a terceros: quedan en el log como `[notify:relevo] PERDIDO`. |
@@ -282,9 +379,14 @@ presencia y huella, nunca el valor).
 | `WHATSAPP_TOKEN` / `WHATSAPP_PHONE_NUMBER_ID` | El canal queda dormido (que es su estado actual). |
 | `WHATSAPP_VERIFY_TOKEN` | `encontrados-verify`. Es el handshake del webhook de Meta. |
 | `WHATSAPP_RELAY_SECRET` | `POST /webhooks/whatsapp` responde **403 a todo**. Es la única variable que al faltar cierra en vez de abrir: ese POST escribe en la base, y su único cliente legítimo es el relevo que verifica la firma de Meta y reenvía. El `GET` del handshake no la usa. Se genera con `openssl rand -hex 32`. |
+| `VERCEL_APP_CLIENT_ID` / `VERCEL_APP_CLIENT_SECRET` | `/admin/login/start` responde **503**: no arranca un login de "Sign in with Vercel" a medias. Ver `docs/admin-auth-setup.md` para crear la App en el dashboard. |
+| `ADMIN_SESSION_SECRET` | Mismo 503 que arriba — firma la cookie de sesión propia de `/admin` (nada que ver con el client secret de Vercel). Rotarla cierra todas las sesiones activas de golpe. |
+| `ADMIN_EMAILS` | `/admin` queda **cerrada para todos**, incluso para quien complete un login real y válido en Vercel — otra que falla cerrado, no abierto. Correos separados por coma, nunca hardcodeados (repo público). |
+| `PUBLIC_STATS` | `GET /admin/stats` sigue **detrás de sesión** (el default). Solo el valor exacto `1` la abre sin sesión — ventana temporal mientras el auth de Vercel termina de configurarse (#116, PR 6). Cerrarla es borrar la variable, no un PR. El drill-down por ID (`/api/admin/*`) nunca lee esta variable. |
 
-`SENDGRID_API_BASE` y `GITHUB_API_BASE` existen solo para que las pruebas
-apunten a sus servidores falsos. No se definen en producción.
+`SENDGRID_API_BASE`, `GITHUB_API_BASE`, `WHATSAPP_API_BASE`,
+`VERCEL_OAUTH_API_BASE` y `VERCEL_OAUTH_AUTHORIZE_URL` existen solo para que
+las pruebas apunten a sus servidores falsos. No se definen en producción.
 
 ## Endpoints operativos
 
@@ -313,5 +415,14 @@ alguien, sí:
 - `DELETE /api/people/:id` — **con llave**, y deshabilitado (503) si no hay
   `API_KEY`. Cumple el borrado que promete la política de privacidad. Ojo: la
   fila se va en cascada, pero el rostro **sigue en la colección de Rekognition**.
+- `GET /api/match-stats` — **con llave.** Recomputa el cruce facial histórico
+  buscando por `face_id` contra la colección (las firmas sobreviven aunque la
+  foto del rescatista se haya borrado) y devuelve solo cifras agregadas: fotos
+  de consulta que coinciden con algún reporte, personas distintas a cada lado,
+  la misma cara consultada más de una vez, y coincidencias contra firmas
+  colgadas sin foto en la base. No escribe nada y no notifica a nadie, pero es
+  una lectura con llave: gasta búsquedas de Rekognition y sus cifras son de
+  operación, no información de emergencia. Si `failed` viene > 0, los totales
+  son un piso, no el techo.
 - `/fotos/actualizar` y `POST /api/reindex` — ver "Poner al día fotos" arriba:
   la primera es la segura sin llave, la segunda es la que indexa y avisa.

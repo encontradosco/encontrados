@@ -21,6 +21,21 @@ npm run dev     # SQLite en ./data/encontrados.db, http://localhost:3000
 npm test
 ```
 
+### Con Docker (opcional)
+
+No necesitas Node ni compilar módulos nativos en el equipo. Solo Docker.
+
+```bash
+docker compose up --build          # http://localhost:3000
+docker compose run --rm app npm run seed   # datos sintéticos en la base local
+docker compose run --rm app npm test       # las pruebas dentro del contenedor
+```
+
+El contenedor usa Node 22, igual que CI. El código va por un bind mount, así
+que editar un archivo en el equipo reinicia el servidor adentro. La base SQLite
+queda en `./data`, que ya está en `.gitignore`. Sin credenciales el
+reconocimiento facial y el correo quedan apagados, igual que fuera de Docker.
+
 ## Deploy en Vercel
 
 1. Importa el repo en Vercel (framework: **Other**). `vercel.json` enruta todo a la función `api/index.js` (Express completo); `/public` lo sirve el CDN.
@@ -94,6 +109,9 @@ npm run dev     # SQLite local, http://localhost:3000
 - [**SECURITY.md**](SECURITY.md) — un hallazgo de seguridad o privacidad **no va
   en un issue público**.
 - [**CODE_OF_CONDUCT.md**](CODE_OF_CONDUCT.md).
+- [**CLAUDE.md**](CLAUDE.md) y [**.claude/**](.claude/README.md) — si trabajas
+  con un agente: las reglas que carga solo, los comandos de lo que más se
+  repite, y un arranque rápido para el primer día.
 
 Buenos puntos de entrada: los issues marcados
 [`good first issue`](https://github.com/encontradosco/encontrados/labels/good%20first%20issue)

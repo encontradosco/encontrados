@@ -151,6 +151,11 @@ h1.compact .subtle { font-family: var(--font-sans); font-weight: 400; font-size:
   font-weight: 600;
   text-decoration: none;
   transition: background 0.15s ease, border-color 0.15s ease;
+  /* Transparente, pero reservado: la variante en contorno (.secondary) suma
+     2px por lado, y sobre una base sin borde eso la dejaba 4px más alta que la
+     principal justo donde el diseño promete que son del mismo tamaño. El
+     espacio se paga acá una vez, para todos. */
+  border: 2px solid transparent;
 }
 .btn-title { display: block; }
 .btn-sub {
@@ -164,6 +169,38 @@ h1.compact .subtle { font-family: var(--font-sans); font-weight: 400; font-size:
 .big-btn.report:hover { background: var(--accent-dark); }
 .big-btn.search { background: var(--accent); color: #fff; }
 .big-btn.search:hover { background: var(--accent-dark); }
+/* La alternativa de una pareja de acciones. Mismo tamaño y mismo peso de letra
+   que la principal —no es "la opción chiquita"— pero en contorno, para que un
+   ojo que barre la pantalla vea DOS caminos y no dos veces el mismo. */
+.big-btn.secondary {
+  background: var(--surface);
+  color: var(--accent-dark);
+  border: 2px solid var(--accent);
+}
+.big-btn.secondary:hover { background: rgba(43, 108, 176, 0.08); }
+
+/* La bifurcación del bloque de aviso: "¿la tienes contigo?" antes del
+   formulario. <details> y no JavaScript — esta pantalla la abre alguien parado
+   al lado de una persona, con la señal que tenga. */
+.aviso-pregunta {
+  font-weight: 600;
+  font-size: 1.05rem;
+  margin: 0.9rem 0 0.6rem;
+}
+.aviso-si { margin-bottom: 0.6rem; }
+.aviso-si > summary {
+  list-style: none;
+  cursor: pointer;
+}
+.aviso-si > summary::-webkit-details-marker { display: none; }
+.aviso-si > summary:focus-visible { outline: 3px solid var(--accent-dark); outline-offset: 2px; }
+.aviso-si[open] > summary { border-radius: 12px 12px 0 0; }
+.aviso-si-cuerpo {
+  border: 2px solid var(--accent);
+  border-top: none;
+  border-radius: 0 0 12px 12px;
+  padding: 0.9rem 1rem 1rem;
+}
 
 .card {
   background: var(--surface);
@@ -409,6 +446,12 @@ button:disabled { opacity: 0.55; cursor: progress; }
 .search-row input { flex: 1; }
 .search-row button { width: auto; }
 
+/* Rescuer photo field: one native input for no-JS, two buttons when JS runs. */
+.photo-field-label { font-weight: 400; font-size: 0.85rem; color: var(--muted); display: block; margin-bottom: 0.25rem; }
+.photo-buttons-row { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.photo-buttons-row button { flex: 1 1 45%; }
+[data-photo-picked] { margin: 0.35rem 0 0; }
+
 .notice {
   background: #eef3ee;
   border: 1px solid #cfdfd2;
@@ -567,4 +610,128 @@ pre {
 .choice label:has(input:checked) {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px rgba(43, 108, 176, 0.15);
+}
+
+/* ---------------------------------------------------------------- /admin/stats
+   El panel de estadísticas (#116). Misma identidad del sitio — mismos
+   tokens, mismos radios, misma tipografía — ensanchado porque es la única
+   página densa en datos, no un producto aparte. Firma: la barra superior de
+   3px de cada card reusa el mismo gesto que el .tricolor de la cabecera
+   (franjas de color que informan estado) — acá, sobre cada card, dice si
+   esa cifra está sana o pide atención, en vez de ser puramente decorativa. */
+main.stats-wide { max-width: 920px; }
+
+.stats-hero {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.7rem;
+  margin: 1rem 0 1.4rem;
+}
+.stat-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-top: 3px solid var(--accent);
+  border-radius: 12px;
+  padding: 0.85rem 1rem;
+}
+.stat-card--warn { border-top-color: #c8863c; }
+.stat-card--bad { border-top-color: #c0392b; }
+.stat-card--loading {
+  border-top-color: var(--border-strong);
+  color: var(--muted);
+}
+.stat-card__label {
+  font-size: 0.76rem;
+  color: var(--muted);
+  margin: 0 0 0.25rem;
+  font-weight: 600;
+}
+.stat-card__value {
+  font-family: var(--font-serif);
+  font-weight: 700;
+  font-size: 1.9rem;
+  line-height: 1.05;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+.stat-card--loading .stat-card__value { color: var(--muted); font-size: 1.3rem; }
+.stat-card__detail {
+  font-size: 0.75rem;
+  color: var(--muted);
+  margin-top: 0.35rem;
+  line-height: 1.4;
+}
+.stat-card__dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 0.3em;
+}
+
+@keyframes stats-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+.stat-card--loading .stat-card__value { animation: stats-pulse 1.6s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .stat-card--loading .stat-card__value { animation: none; }
+}
+
+.stats-section { margin: 1.6rem 0; }
+.stats-section h2 { margin: 0 0 0.5rem; }
+.stats-chart-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 0.8rem 0.9rem 0.6rem;
+  margin: 0.6rem 0;
+  overflow-x: auto;
+}
+.stats-note {
+  font-size: 0.82rem;
+  color: var(--muted);
+  margin: 0.3rem 0 0.7rem;
+}
+
+details.stats-detail {
+  margin-top: 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+details.stats-detail > summary {
+  cursor: pointer;
+  padding: 0.6rem 0.85rem;
+  font-weight: 600;
+  font-size: 0.88rem;
+  color: var(--accent-dark);
+  list-style: none;
+}
+details.stats-detail > summary::-webkit-details-marker { display: none; }
+details.stats-detail > summary::before {
+  content: '▸';
+  display: inline-block;
+  margin-right: 0.4em;
+  transition: transform 0.15s ease;
+}
+details.stats-detail[open] > summary::before { transform: rotate(90deg); }
+details.stats-detail > summary:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(43, 108, 176, 0.18);
+  border-radius: 6px;
+}
+details.stats-detail .stats-detail__body { padding: 0 0.85rem 0.85rem; }
+details.stats-detail table { font-size: 0.85rem; }
+
+.stats-banner {
+  padding: 0.7rem 0.9rem;
+  background: #fdf6e3;
+  border: 1px solid #f0dca0;
+  border-radius: 10px;
+  font-size: 0.85rem;
+  margin-bottom: 1rem;
+}
+.stats-banner a { color: var(--accent-dark); }
+
+@media (max-width: 480px) {
+  .stats-hero { grid-template-columns: repeat(2, 1fr); }
+  .stat-card__value { font-size: 1.6rem; }
 }

@@ -81,6 +81,33 @@ async function createSqliteAdapter(dbPath) {
     );
     CREATE INDEX IF NOT EXISTS idx_photos_face ON photos(face_id);
     CREATE INDEX IF NOT EXISTS idx_photos_subscription ON photos(subscription_id);
+
+    -- Bitácora de coincidencias y de envíos (#116, PR 3 — SOLO esquema; PR 4
+    -- escribe en estas tablas). Mismas reglas que en Postgres (ver el
+    -- comentario ahí): sin PII, retención heredada de ON DELETE CASCADE sobre
+    -- people(id), created_at + índice para un cleanup job futuro.
+    CREATE TABLE IF NOT EXISTS match_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+      update_id INTEGER REFERENCES updates(id) ON DELETE CASCADE,
+      face_id TEXT NOT NULL,
+      similarity REAL,
+      surface TEXT NOT NULL CHECK (surface IN ('rescate','report','api')),
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_match_log_person ON match_log(person_id);
+    CREATE INDEX IF NOT EXISTS idx_match_log_created ON match_log(created_at);
+
+    CREATE TABLE IF NOT EXISTS contact_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+      update_id INTEGER REFERENCES updates(id) ON DELETE CASCADE,
+      channel TEXT NOT NULL CHECK (channel IN ('email','whatsapp','relevo')),
+      result TEXT NOT NULL CHECK (result IN ('enviado','fallido','rechazado')),
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_contact_log_person ON contact_log(person_id);
+    CREATE INDEX IF NOT EXISTS idx_contact_log_created ON contact_log(created_at);
   `);
 
   // Older dev databases: add the GPS columns if missing.
@@ -400,6 +427,13 @@ async function createSqliteAdapter(dbPath) {
         )
         .all(...faceIds);
     },
+    // Metadatos de toda foto con firma facial — sin contenido ni derivados:
+    // esto alimenta un conteo, no una pantalla.
+    async indexedPhotos() {
+      return db
+        .prepare('SELECT id, person_id, kind, face_id FROM photos WHERE face_id IS NOT NULL ORDER BY id')
+        .all();
+    },
     async deletePerson(id) {
       const person = getPersonStmt.get(id);
       if (!person) return null;
@@ -429,6 +463,122 @@ async function createSqliteAdapter(dbPath) {
         .prepare("SELECT COUNT(*) AS n FROM photos WHERE subscription_id = ? AND kind = 'query'")
         .get(subscriptionId).n;
     },
+
+    // Bitácora de coincidencias y de envíos (#116, PR 4 — la instrumentación;
+    // las tablas las creó PR 3). Cada escritura la envuelve `src/logbook.js`
+    // en un try/catch — acá abajo no hace falta duplicar esa protección.
+    async insertMatchLog({ personId, updateId, faceId, similarity, surface }) {
+      db.prepare(
+        'INSERT INTO match_log (person_id, update_id, face_id, similarity, surface) VALUES (?, ?, ?, ?, ?)'
+      ).run(personId, updateId ?? null, faceId, similarity ?? null, surface);
+    },
+    async insertContactLog({ personId, updateId, channel, result }) {
+      db.prepare(
+        'INSERT INTO contact_log (person_id, update_id, channel, result) VALUES (?, ?, ?, ?)'
+      ).run(personId, updateId ?? null, channel, result);
+    },
+    // Cuenta total y por superficie. `since` (ISO) filtra a lo escrito desde
+    // ahí — se usa para la línea de "cambio desde el reporte anterior" del
+    // correo operativo; sin `since`, es el acumulado histórico completo.
+    async matchLogCounts({ since } = {}) {
+      const where = since ? 'WHERE created_at >= ?' : '';
+      const params = since ? [since] : [];
+      const total = db.prepare(`SELECT COUNT(*) AS n FROM match_log ${where}`).get(...params).n;
+      const bySurface = {};
+      for (const surface of ['rescate', 'report', 'api']) {
+        const w = since ? 'WHERE created_at >= ? AND surface = ?' : 'WHERE surface = ?';
+        const p = since ? [since, surface] : [surface];
+        bySurface[surface] = db.prepare(`SELECT COUNT(*) AS n FROM match_log ${w}`).get(...p).n;
+      }
+      return { total, ...bySurface };
+    },
+    // Una fila por (channel, result) — el correo pivotea esto en su propia
+    // tabla. `since` con el mismo significado que en matchLogCounts.
+    async contactLogCounts({ since } = {}) {
+      const where = since ? 'WHERE created_at >= ?' : '';
+      const params = since ? [since] : [];
+      return db
+        .prepare(
+          `SELECT channel, result, COUNT(*) AS count FROM contact_log ${where} GROUP BY channel, result ORDER BY channel, result`
+        )
+        .all(...params);
+    },
+
+    // Series por día (#116, PR 6 — el panel). `since` (ISO) siempre viene del
+    // llamador ya calculado en JS — nunca aritmética de fechas en SQL — para
+    // no depender de qué funciones de fecha trae la versión de SQLite en
+    // este runtime. `date(created_at)` sí parsea bien el ISO con 'T'/'Z' que
+    // ya usa el resto de este esquema.
+    //
+    // El corte de "día" es el de Bogotá, no UTC (hotfix): toda la superficie
+    // (el pie del correo, el cron, el panel) habla en hora de Bogotá, y entre
+    // las 19:00 y la medianoche Bogotá caía en el día SIGUIENTE bajo UTC —
+    // cinco horas de cada día contadas en la fila equivocada. El modificador
+    // '-5 hours' es el mismo desplazamiento fijo que usa el resto del repo
+    // (Colombia no tiene horario de verano — ver report.js) y debe quedar
+    // igual al `AT TIME ZONE 'America/Bogota'` del adapter de Postgres:
+    // mismo corte de día en los dos motores.
+    async matchLogDaily({ since } = {}) {
+      const where = since ? 'WHERE created_at >= ?' : '';
+      const params = since ? [since] : [];
+      return db
+        .prepare(
+          `SELECT date(created_at, '-5 hours') AS day, COUNT(*) AS count FROM match_log ${where} GROUP BY day ORDER BY day`
+        )
+        .all(...params);
+    },
+    async contactLogDaily({ since } = {}) {
+      const where = since ? 'WHERE created_at >= ?' : '';
+      const params = since ? [since] : [];
+      return db
+        .prepare(
+          `SELECT date(created_at, '-5 hours') AS day, result, COUNT(*) AS count FROM contact_log ${where} GROUP BY day, result ORDER BY day`
+        )
+        .all(...params);
+    },
+
+    // El primer registro de cada tabla (hotfix post-#127/#128 — "los ceros
+    // pre-instrumentación son una mentira por omisión"). Antes de esta fecha
+    // la bitácora no existía: no es que no pasó nada, es que no se medía.
+    // null si la tabla está vacía — todavía no hay ningún registro.
+    async matchLogEarliest() {
+      const r = db.prepare('SELECT MIN(created_at) AS min FROM match_log').get();
+      return r.min || null;
+    },
+    async contactLogEarliest() {
+      const r = db.prepare('SELECT MIN(created_at) AS min FROM contact_log').get();
+      return r.min || null;
+    },
+
+    // Cifras del panel #132 — mismo contrato que el adapter de Postgres (ver
+    // ahí el porqué de cada una).
+    async updatesBeyondFirstBySource() {
+      return db
+        .prepare(
+          `WITH ranked AS (
+             SELECT source, ROW_NUMBER() OVER (PARTITION BY person_id ORDER BY created_at ASC, id ASC) AS rn
+             FROM updates
+           )
+           SELECT source, COUNT(*) AS n FROM ranked WHERE rn > 1 GROUP BY source`
+        )
+        .all();
+    },
+    // `subscription_id` es nuevo (#132, punto 5) — mismo contrato que el
+    // adapter de Postgres (ver ahí el porqué del GROUP BY en vez de DISTINCT).
+    async queryPhotoPeople() {
+      return db
+        .prepare(
+          `SELECT ph.person_id AS person_id, p.normalized_name AS normalized_name, MAX(ph.subscription_id) AS subscription_id
+           FROM photos ph JOIN people p ON p.id = ph.person_id
+           WHERE ph.kind = 'query'
+           GROUP BY ph.person_id, p.normalized_name`
+        )
+        .all();
+    },
+    async matchLogSimilarityRows() {
+      return db.prepare('SELECT similarity, surface FROM match_log').all();
+    },
+
     async close() {
       db.close();
     }

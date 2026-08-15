@@ -1,6 +1,7 @@
 // Outbound notifications: email (SendGrid) and WhatsApp (Meta Cloud API).
 // All fire-and-forget with logging — a failed notification must never block a report.
 const env = require('./env');
+const { logContact, resultFromSend } = require('./logbook');
 
 const STATUS_LABEL = {
   safe: 'A SALVO',
@@ -141,7 +142,13 @@ async function relayToOperators({ reason, channel, address, subject, text, perso
 
 // Returns { ok, status, error } and logs loudly — email silence is a bug we
 // must be able to diagnose from the Vercel logs alone.
-async function sendEmail(to, subject, text) {
+//
+// `html` es opcional: casi todo el sistema manda texto plano (avisos,
+// verificaciones), y eso no cambia. El reporte operativo recurrente (#116,
+// PR 2) es el primer llamador que pasa `html` — SendGrid recibe las dos
+// partes, texto primero, para que un cliente que no rinde HTML siga
+// mostrando algo legible.
+async function sendEmail(to, subject, text, { html } = {}) {
   // Read from process.env too so configuration applied after module load
   // (and test doubles) are honoured.
   const apiKey = process.env.SENDGRID_API_KEY || env.SENDGRID_API_KEY;
@@ -161,7 +168,12 @@ async function sendEmail(to, subject, text) {
         personalizations: [{ to: [{ email: to }] }],
         from: { email: env.EMAIL_FROM, name: 'encontrados.co' },
         subject,
-        content: [{ type: 'text/plain', value: text }],
+        content: html
+          ? [
+              { type: 'text/plain', value: text },
+              { type: 'text/html', value: html }
+            ]
+          : [{ type: 'text/plain', value: text }],
         // Click tracking rewrites our links through SendGrid's tracking domain.
         // That domain returns 403 here, which silently broke every
         // verification and unsubscribe link. These are transactional emails:
@@ -301,6 +313,12 @@ async function sendWhatsApp(to, text, { template } = {}) {
       );
       return { ok: false, status: res.status, error: body.slice(0, 500) };
     }
+    // Antes de #116 (PR 4) esto era el hueco exacto que hacía invisible un
+    // envío exitoso de WhatsApp: ni un console.log, y menos una fila en la
+    // bitácora. sendEmail ya loggeaba su éxito; esto lo empareja.
+    console.log(
+      `[notify:whatsapp] sent to=${to} tipo=${template ? `plantilla:${template.name}` : 'texto'}`
+    );
     return { ok: true, status: res.status };
   } catch (e) {
     console.error(
@@ -337,24 +355,29 @@ async function sendVerificationEmail(person, sub) {
 }
 
 // Notify all VERIFIED subscribers of a person about a new update.
-// skipAddress: don't echo the update back to whoever reported it.
+// skipAddress / skipAddresses: don't echo the update back to whoever reported
+// it. Two forms because a WhatsApp reporter has exactly one address to skip
+// (their own number), while a web report can carry a phone AND an email —
+// either one might already be a subscriber's address.
 // Every alert carries that subscriber's personal unsubscribe link.
 //
 // En modo relevo cada aviso se convierte en un correo al operador — uno por
 // destinatario previsto, porque cada uno es una decisión distinta de a quién
 // se le entrega qué.
-async function notifySubscribers(store, person, update, { skipAddress } = {}) {
+async function notifySubscribers(store, person, update, { skipAddress, skipAddresses } = {}) {
+  const skip = new Set([skipAddress, ...(skipAddresses || [])].filter(Boolean));
   const subs = await store.getSubscriptions(person.id);
   const baseText = `🔔 Actualización en encontrados.co:\n${updateText(person, update)}`;
   const subject = `Actualización sobre ${person.full_name} — encontrados.co`;
   const relay = relayEnabled();
   const jobs = subs
-    .filter((s) => s.verified && !(skipAddress && s.address === skipAddress))
-    .map((s) => {
-      if (s.channel !== 'email' && s.channel !== 'whatsapp') return Promise.resolve(false);
+    .filter((s) => s.verified && !skip.has(s.address))
+    .map(async (s) => {
+      if (s.channel !== 'email' && s.channel !== 'whatsapp') return false;
       const text = `${baseText}\n\nPara dejar de recibir estos avisos: ${unsubscribeLink(s)}`;
+      let res;
       if (relay) {
-        return relayToOperators({
+        res = await relayToOperators({
           reason: 'Actualización de estado para quien sigue a esta persona',
           channel: s.channel,
           address: s.address,
@@ -362,9 +385,21 @@ async function notifySubscribers(store, person, update, { skipAddress } = {}) {
           text,
           person
         });
+      } else if (s.channel === 'email') {
+        res = await sendEmail(s.address, subject, text);
+      } else {
+        res = await sendWhatsApp(s.address, text);
       }
-      if (s.channel === 'email') return sendEmail(s.address, subject, text);
-      return sendWhatsApp(s.address, text);
+      // Bitácora de envíos (#116, PR 4). El canal que queda es 'relevo' en
+      // modo relevo, sin importar si el suscriptor original era email o
+      // whatsapp — es lo que de verdad se intentó.
+      await logContact(store, {
+        personId: person.id,
+        updateId: update.id,
+        channel: relay ? 'relevo' : s.channel,
+        result: resultFromSend(res)
+      });
+      return res;
     });
   const results = await Promise.allSettled(jobs);
   let sent = 0;

@@ -22,6 +22,7 @@ const {
 const { storeThumbnail } = require('./thumbs');
 const { toMatchable } = require('./photo');
 const { hasGeometry, derivativeAction } = require('./report-photo');
+const { logMatch, logContact, resultFromSend } = require('./logbook');
 
 const MAX_QUERY_PHOTOS = 3;
 
@@ -69,7 +70,12 @@ function matchText(matchedPerson, similarity, sub) {
     .join('\n');
 }
 
-async function notifyFaceMatch(store, sub, matchedPerson, similarity, contact) {
+// `updateId` es nuevo (#116, PR 4): los tres llamadores ya tenían a mano el
+// update más reciente de matchedPerson antes de invocar esta función, así que
+// enhebrarlo acá no cuesta una consulta extra en ningún caso. Es opcional
+// (queda null si algún llamador futuro no lo tiene) porque contact_log.update_id
+// es nullable a propósito, desde el esquema de PR 3.
+async function notifyFaceMatch(store, sub, matchedPerson, similarity, contact, updateId = null) {
   if (!sub) return;
   // Que la suscripción no esté verificada NO es motivo para tirar el aviso.
   //
@@ -107,8 +113,8 @@ async function notifyFaceMatch(store, sub, matchedPerson, similarity, contact) {
   // El aviso más sensible de la app: su destinatario es alguien que dice haber
   // rescatado a la persona, sin que nadie lo haya verificado. En modo relevo no
   // sale solo.
-  const alOperador = (delivered) =>
-    relayToOperators({
+  const alOperador = async (delivered) => {
+    const res = await relayToOperators({
       reason:
         'Coincidencia facial con quien dice haber rescatado a esta persona' +
         (unverified ? ' (suscripción SIN verificar)' : ''),
@@ -133,6 +139,17 @@ async function notifyFaceMatch(store, sub, matchedPerson, similarity, contact) {
           : 'El reporte no trae contacto de quien la busca.'
       ].filter(Boolean)
     });
+    // El relevo ES el intento real que ocurrió (nada le llegó directo a
+    // sub.address), así que el canal que queda en la bitácora es 'relevo' —
+    // no sub.channel — sea cual sea el motivo del relevo.
+    await logContact(store, {
+      personId: matchedPerson.id,
+      updateId,
+      channel: 'relevo',
+      result: resultFromSend(res)
+    });
+    return res;
+  };
 
   if (relayEnabled() || byWhatsApp) {
     await alOperador(false);
@@ -144,11 +161,16 @@ async function notifyFaceMatch(store, sub, matchedPerson, similarity, contact) {
     console.warn(
       `[facematch] subscription ${sub.id} is unverified — relevado, pero NUNCA enviado directo`
     );
+    // Nada se intentó — ni directo (por no estar verificada) ni relevo (el
+    // relevo está apagado, si no habría entrado por la rama de arriba). Es el
+    // único 'rechazado' real de esta función: la app decidió no intentar nada.
+    await logContact(store, { personId: matchedPerson.id, updateId, channel: sub.channel, result: 'rechazado' });
     return;
   }
 
   if (sub.channel === 'email') {
-    await sendEmail(sub.address, subject, text);
+    const res = await sendEmail(sub.address, subject, text);
+    await logContact(store, { personId: matchedPerson.id, updateId, channel: 'email', result: resultFromSend(res) });
     // El texto que acaba de salir NO lleva el contacto de la familia, así que
     // el caso queda abierto: alguien sabe dónde está una persona y nadie puede
     // avisarle a quien la busca. Por eso el operador recibe igual su copia, con
@@ -178,7 +200,14 @@ async function notifyRescuerOfMatches(store, { emailSub, phone, matches }) {
   if (!matches || !matches.length) return;
   for (const m of matches) {
     if (emailSub) {
-      await notifyFaceMatch(store, emailSub, m.person, m.similarity, m.update && m.update.contact);
+      await notifyFaceMatch(
+        store,
+        emailSub,
+        m.person,
+        m.similarity,
+        m.update && m.update.contact,
+        m.update && m.update.id
+      );
     }
   }
   // Una sola pregunta, por la coincidencia más fuerte (matches viene ordenado):
@@ -268,7 +297,7 @@ async function requestRescueConfirmation(store, address, person, { contact, simi
     console.warn(
       `[facematch:rescate] ${address} ya tiene una pregunta abierta — no se le pregunta por ${person.full_name}`
     );
-    await relayToOperators({
+    const relayRes = await relayToOperators({
       reason: 'Segunda coincidencia para un número que ya tiene una pregunta de rescate abierta',
       channel: 'whatsapp',
       address,
@@ -286,12 +315,14 @@ async function requestRescueConfirmation(store, address, person, { contact, simi
           : 'El reporte no trae contacto de quien la busca.'
       ].filter(Boolean)
     });
+    await logContact(store, { personId: person.id, updateId: null, channel: 'relevo', result: resultFromSend(relayRes) });
     return { asked: false, reason: 'otra-pregunta-abierta' };
   }
 
   const res = await sendWhatsApp(address, null, {
     template: { name, locale: whatsappTemplateLocale(), params: [person.full_name] }
   });
+  await logContact(store, { personId: person.id, updateId: null, channel: 'whatsapp', result: resultFromSend(res) });
   if (!res.ok) {
     console.error(`[facematch:rescate] la plantilla a ${address} no salió: ${res.error || res.status}`);
     return { asked: false, reason: 'envio-fallido' };
@@ -376,7 +407,8 @@ async function resolveRescueAnswer(store, address, { answer, maxAgeHours = RESCU
     { ...sub, verified: true },
     person,
     similarity,
-    latest && latest.contact
+    latest && latest.contact,
+    latest && latest.id
   );
 
   const ficha = await sourceFichaUrl(store, person.id);
@@ -399,6 +431,12 @@ async function resolveRescueAnswer(store, address, { answer, maxAgeHours = RESCU
       params: [person.full_name, ficha]
     }
   });
+  await logContact(store, {
+    personId: person.id,
+    updateId: latest && latest.id,
+    channel: 'whatsapp',
+    result: resultFromSend(res)
+  });
   if (!res.ok) {
     console.error(`[facematch:rescate] la ficha a ${address} no salió: ${res.error || res.status}`);
   }
@@ -408,7 +446,7 @@ async function resolveRescueAnswer(store, address, { answer, maxAgeHours = RESCU
 // Search the collection for a stored photo, index it, and notify on cross-kind
 // matches. Shared by live uploads and the backfill of previously-stored photos.
 async function matchStoredPhoto(store, matcher, photo, bytes) {
-  const { id, person_id: personId, kind, subscription_id: subscriptionId } = photo;
+  const { id, person_id: personId, kind, update_id: updateId, subscription_id: subscriptionId } = photo;
 
   // Search BEFORE indexing so the photo never matches itself.
   const matches = await matcher.searchByImage(bytes);
@@ -425,6 +463,16 @@ async function matchStoredPhoto(store, matcher, photo, bytes) {
     (p) => p.kind !== kind
   );
 
+  // Superficie del match_log (#116, PR 4): 'report' cuando la foto nueva es un
+  // reporte (llegó por la web o por POST /api/updates), 'api' cuando es una
+  // foto de consulta subida por POST /api/people/:id/subscriptions — la única
+  // otra puerta que crea fotos kind='query' aparte de /rescate (que tiene su
+  // propia superficie 'rescate', ver identifyRescuedPerson). Invariante que
+  // sostiene la fila: person_id y face_id SIEMPRE vienen del mismo lado — el
+  // lado reportado/encontrado — así que face_id siempre resuelve a una foto
+  // de esa misma persona.
+  const surface = kind === 'report' ? 'report' : 'api';
+
   let notified = 0;
   for (const mp of matchedPhotos) {
     const similarity = bySimilarity.get(mp.face_id) || 0;
@@ -433,13 +481,21 @@ async function matchStoredPhoto(store, matcher, photo, bytes) {
       const sub = await store.getSubscriptionById(mp.subscription_id);
       const person = await store.getPerson(personId);
       const latest = await store.getLatestUpdate(personId);
-      await notifyFaceMatch(store, sub, person, similarity, latest && latest.contact);
+      await logMatch(store, { personId, updateId, faceId, similarity, surface });
+      await notifyFaceMatch(store, sub, person, similarity, latest && latest.contact, updateId);
     } else {
       // A rescued face matched an existing report → alert this rescuer.
       const sub = await store.getSubscriptionById(subscriptionId);
       const person = await store.getPerson(mp.person_id);
       const latest = await store.getLatestUpdate(mp.person_id);
-      await notifyFaceMatch(store, sub, person, similarity, latest && latest.contact);
+      await logMatch(store, {
+        personId: mp.person_id,
+        updateId: mp.update_id,
+        faceId: mp.face_id,
+        similarity,
+        surface
+      });
+      await notifyFaceMatch(store, sub, person, similarity, latest && latest.contact, mp.update_id);
     }
     notified++;
   }
@@ -677,14 +733,159 @@ async function identifyRescuedPerson(
     const person = await store.getPerson(mp.person_id);
     if (!person) continue;
     const latest = await store.getLatestUpdate(mp.person_id);
+    // El teléfono al que hay que llamar puede NO estar en el último update, y
+    // eso no es un borde: un aviso de rescatista queda como el más reciente y
+    // su `contact` es de un tercero, así que filtrarlo (#120) tapaba también el
+    // contacto que la familia sí había dejado en un reporte anterior. Que una
+    // familia no reciba la llamada es exactamente el daño que esto existe para
+    // evitar, así que la pantalla busca el contacto más reciente que de verdad
+    // sea de quien la busca, no el del update más nuevo.
+    //
+    // `updatesForPerson` viene ordenado por fecha descendente en los dos
+    // adaptadores, así que el primero que cumple es el más reciente.
+    const contactUpdate =
+      latest && latest.contact && latest.source !== 'rescate'
+        ? latest
+        : (await store.getUpdates(mp.person_id)).find((u) => u.contact && u.source !== 'rescate') || null;
     found.push({
       person,
       similarity: bySimilarity.get(mp.face_id) || 0,
-      update: latest
+      update: latest,
+      contactUpdate
     });
   }
   found.sort((a, b) => b.similarity - a.similarity);
+
+  // Bitácora de coincidencias (#116, PR 4), superficie 'rescate' — el caso de
+  // éxito más importante que la app tenía invisible: un rescatista vio esto en
+  // pantalla, y hasta ahora no quedaba ni rastro. Un row por persona encontrada
+  // en `found` (ya deduplicado por persona arriba, a propósito: es el mismo
+  // conjunto que ve el rescatista y el que dispara notifyRescuerOfMatches).
+  // Se registra pase lo que pase con searchOnly — el match es real haya
+  // quedado indexada la firma del rescatista o no.
+  for (const f of found) {
+    await logMatch(store, {
+      personId: f.person.id,
+      updateId: f.update ? f.update.id : null,
+      faceId: photos.find((x) => x.person_id === f.person.id && x.kind === 'report')?.face_id,
+      similarity: f.similarity,
+      surface: 'rescate'
+    });
+  }
+
   return { available: true, matches: found, photoId: photo ? photo.id : null, indexed: !!photo };
+}
+
+// ¿Cuántas veces ya sirvió el matcher? Hoy nadie lo sabe: un match se pinta en
+// pantalla y se evapora — ninguna tabla lo registra (#116). Pero las firmas
+// faciales sí quedaron en la colección, así que la historia se puede
+// RECOMPUTAR: por cada foto de consulta indexada se busca por face_id y se
+// cuenta contra qué reportes coincide hoy.
+//
+// Devuelve SOLO cifras agregadas. Esto es instrumentación, no un registro de
+// personas: ni un nombre, ni un contacto, ni un id de persona sale de acá.
+// Los detalles ya viven en las tablas de siempre, detrás de sus propias reglas.
+//
+// Dos honestidades del número: es el cruce contra la colección de HOY (una
+// firma borrada ya no cuenta, una indexada después sí), y si `failed` > 0 las
+// cifras son un piso, no el total.
+const MATCH_STATS_CONCURRENCY = 3;
+
+async function computeMatchStats(store, matcher) {
+  if (matcher.ensureReady) await matcher.ensureReady();
+  if (!matcher.enabled) return null;
+
+  const rows = await store.indexedPhotos();
+  const byFaceId = new Map(rows.map((r) => [r.face_id, r]));
+  const queries = rows.filter((r) => r.kind === 'query');
+  // Universo de personas reportadas (desaparecidas) que sí tienen al menos una
+  // foto indexada — el denominador honesto del embudo del reporte por correo
+  // (#116, PR 2): "solo estas pueden coincidir". Se calcula directo de `rows`,
+  // sin ningún costo extra: son las mismas filas que ya se leyeron arriba.
+  const reportedPeopleIndexed = new Set(
+    rows.filter((r) => r.kind === 'report').map((r) => r.person_id)
+  );
+
+  const stats = {
+    generated_at: new Date().toISOString(),
+    // Cuántas firmas hay de cada lado del cruce.
+    indexed: { query: queries.length, report: rows.length - queries.length },
+    searched: 0,
+    failed: 0,
+    // Fotos de consulta (rescatista o quien busca) que hoy coinciden con al
+    // menos un reporte — el cruce que es la razón de ser de la app.
+    query_photos_with_report_match: 0,
+    // La misma cara consultada más de una vez (reintentos, o dos rescatistas
+    // con la misma persona al frente).
+    query_photos_with_query_match: 0,
+    // Personas distintas a cada lado de los cruces de arriba.
+    reported_people_matched: 0,
+    query_people_matched: 0,
+    // Personas reportadas con foto utilizable — el universo de partida del
+    // embudo (ver arriba). No es rows.length: eso cuenta FOTOS, y una persona
+    // puede tener varias.
+    reported_people_indexed: reportedPeopleIndexed.size,
+    // Coincidencias individuales contra el lado reportado, sin deduplicar por
+    // persona ni por foto: una persona con varias fotos, o una foto de quien
+    // busca que golpea a varias personas, suman más de una acá. Es el "31" del
+    // embudo aprobado — la fila de abajo (reported_people_matched) es la
+    // versión deduplicada por persona.
+    report_matches_total: 0,
+    // Coincidencias contra firmas que ya no tienen foto en la base: quedaron
+    // colgadas en la colección al borrar una persona (#71). Trabajo de limpieza.
+    // Cuenta GOLPES, no firmas huérfanas distintas — una misma firma huérfana
+    // que golpea dos veces suma dos acá.
+    dangling_face_matches: 0
+  };
+
+  const reportedPeople = new Set();
+  const queryPeople = new Set();
+
+  async function searchOne(q) {
+    let matches;
+    try {
+      matches = await matcher.searchByFaceId(q.face_id);
+    } catch (e) {
+      console.error(`[facematch:stats] search failed for photo ${q.id}:`, e.message);
+      stats.failed++;
+      return;
+    }
+    stats.searched++;
+    let hitReport = false;
+    let hitQuery = false;
+    for (const m of matches) {
+      const row = byFaceId.get(m.faceId);
+      if (!row) {
+        stats.dangling_face_matches++;
+        continue;
+      }
+      if (row.kind === 'report') {
+        hitReport = true;
+        stats.report_matches_total++;
+        reportedPeople.add(row.person_id);
+        queryPeople.add(q.person_id);
+      } else {
+        hitQuery = true;
+      }
+    }
+    if (hitReport) stats.query_photos_with_report_match++;
+    if (hitQuery) stats.query_photos_with_query_match++;
+  }
+
+  // Pool chico a propósito: Rekognition tiene tope de búsquedas por segundo y
+  // esto corre dentro de una función serverless con reloj. ~100 firmas a
+  // concurrencia 3 salen en pocos segundos sin rozar el throttling.
+  let next = 0;
+  const workers = Array.from({ length: MATCH_STATS_CONCURRENCY }, async () => {
+    while (next < queries.length) {
+      await searchOne(queries[next++]);
+    }
+  });
+  await Promise.all(workers);
+
+  stats.reported_people_matched = reportedPeople.size;
+  stats.query_people_matched = queryPeople.size;
+  return stats;
 }
 
 module.exports = {
@@ -695,5 +896,6 @@ module.exports = {
   resolveRescueAnswer,
   backfillUnindexedPhotos,
   backfillPhotoDerivatives,
+  computeMatchStats,
   MAX_QUERY_PHOTOS
 };
