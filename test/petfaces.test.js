@@ -50,3 +50,19 @@ test('si el servicio no responde (nadie escuchando), embed() devuelve null sin l
   assert.equal(await matcher.embed(Buffer.from('foto'), 'image/jpeg'), null);
   delete process.env.PET_MATCH_API_URL;
 });
+
+test('si el servicio acepta la conexión pero no responde, embed() devuelve null sin colgarse', async () => {
+  const { server, base } = await fakePetMatcherServer((req, res) => {
+    // No responder — simula un servicio colgado o sobrecargado
+  });
+  process.env.PET_MATCH_API_URL = base;
+  const { createPetMatcher } = require('../src/petfaces');
+  const matcher = createPetMatcher(500); // 500ms timeout para el test
+  const start = Date.now();
+  const result = await matcher.embed(Buffer.from('foto'), 'image/jpeg');
+  const elapsed = Date.now() - start;
+  assert.equal(result, null);
+  assert.ok(elapsed < 2000, `No debería tomar más de 2s, tomó ${elapsed}ms`);
+  server.close();
+  delete process.env.PET_MATCH_API_URL;
+});

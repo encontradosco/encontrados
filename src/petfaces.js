@@ -2,7 +2,7 @@
 // pet-matcher/ (ver ese folder). Sin PET_MATCH_API_URL, el matching de
 // mascotas queda apagado — mismo contrato de degradación que src/faces.js
 // tiene para Rekognition: nunca lanza, nunca tumba un reporte.
-function createPetMatcher() {
+function createPetMatcher(timeoutMs = 15000) {
   const apiUrl = process.env.PET_MATCH_API_URL;
   if (!apiUrl) {
     return {
@@ -20,7 +20,11 @@ function createPetMatcher() {
       try {
         const form = new FormData();
         form.append('image', new Blob([bytes], { type: contentType || 'image/jpeg' }), 'foto.jpg');
-        const res = await fetch(`${apiUrl}/embed`, { method: 'POST', body: form });
+        const res = await fetch(`${apiUrl}/embed`, {
+          method: 'POST',
+          body: form,
+          signal: AbortSignal.timeout(timeoutMs)
+        });
         if (!res.ok) {
           console.error(`[petfaces] /embed respondió ${res.status}`);
           return null;
