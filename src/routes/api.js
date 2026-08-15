@@ -116,9 +116,15 @@ function apiRoutes(store, matcher) {
   // The photo is used ONLY for face matching; it is never displayed or shared.
   // - source: one of 'web'|'whatsapp'|'api'|'aggregator'; defaults to 'api' if
   //   omitted or not one of those values (e.g. an aggregator identifying itself).
+  // - source_url: public link backing this report — the news story saying the
+  //   person turned up. Rendered as a clickable link on the person's page, so
+  //   only http(s) is accepted; anything else is dropped with a log and the
+  //   report still goes through. The rule lives in the shared admission
+  //   service, not here (src/report-admission.js).
   // - external_id: the caller's own id for this update. When present, a repeat
   //   POST with the same external_id updates this same update idempotently
   //   instead of creating a duplicate — safe to retry or re-sync from upstream.
+  //   source_url is part of that upsert, so a re-push corrects a wrong link.
   router.post(
     '/updates',
     requireKey,
