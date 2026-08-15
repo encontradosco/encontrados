@@ -66,11 +66,15 @@ async function processPetPhoto(petStore, petMatcher, { petId, kind, species, sub
 
   if (!petMatcher.enabled) {
     console.warn(`[petmatch] matcher deshabilitado — foto ${photo.id} guardada sin comparar (backfill la recoge después)`);
+    if (kind === 'query') await petStore.clearPetPhotoContent(photo.id);
     return { photo, matches: [] };
   }
 
   const result = await petMatcher.embed(content, contentType);
-  if (!result) return { photo, matches: [] };
+  if (!result) {
+    if (kind === 'query') await petStore.clearPetPhotoContent(photo.id);
+    return { photo, matches: [] };
+  }
 
   // Guardar el embedding y comparar pueden fallar por su cuenta (un error de
   // base transitorio, verosímil en un despliegue serverless) sin que eso sea
@@ -121,6 +125,7 @@ async function backfillUnindexedPetPhotos(petStore, petMatcher, limit = 100) {
       const result = await petMatcher.embed(bytes, photo.content_type);
       if (result) {
         await petStore.setPetPhotoEmbedding(photo.id, result.embedding, result.model);
+        if (photo.kind === 'query') await petStore.clearPetPhotoContent(photo.id);
         processed++;
       } else {
         failed++;

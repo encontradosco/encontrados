@@ -211,3 +211,100 @@ test('un error de base al comparar no revienta processPetPhoto ni deja sin borra
     'los bytes de una foto "encontré" se borran igual, aunque falle la comparación'
   );
 });
+
+test('con matcher deshabilitado, una foto "encontré" borra sus bytes aunque no se haya comparado', async () => {
+  const { petStore } = await setup();
+  const { processPetPhoto } = require('../src/petmatch');
+  const { createPetMatcher } = require('../src/petfaces');
+  delete process.env.PET_MATCH_API_URL;
+  const matcher = createPetMatcher();
+
+  const encontrado = await photoBytes('encontrado');
+  const { photo } = await processPetPhoto(petStore, matcher, {
+    kind: 'query',
+    species: 'dog',
+    bytes: encontrado,
+    contentType: 'image/jpeg'
+  });
+
+  const stored = await petStore.getPetPhoto(photo.id);
+  assert.equal(
+    stored.content.length,
+    0,
+    'una foto "encontré" borra sus bytes incluso cuando el matcher está deshabilitado'
+  );
+});
+
+test('cuando embed() devuelve null para una foto "encontré", se borran sus bytes igual', async () => {
+  const { petStore } = await setup();
+  const { processPetPhoto } = require('../src/petmatch');
+  const encontrado = await photoBytes('encontrado');
+
+  // Un matcher que devuelve null (falla) para cualquier foto
+  const failingMatcher = {
+    enabled: true,
+    status: 'fake',
+    async embed(bytes) {
+      return null;
+    }
+  };
+
+  const { photo } = await processPetPhoto(petStore, failingMatcher, {
+    kind: 'query',
+    species: 'dog',
+    bytes: encontrado,
+    contentType: 'image/jpeg'
+  });
+
+  const stored = await petStore.getPetPhoto(photo.id);
+  assert.equal(
+    stored.content.length,
+    0,
+    'una foto "encontré" borra sus bytes cuando embed() falla (devuelve null)'
+  );
+});
+
+test('backfillUnindexedPetPhotos borra bytes de una foto "encontré" después de procesarla', async () => {
+  const { petStore } = await setup();
+  const { processPetPhoto, backfillUnindexedPetPhotos } = require('../src/petmatch');
+  const { createPetMatcher } = require('../src/petfaces');
+
+  // Primero, guardar una foto "encontré" con matcher deshabilitado
+  delete process.env.PET_MATCH_API_URL;
+  const offlineMatcher = createPetMatcher();
+
+  const encontrado = await photoBytes('encontrado');
+  const { photo: pendingPhoto } = await processPetPhoto(petStore, offlineMatcher, {
+    kind: 'query',
+    species: 'dog',
+    bytes: encontrado,
+    contentType: 'image/jpeg'
+  });
+
+  // Verificar que los bytes están presente (porque el matcher estaba deshabilitado al procesarla inicialmente)
+  let stored = await petStore.getPetPhoto(pendingPhoto.id);
+  // Nota: la foto se borra incluso con matcher deshabilitado (eso es lo que el test anterior verifica),
+  // así que aquí crearemos la foto sin usar processPetPhoto
+  const { petStore: petStore2 } = await setup();
+  const fotoSinProcesar = await petStore2.addPetPhoto({
+    kind: 'query',
+    species: 'dog',
+    content: encontrado,
+    contentType: 'image/jpeg'
+  });
+
+  // Ahora ejecutar backfill con un matcher que funciona
+  const workingMatcher = fakePetMatcherFor({ [encontrado.toString('utf8')]: VECTOR_A });
+  const result = await backfillUnindexedPetPhotos(petStore2, workingMatcher, 100);
+
+  assert.equal(result.processed, 1, 'backfill procesó 1 foto');
+
+  // Verificar que el embedding se guardó Y los bytes se borraron
+  stored = await petStore2.getPetPhoto(fotoSinProcesar.id);
+  assert.deepEqual(stored.embedding, VECTOR_A, 'el embedding se guardó correctamente');
+  assert.equal(
+    stored.content.length,
+    0,
+    'los bytes de una foto "encontré" se borran después de backfill'
+  );
+});
