@@ -173,6 +173,40 @@ una línea que cambia lo que lee una familia espera; un refactor de trescientas
 líneas que no cambia nada observable, no. Lo que no puede hacerle daño a alguien
 que está buscando a un familiar no tiene por qué esperar a que alguien despierte.
 
+### Cuando la aprobación la firma el agente
+
+Parte de eso está automatizado, y preferimos decirlo a que lo descubras viendo
+un bot aprobar tu PR.
+
+Cuando un mantenedor humano le pone la etiqueta `ready-to-merge` a un PR,
+[@cris-pappcorn](https://github.com/cris-pappcorn) revisa el gate objetivo y
+decide si puede aprobar. Solo lo hace si se cumple **todo** lo siguiente:
+
+- Los checks obligatorios están verdes **en ese mismo commit**.
+- Es code owner de **todas** las rutas que el PR toca. Las rutas restringidas
+  —esquema de la base, biometría, privacidad, autenticación, y el propio
+  `.github/`— lo excluyen a propósito, así que ahí nunca alcanza su firma.
+- Toda ruta con owner ya tiene juicio humano: o la escribió alguien que la
+  posee, o un owner humano de esa misma ruta ya aprobó **este** commit.
+- Existe la etiqueta `efecto-usuario:ninguno`, que afirma un hecho concreto:
+  *nadie que use la app recibiría, vería ni haría algo distinto*. El reparto por
+  rutas no puede ver un cambio de cara al usuario que viva en un archivo
+  rutinario, así que esa parte se declara a mano. **Si la etiqueta no está, no
+  firma** — su ausencia no se interpreta, se espera.
+- La etiqueta la puso un code owner humano. El agente no puede autorizarse a sí
+  mismo, y nunca aprueba un PR suyo.
+
+Cuando no se cumple algo, lo dice en un comentario con el motivo concreto en vez
+de quedarse callado. Y no mergea él: le pide a GitHub que mergee cuando **todas**
+las protecciones estén satisfechas, así que espera, no sobrepasa.
+
+Dos cosas que te tocan a ti como contribuidor de afuera: **un PR desde un fork
+nunca lo aprueba el agente** (corre sin acceso a sus credenciales, por diseño),
+así que el tuyo lo mira una persona; y la lógica completa está en
+[`.github/scripts/cris-decide.cjs`](.github/scripts/cris-decide.cjs) con sus
+pruebas en [`test/cris-decide.test.js`](test/cris-decide.test.js) — es
+auditable, y si encuentras un hueco, ese es un issue que queremos recibir.
+
 ### Qué puedes esperar de nosotros
 
 Que te respondamos. Y que si tu PR cae en una de las tres categorías te lo
