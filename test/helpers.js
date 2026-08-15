@@ -155,4 +155,32 @@ async function fakeVercelOAuth() {
   };
 }
 
-module.exports = { fakeSendgrid, fakeGithub, fakeWhatsApp, fakeVercelOAuth };
+// Stand-in del servicio Python (pet-matcher/), para que las pruebas de rutas
+// ejerciten POST /embed de verdad sin necesitar Python instalado. Por
+// omisión responde un vector fijo; respondWith() lo cambia cuando una prueba
+// necesita un vector específico (para forzar o evitar una coincidencia).
+async function fakePetMatcher() {
+  const received = [];
+  let vector = [1, 0, 0];
+  const server = http.createServer((req, res) => {
+    received.push({ url: req.url });
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ embedding: vector, model: 'fake-pet-model' }));
+  });
+  await new Promise((r) => server.listen(0, r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  process.env.PET_MATCH_API_URL = base;
+  return {
+    received,
+    base,
+    respondWith(v) {
+      vector = v;
+    },
+    stop() {
+      server.close();
+      delete process.env.PET_MATCH_API_URL;
+    }
+  };
+}
+
+module.exports = { fakeSendgrid, fakeGithub, fakeWhatsApp, fakeVercelOAuth, fakePetMatcher };
