@@ -63,6 +63,49 @@ test('Postgres: el bootstrap crea merge_log con la misma retención que el resto
   assert.match(schema, /score DOUBLE PRECISION NOT NULL/);
 });
 
+// Mismo patrón que withFakePostgresAdapter en test/panel-extras.test.js, pero
+// capturando también los params: la prueba de arriba solo mira el DDL
+// (CREATE TABLE), y logMerge() traga cualquier error del INSERT a propósito
+// (para no tumbar la fusión) — así que si nadie prueba el INSERT en sí, un
+// fallo del lado de Postgres sería invisible tanto en dev como en prod.
+async function withFakePostgresAdapter(run) {
+  const pgPath = require.resolve('pg');
+  const storePath = require.resolve('../src/store/postgres');
+  const savedPg = require.cache[pgPath];
+  const savedStore = require.cache[storePath];
+  const calls = [];
+
+  class FakePool {
+    constructor() {}
+    async query(sql, params) {
+      calls.push({ sql: String(sql), params });
+      return { rows: [] };
+    }
+  }
+  require.cache[pgPath] = { id: pgPath, filename: pgPath, loaded: true, exports: { Pool: FakePool } };
+  delete require.cache[storePath];
+  try {
+    const { createPostgresAdapter } = require('../src/store/postgres');
+    const adapter = await createPostgresAdapter('postgres://fake/db');
+    await run(adapter, calls);
+  } finally {
+    delete require.cache[storePath];
+    if (savedPg) require.cache[pgPath] = savedPg;
+    else delete require.cache[pgPath];
+    if (savedStore) require.cache[storePath] = savedStore;
+  }
+}
+
+test('Postgres: insertMergeLog emite el INSERT con person_id, submitted_name y score en ese orden', async () => {
+  await withFakePostgresAdapter(async (adapter, calls) => {
+    await adapter.insertMergeLog({ personId: 42, submittedName: 'Johan Gómez', score: 0.855 });
+    const call = calls.find((c) => /INSERT INTO merge_log/i.test(c.sql));
+    assert.ok(call, 'debía emitirse el INSERT de merge_log');
+    assert.match(call.sql, /INSERT INTO merge_log \(person_id, submitted_name, score\) VALUES \(\$1, \$2, \$3\)/);
+    assert.deepEqual(call.params, [42, 'Johan Gómez', 0.855], 'los params deben llegar en el mismo orden que las columnas');
+  });
+});
+
 test('SQLite: merge_log existe con las columnas esperadas', async () => {
   const dbPath = tempDbPath();
   const adapter = await createSqliteAdapter(dbPath);
