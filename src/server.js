@@ -3,14 +3,20 @@ const express = require('express');
 const env = require('./env');
 const { createAdapter } = require('./store');
 const { createStore } = require('./people');
+const { createPetStore } = require('./pets');
+const { createPetMatcher } = require('./petfaces');
 const { createLazyMatcher } = require('./faces');
 const { webRoutes } = require('./routes/web');
+const { petRoutes } = require('./routes/pets');
 const { apiRoutes } = require('./routes/api');
 const { webhookRoutes } = require('./routes/webhooks');
 const { adminRoutes, adminApiRoutes } = require('./routes/admin');
 
 async function createApp(adapter, matcher) {
-  const store = createStore(adapter || (await createAdapter()));
+  const resolvedAdapter = adapter || (await createAdapter());
+  const store = createStore(resolvedAdapter);
+  const petStore = createPetStore(resolvedAdapter);
+  const petMatcher = createPetMatcher();
   const faceMatcher = matcher || createLazyMatcher();
   if (!matcher) {
     // Warm it up so boot logs show Rekognition status immediately.
@@ -28,6 +34,7 @@ async function createApp(adapter, matcher) {
   app.use('/api/admin', adminApiRoutes());
   app.use('/api', apiRoutes(store, faceMatcher));
   app.use('/webhooks', express.json(), webhookRoutes(store, faceMatcher));
+  app.use('/', petRoutes(petStore, petMatcher));
   app.use('/', webRoutes(store, faceMatcher));
 
   app.use((req, res) => {
