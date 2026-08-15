@@ -230,6 +230,50 @@ const searchOnlyCheckbox = (checked = false) => `<label class="share-check">
 // they are not promised here as "coming soon".
 const SOURCES_NOTE = `<p class="sources-note">Fuentes de información de desaparecidos: Encontrados.co y <a href="https://colombiatebusca.com" target="_blank" rel="noopener">Colombia Te Busca</a>, el registro público donde las familias publican fotos y buscan a sus desaparecidos.</p>`;
 
+// La salida para quien llegó a /rescate y en realidad está BUSCANDO a alguien.
+//
+// Hasta acá el flujo del rescatista no tenía ninguna: los tres botones de sus
+// pantallas —resultado, error, aviso enviado— devolvían todos a /rescate. Una
+// familia subía la foto de su familiar, leía «nadie ha reportado a esta
+// persona» y se iba del sitio sin reportarla. Justo la persona que más
+// necesitaba el formulario de reporte era la única a la que no se lo
+// ofrecíamos.
+//
+// La pregunta va primero y detrás de un <details>, no como un botón suelto, y
+// esa es la parte que decide si esto ayuda o hace daño. Un rescatista con una
+// persona sin identificar al lado NO debe reportarla como desaparecida: si lo
+// hace, crea una ficha de desaparecida para alguien que está a salvo y deja su
+// propio teléfono en el lugar del de la familia — la ficha queda apuntando al
+// rescatista y la familia real nunca recibe la llamada. Con la acción escondida
+// detrás de la pregunta, quien responde «no» no la ve nunca.
+//
+// Por eso también está la segunda mitad, que hasta acá no existía en ninguna
+// parte del sitio: decirle explícitamente al rescatista qué hacer en su caso.
+// Que nadie lo hubiera escrito nunca es parte de por qué el formulario de aviso
+// se llenaba mal.
+const REPORT_EXIT_BLOCK = `<div class="notice">
+  <p class="aviso-pregunta">¿Eres tú quien está buscando a esta persona?</p>
+  <details class="aviso-si">
+    <summary class="big-btn secondary">🙋 Sí, la estoy buscando</summary>
+    <div class="aviso-si-cuerpo">
+      <p>Repórtala acá: dejas su foto y tu teléfono, y el rescatista que la encuentre te llama directo.</p>
+      <a class="big-btn search" href="/report">📢 Reportar a la persona que busco</a>
+    </div>
+  </details>
+  <p class="subtle"><strong>Si la tienes contigo y no sabes quién es, no la reportes como desaparecida.</strong> Vuelve a consultar más tarde: alguien puede reportarla en las próximas horas.</p>
+</div>`;
+
+// El pie de las pantallas del rescatista.
+//
+// Una sola salida, y a /rescate. Acá NO va la de reportar, y no por ahorrar
+// espacio: el pie sale en TODAS las pantallas —incluida «Aviso enviado» y la
+// que muestra una coincidencia—, o sea justo donde la persona acaba de decirnos
+// que tiene a alguien consigo. Un botón de «reporta un desaparecido» ahí, sin
+// ninguna pregunta delante, es una invitación a crear la ficha equivocada como
+// última cosa que se ve. La salida a reportar vive en REPORT_EXIT_BLOCK, detrás
+// de su pregunta, y solo en las pantallas donde de verdad hay un punto muerto.
+const RESCUE_FOOTER = `<p><a class="big-btn report" href="/rescate">🔍 Consultar otra persona</a></p>`;
+
 // What the rescuer can DO with a match depends on what the report carries.
 // Reports typed into the app bring the family's contact; the fichas imported
 // from public registries bring none — and a match that ends in "sin datos de
@@ -949,7 +993,9 @@ ${rescueForm(typed)}`
   }
 </div>` + retry;
       } else if (!available) {
-        body = `<div class="error"><p>El reconocimiento facial no está disponible en este momento. Inténtalo de nuevo en unos minutos.</p></div>`;
+        body =
+          `<div class="error"><p>El reconocimiento facial no está disponible en este momento. Inténtalo de nuevo en unos minutos.</p></div>` +
+          REPORT_EXIT_BLOCK;
       } else if (!matches.length) {
         body = `<div class="error">
   <p><strong>Nadie ha reportado a esta persona como desaparecida todavía.</strong></p>
@@ -972,7 +1018,8 @@ ${rescueForm(typed)}`
             'Guardamos tu número, pero <strong>no podemos confirmarlo</strong>, así que no te vamos a escribir solos: si alguien reporta a esta persona, una persona del equipo revisa el caso y te contacta por ahí. Si quieres el aviso por un canal que sí podemos confirmar de una vez, déjanos también tu correo.'
           : 'Vuelve a intentarlo más tarde, o déjanos tu correo o tu WhatsApp para avisarte cuando alguien la busque.'
   }</p>
-</div>`;
+</div>
+${REPORT_EXIT_BLOCK}`;
       } else {
         body =
           `<h2>${matches.length === 1 ? 'La están buscando' : 'Coincidencias encontradas'}</h2>` +
@@ -999,7 +1046,7 @@ ${body}
               ? ' Tampoco guardamos su firma facial, como pediste: de esta consulta no quedó nada, y por eso no vamos a poder avisarte si alguien reporta a esta persona después.'
               : ''
           }</p>
-<p><a class="big-btn report" href="/rescate">🔍 Consultar otra persona</a></p>`
+${RESCUE_FOOTER}`
         )
       );
     })
@@ -1087,7 +1134,7 @@ ${body}
           `<h1 class="compact">Aviso enviado ✅</h1>
 <p><strong>Nos encargamos de hacerle llegar tu aviso a quien busca a ${esc(person.full_name)}.</strong> Te contactarán al número que dejaste.</p>
 <p class="subtle">Tu teléfono no se muestra públicamente: solo se comparte para coordinar el reencuentro.</p>
-<p><a class="big-btn report" href="/rescate">🔍 Consultar otra persona</a></p>`
+${RESCUE_FOOTER}`
         )
       );
     })
