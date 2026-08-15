@@ -81,20 +81,20 @@ persona** — ver [`CONTRIBUTING.md`](CONTRIBUTING.md) y [`CLAUDE.md`](CLAUDE.md
     les falta algo: cuando no falta nada no hace ni cuesta nada.
   - **`POST /api/reindex`**: reindexa además las fotos sin firma facial y
     manda los avisos pendientes; por eso esa sí exige la API key.
-- Colombia Te Busca: el formulario de reporte trae una casilla «Reportar también
-  en ColombiaTeBusca.com». Va SIN marcar por defecto — es el consentimiento de
-  la familia para publicar sus datos en un registro de terceros, y eso no se da
-  por omisión. Marcarla manda el reporte completo a `AVISO_EMAIL` (mismo buzón
-  que los avisos de rescatista) para que un operador llene su formulario a mano:
-  no tienen API. El correo es «best effort»: si falla, el reporte ya está vivo.
-  Marcarla también despliega —con CSS, sin JavaScript— las casillas que su
-  formulario exige y el nuestro no pedía: nombre de quien reporta, departamento,
-  municipio y lugar. **Todas opcionales**, y nada se rellena por nosotros: el
-  correo de relevo enumera las seis casillas aunque estén vacías, con el nombre
-  del campo entre paréntesis, para que el operador vea de un vistazo qué falta.
-  Solo el nombre de quien reporta se guarda (en `reporter`, que sale público
-  reducido por `maskReporter()`); el desglose de ubicación no tiene columna
-  porque su único consumidor es ese correo.
+- Colombia Te Busca: el formulario de reporte **ya no** ofrece «Reportar también
+  en ColombiaTeBusca.com». La casilla existió hasta agosto de 2026 y mandaba el
+  reporte a `AVISO_EMAIL` para que un operador llenara su formulario a mano —
+  ese registro no tiene forma programática de recibir un reporte—. El paso
+  humano nunca se cerró: 119 familias la marcaron y ninguna se publicó, así que
+  se retiró la casilla en vez de sostener una promesa que no se cumplía
+  ([#84](https://github.com/encontradosco/encontrados/issues/84)). Con ella se
+  fueron las casillas que solo servían a su formulario (nombre de quien
+  reporta, departamento, municipio y lugar), y con eso **un reporte web ya no
+  guarda `reporter`** — la columna sigue viva y la siguen llenando el API y los
+  agregadores, y `maskReporter()` la sigue publicando reducida. Nada se borró:
+  las solicitudes ya recibidas siguen en el buzón y en `contact_log` bajo el
+  canal `relevo`. Si su equipo abre una vía programática, la casilla vuelve;
+  la invitación a integrarse sigue al pie de cada página (`src/html.js`).
 - **Aviso de rescatista** (`matchContactBlock()` + `POST /rescate/aviso`): cuando
   la ficha que coincide no trae contacto de la familia —las importadas de
   registros públicos no lo traen— el rescatista deja su teléfono y dónde está la
@@ -369,7 +369,7 @@ presencia y huella, nunca el valor).
 | `API_KEY` | Los `POST` del API quedan **abiertos** y `DELETE /api/people/:id` responde 503. Las lecturas de información de personas son públicas siempre, con o sin llave; la excepción es `GET /api/match-stats`, que es operativa y dispara búsquedas en Rekognition, así que pide llave. |
 | `SENDGRID_API_KEY` | No sale ningún correo: ni verificación de suscripción, ni alertas, ni avisos. Se le hace `trim()` porque un salto de línea pegado sin querer devuelve 401. |
 | `EMAIL_FROM` | `a@torrenegra.com`. Tiene que ser un remitente verificado en SendGrid o SendGrid responde 403. |
-| `AVISO_EMAIL` | El aviso del rescatista y el relevo a Colombia Te Busca no se mandan. Falla en silencio: quien reportó ve su página de éxito igual. Y con `NOTIFY_MODE=relay` (el modo por omisión) tampoco sale ningún aviso a terceros: quedan en el log como `[notify:relevo] PERDIDO`. |
+| `AVISO_EMAIL` | El aviso del rescatista no se manda. Falla en silencio: quien reportó ve su página de éxito igual. Y con `NOTIFY_MODE=relay` (el modo por omisión) tampoco sale ningún aviso a terceros: quedan en el log como `[notify:relevo] PERDIDO`. |
 | `NOTIFY_MODE` | `relay`. Los avisos a terceros se retienen y se relevan a `AVISO_EMAIL`; `direct` los manda derecho al destinatario. Cualquier otro valor cae a `relay`: el interruptor falla cerrado. |
 | `GITHUB_TOKEN` | `/ideas` y `/bug` siguen funcionando pero caen a correo a `AVISO_EMAIL`. El síntoma es un tracker vacío, que se parece mucho a que nadie escribió. |
 | `GITHUB_REPO` | `encontradosco/encontrados`. |

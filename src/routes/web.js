@@ -142,67 +142,6 @@ function composeContact({ phone, email, contact }) {
 // prometer tiempos que no controlamos.
 const REVIEWED_NOTE = 'Cada aviso lo revisa antes una persona del equipo, así que puede tomar un momento.';
 
-// El formulario de Colombia Te Busca pide cada dato en su propia casilla, y
-// quien lo llena a mano no puede adivinar el que falta. Así que el correo de
-// relevo enumera SIEMPRE las seis casillas —aunque estén vacías— con el
-// nombre del campo del formulario entre paréntesis: una lista completa le dice
-// al operador en un vistazo qué puede llenar ya y qué hay que preguntarle a la
-// familia. Nada se rellena por nosotros: un dato inventado en un registro de
-// desaparecidos es peor que un dato ausente.
-const NO_DATA = '(sin dato — la familia no lo llenó)';
-function relayChecklist(relay) {
-  const line = (label, value) => `${label}: ${value && value.trim() ? value.trim() : NO_DATA}`;
-  return [
-    'Casillas del formulario de Colombia Te Busca:',
-    line('Nombre de quien reporta (reporter_name)', relay.reporterName),
-    line('Teléfono de quien reporta (reporter_phone)', relay.phone),
-    line('Correo de quien reporta (reporter_email)', relay.email),
-    line('Departamento', relay.department),
-    line('Municipio', relay.municipality),
-    line('Lugar', relay.place)
-  ].join('\n');
-}
-
-// Emails the operators everything they need to file this report on Colombia Te
-// Busca by hand. Never throws: the report is already saved and public by the
-// time this runs, and a mail failure must not turn a filed report into a 500.
-async function relayToColombiaTeBusca({ person, update, photos, contact, location, message, relay }) {
-  const to = avisoEmail();
-  if (!to) {
-    console.warn('[report:colombiatebusca] AVISO_EMAIL sin configurar — la solicitud no se envió');
-    return { ok: false, error: 'AVISO_EMAIL no configurada' };
-  }
-  try {
-    return await sendEmail(
-      to,
-      `Publicar en Colombia Te Busca — ${person.full_name}`,
-      [
-        'Quien reportó a esta persona en encontrados.co pidió expresamente que el reporte se publique también en Colombia Te Busca.',
-        '',
-        `Persona: ${person.full_name}`,
-        `Ficha: ${env.BASE_URL}/person/${person.id}`,
-        `Dónde estaba: ${location}`,
-        `Contacto de quien reporta: ${contact}`,
-        message && message.trim() ? `Otros datos: ${message.trim()}` : null,
-        `Fecha del reporte: ${update.created_at || 'ahora'}`,
-        '',
-        relayChecklist(relay || {}),
-        '',
-        photos.length
-          ? `Foto(s) del reporte:\n${photos.map((p) => `${env.BASE_URL}/photo/${p.id}`).join('\n')}`
-          : 'El reporte no trae fotos.',
-        '',
-        'Siguiente paso: llenar el formulario de reporte de Colombia Te Busca (https://colombiatebusca.com) en nombre de la familia.'
-      ]
-        .filter((l) => l !== null)
-        .join('\n')
-    );
-  } catch (e) {
-    console.error('[report:colombiatebusca] email failed:', e.message);
-    return { ok: false, error: e.message };
-  }
-}
-
 const RESCUE_PRIVACY = `<p class="privacy">🔒 <strong>La foto no se guarda.</strong> Se compara al instante contra las fotos de las personas reportadas como desaparecidas y se borra de inmediato: no queda almacenada en ningún servidor. Solo conservamos su <em>firma facial</em> (un código que no permite reconstruir la imagen) para poder avisarte si alguien empieza a buscar a esta persona.</p>`;
 
 // Opción de consulta efímera. Va APAGADA y el costo se lee ANTES de marcarla,
@@ -458,51 +397,6 @@ function duplicateNotice({ person, sameName, priorPhoto, candidates }) {
 ${sameNameCard}
 ${otherCards}`;
 }
-// The last thing above the submit button on /report. Colombia Te Busca has no
-// public API, so "also report there" is a person filling their form on the
-// family's behalf: the checkbox emails the report to the operators (see
-// AVISO_EMAIL) and they relay it.
-//
-// Deliberately UNCHECKED by default. Everything else on this form stays inside
-// encontrados.co, where the reporter's phone or email is shown only to a
-// rescuer after a facial match and never on a public page. Publishing the same
-// report on a third-party registry is a different promise, and a family cannot
-// consent to it by not noticing a pre-ticked box.
-//
-// Marcarla despliega los campos que SU formulario exige y el nuestro no pedía
-// —quién reporta, y la ubicación partida en departamento / municipio / lugar—.
-// Van ahí y no arriba a propósito: son los únicos datos de este formulario que
-// no le sirven a encontrados.co, solo al registro de terceros, y alargar el
-// formulario para todo el mundo con casillas que a la mayoría no le aplican es
-// exactamente la fricción que no puede tener alguien reportando a un familiar
-// desaparecido. Todos opcionales: sin ninguno, el reporte se manda igual.
-//
-// El despliegue es CSS puro (`.share-check:has(input:checked) ~ .ctb-fields`,
-// el mismo `:has()` con el que ya se resalta la casilla), sin JavaScript. Si el
-// navegador no lo entiende, las casillas se quedan ocultas y queda exactamente
-// el formulario de hoy: ningún camino nuevo puede impedir que un reporte salga.
-const DEPARTAMENTOS = [
-  'Amazonas', 'Antioquia', 'Arauca', 'Atlántico', 'Bogotá D.C.', 'Bolívar', 'Boyacá', 'Caldas',
-  'Caquetá', 'Casanare', 'Cauca', 'Cesar', 'Chocó', 'Córdoba', 'Cundinamarca', 'Guainía',
-  'Guaviare', 'Huila', 'La Guajira', 'Magdalena', 'Meta', 'Nariño', 'Norte de Santander',
-  'Putumayo', 'Quindío', 'Risaralda', 'San Andrés y Providencia', 'Santander', 'Sucre',
-  'Tolima', 'Valle del Cauca', 'Vaupés', 'Vichada'
-];
-
-const CTB_CHECKBOX = `<label class="share-check">
-    <input type="checkbox" name="colombiatebusca" value="1">
-    Reportar también en ColombiaTeBusca.com
-  </label>
-  <p class="subtle share-note">Le haremos llegar tu reporte a su equipo para que también quede publicado en su registro público de desaparecidos.</p>
-  <div class="ctb-fields">
-    <p class="subtle ctb-why">Su registro pide estos datos en casillas separadas. <strong>Todos son opcionales</strong>: lo que dejes en blanco no impide que enviemos tu reporte.</p>
-    <input name="reporter_name" maxlength="120" placeholder="Tu nombre (quien reporta)" aria-label="Nombre de quien reporta">
-    <input name="department" maxlength="60" list="department-options" autocomplete="off" placeholder="Departamento" aria-label="Departamento">
-    <datalist id="department-options">${DEPARTAMENTOS.map((d) => `<option value="${esc(d)}">`).join('')}</datalist>
-    <input name="municipality" maxlength="80" placeholder="Municipio" aria-label="Municipio">
-    <input name="place" maxlength="160" placeholder="Lugar (barrio, dirección o punto de referencia)" aria-label="Lugar">
-  </div>`;
-
 const REPORT_PRIVACY = `<p class="privacy">📢 Las fotos del reporte <strong>se publican</strong> en la lista de personas desaparecidas, con los puntos de reconocimiento facial marcados sobre el rostro. Es lo que permite que un rescatista reconozca a la persona que tiene al lado. Sube solo fotos que quieras hacer públicas.</p>`;
 
 // Photos stored before thumbnails existed catch up on their own, so nobody has
@@ -1165,10 +1059,9 @@ ${RESCUE_FOOTER}`
     <input name="contact_phone" inputmode="tel" autocomplete="tel" maxlength="120" value="${esc(remembered.phone)}" placeholder="Ej. 300 123 4567"></label>
   <label class="field-label"><span>Tu correo</span>
     <input name="contact_email" type="email" inputmode="email" autocomplete="email" maxlength="120" value="${esc(remembered.email)}" placeholder="tucorreo@ejemplo.com"></label>
-  <p class="subtle contact-note">Con uno basta. Si dejas los dos, tu reporte también puede publicarse en otros registros de desaparecidos, que piden teléfono y correo.</p>
+  <p class="subtle contact-note">Con uno basta.</p>
   <label class="field-label"><span>Otros datos que ayuden a reconocerla (opcional)</span>
     <textarea name="message" rows="2" placeholder="Señas, ropa, edad, dónde suele estar…"></textarea></label>
-  ${CTB_CHECKBOX}
   <button>Reporta desaparecido</button>
 </form>
 <script>
@@ -1215,33 +1108,18 @@ ${LOCATION_SCRIPT}`,
           );
       }
 
-      // Los campos que solo existen para el relevo a Colombia Te Busca. Todos
-      // opcionales y todos tal cual los escribió la familia: si vienen vacíos,
-      // vacíos se relevan (ver relayChecklist).
-      const relay = {
-        reporterName: String(req.body.reporter_name || '').trim().slice(0, 120),
-        phone,
-        email,
-        department: String(req.body.department || '').trim().slice(0, 60),
-        municipality: String(req.body.municipality || '').trim().slice(0, 80),
-        place: String(req.body.place || '').trim().slice(0, 160)
-      };
-
-      // El nombre de quien reporta va a `reporter`, la columna que ya existía
-      // para esto y que `maskReporter()` publica reducida a "María G." — no se
-      // guarda ninguna columna nueva. Los tres campos de ubicación desglosada,
-      // en cambio, no tienen columna: su único consumidor es el formulario de
-      // Colombia Te Busca, la ubicación que la app usa ya está en `location`, y
-      // agregar columnas a los dos adaptadores para un dato que solo viaja en un
-      // correo no se paga.
-      //
       // Thin adapter: the shared report-admission service owns the whole domain
       // sequence — person, update, owner resolution, photo indexing, and
       // subscriber notification (skipping both contact fields this form
       // collects so the reporter isn't echoed their own report). The
       // duplicate check runs LAST, once the report is durable. This handler
-      // keeps only the web-specific parts: multipart files in, cookies, the
-      // Colombia Te Busca relay, and the 303.
+      // keeps only the web-specific parts: multipart files in, cookies and
+      // the 303.
+      //
+      // Sin `reporter`: este formulario ya no pide el nombre de quien reporta
+      // —era una casilla del relevo a un registro de terceros, que se retiró—.
+      // La columna sigue viva y la siguen llenando el API y los agregadores,
+      // así que las fichas que ya lo traen se siguen viendo igual.
       const result = await admission.admitReport({
         name,
         status: 'missing',
@@ -1249,7 +1127,6 @@ ${LOCATION_SCRIPT}`,
         location,
         source: 'web',
         contact,
-        reporter: relay.reporterName || null,
         photos: files.map((f) => ({ bytes: f.buffer, contentType: f.mimetype })),
         skipAddresses: [phone, email.toLowerCase()].filter(Boolean),
         checkDuplicates: true,
@@ -1274,24 +1151,6 @@ ${LOCATION_SCRIPT}`,
 
       remember(res, REPORTER_COOKIE, phone || contact);
       remember(res, EMAIL_COOKIE, email);
-
-      // The family ticked "report this on Colombia Te Busca too". That registry
-      // has no API, so the relay is a human filling their form: this mail is
-      // the operators' signal to go do it, and the ticked box is the consent
-      // that lets them publish contact data we otherwise never make public.
-      //
-      // Best effort, and last on purpose: the report is already stored and
-      // public by now, so a SendGrid outage costs the relay, never the report.
-      if (req.body.colombiatebusca) {
-        const relayRes = await relayToColombiaTeBusca({ person, update, photos, contact, location, message, relay });
-        // Bitácora (#116): esto es un aviso OPERATIVO al equipo — pide que un
-        // operador publique a mano en Colombia Te Busca — no un aviso a una
-        // persona. Mismo canal 'relevo' que ya usa el relevo de coincidencias
-        // pendientes de revisión (src/facematch.js): el enum existente ya
-        // significa "esto fue al buzón del equipo, no a un tercero", que es
-        // exactamente lo que es esta solicitud.
-        await logContact(store, { personId: person.id, updateId: update.id, channel: 'relevo', result: resultFromSend(relayRes) });
-      }
 
       // Two different ways this report can be a duplicate:
       //   created === false → the NAME matched, so it was appended to a record

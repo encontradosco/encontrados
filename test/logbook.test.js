@@ -224,49 +224,18 @@ test('regla de oro (integración): la bitácora rota no tumba un reporte con fot
 // 'relevo' que ya usa el relevo de coincidencias: son un aviso al BUZÓN DEL
 // EQUIPO, nunca a una familia ni a un rescatista, y ese es precisamente el
 // significado que ese canal ya tenía.
+//
+// Ese canal tenía dos productores en este camino y ahora tiene uno: la
+// solicitud de publicar en un registro de terceros se retiró del formulario.
+// El que queda —el aviso de rescatista— se prueba en rescue.test.js, que es
+// donde vive su flujo.
 
-test('la solicitud de "Publicar en Colombia Te Busca" queda en la bitácora como relevo al operador', async (t) => {
-  const sg = await fakeSendgrid();
-  process.env.AVISO_EMAIL = 'avisos@example.com';
-  t.after(() => {
-    sg.server.close();
-    delete process.env.AVISO_EMAIL;
-    delete process.env.SENDGRID_API_KEY;
-    delete process.env.SENDGRID_API_BASE;
-  });
-  process.env.SENDGRID_API_KEY = 'test-key';
-  process.env.SENDGRID_API_BASE = sg.base;
-
+test('un reporte por el formulario no deja ningún envío en la bitácora', async (t) => {
   const { server, base, store } = await startApp();
   t.after(() => server.close());
 
   const fd = new FormData();
-  fd.set('name', 'Felipe Prueba CTB');
-  fd.set('location', 'Barrio San José');
-  fd.set('contact_phone', '300 111 2222');
-  fd.set('colombiatebusca', '1');
-  fd.append('photos', new File([await photoBytes('felipe')], 'f.jpg', { type: 'image/jpeg' }));
-  const res = await fetch(`${base}/report`, { method: 'POST', body: fd, redirect: 'manual' });
-  assert.equal(res.status, 303);
-
-  // El correo de relevo sí salió, al buzón del equipo — nunca a un tercero.
-  const mailBodies = sg.received.map((r) => JSON.stringify(r.body));
-  const mail = mailBodies.find((b) => b.includes('avisos@example.com'));
-  assert.ok(mail, 'debía llegar el correo de relevo a Colombia Te Busca al buzón del operador');
-  assert.match(mail, /Felipe Prueba/i);
-
-  const contactCounts = await store.contactLogCounts();
-  const relevo = contactCounts.find((r) => r.channel === 'relevo');
-  assert.ok(relevo, 'la solicitud de relevo a Colombia Te Busca debía quedar registrada bajo el canal "relevo"');
-  assert.equal(relevo.result, 'enviado');
-});
-
-test('sin marcar la casilla, no se manda ni se registra ningún relevo a Colombia Te Busca', async (t) => {
-  const { server, base, store } = await startApp();
-  t.after(() => server.close());
-
-  const fd = new FormData();
-  fd.set('name', 'Gabriela Prueba Sin CTB');
+  fd.set('name', 'Gabriela Prueba Sin Relevo');
   fd.set('location', 'Barrio San José');
   fd.set('contact_phone', '300 333 4444');
   fd.append('photos', new File([await photoBytes('gabriela')], 'g.jpg', { type: 'image/jpeg' }));
@@ -274,5 +243,5 @@ test('sin marcar la casilla, no se manda ni se registra ningún relevo a Colombi
   assert.equal(res.status, 303);
 
   const contactCounts = await store.contactLogCounts();
-  assert.equal(contactCounts.length, 0, 'sin la casilla marcada, el reporte no debe dejar ningún envío en la bitácora');
+  assert.equal(contactCounts.length, 0, 'reportar no le manda nada a nadie: la bitácora queda vacía');
 });
