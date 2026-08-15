@@ -8,6 +8,7 @@
 // invariante que la hace imposible de romper por descuido.
 const test = require('node:test');
 const assert = require('node:assert');
+const { createSqliteAdapter } = require('../src/store/sqlite');
 
 // Captura el SQL del bootstrap sustituyendo `pg` en el cache de módulos.
 async function bootstrapStatements() {
@@ -71,4 +72,33 @@ test('esquema: el CHECK de source acepta las cinco fuentes vivas', async () => {
   for (const source of ['web', 'whatsapp', 'api', 'aggregator', 'rescate']) {
     assert.match(check, new RegExp(`'${source}'`), `updates_source_check dejó de aceptar '${source}'`);
   }
+});
+
+// privacy_actions (#161): a diferencia de match_log/contact_log, esta tabla SÍ
+// guarda un dato con forma de PII a propósito — `actor`, el correo del admin
+// autenticado que ejecutó la acción — porque es la prueba de quién autorizó un
+// borrado de biometría, no una métrica de producto. Lo que sigue fijando esta
+// prueba es la forma del resto: referencia a people(id) con cascada, y el
+// enum de acciones abierto solo a lo que hoy existe.
+test('esquema: privacy_actions cuelga de people(id) con ON DELETE CASCADE', async () => {
+  const statements = await bootstrapStatements();
+  const schema = statements.find((s) => /CREATE TABLE IF NOT EXISTS privacy_actions/i.test(s));
+  assert.ok(schema, 'el bootstrap debe crear privacy_actions');
+  assert.match(schema, /person_id INTEGER NOT NULL REFERENCES people\(id\) ON DELETE CASCADE/);
+  assert.match(schema, /action TEXT NOT NULL CHECK \(action IN \('forget_face'\)\)/);
+  assert.match(schema, /actor TEXT NOT NULL/);
+});
+
+test('esquema: privacy_actions hereda la retención de people en SQLite (la base real de la suite)', async () => {
+  const store = await createSqliteAdapter(':memory:');
+  const person = await store.insertPerson('Persona Prueba Uno', 'persona prueba uno', '');
+  await store.recordPrivacyAction({ personId: person.id, action: 'forget_face', actor: 'admin@ejemplo.com' });
+  assert.equal((await store.privacyActionsForPerson(person.id)).length, 1);
+
+  await store.deletePerson(person.id);
+  assert.deepEqual(
+    await store.privacyActionsForPerson(person.id),
+    [],
+    'borrar la persona debe llevarse también la constancia — misma retención que el resto del esquema'
+  );
 });

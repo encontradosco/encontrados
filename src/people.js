@@ -289,6 +289,17 @@ function createStore(adapter) {
     return isoRow(await adapter.deletePerson(id));
   }
 
+  // Constancia de una acción de privacidad hecha a mano desde /admin (#161) —
+  // hoy solo 'forget_face'. `actor` es el correo del admin autenticado que la
+  // ejecutó, no el contacto de nadie que reporta ni de quien busca.
+  async function recordPrivacyAction(fields) {
+    return isoRow(await adapter.recordPrivacyAction(fields));
+  }
+
+  async function privacyActionsForPerson(personId) {
+    return (await adapter.privacyActionsForPerson(personId)).map(isoRow);
+  }
+
   // Bitácora de coincidencias y envíos (#116, PR 4). Pass-through directo:
   // src/logbook.js ya se encarga de que un fallo acá nunca suba.
   async function insertMatchLog(fields) {
@@ -377,6 +388,8 @@ function createStore(adapter) {
     counts,
     faceIdsForPerson,
     deletePerson,
+    recordPrivacyAction,
+    privacyActionsForPerson,
     insertMatchLog,
     insertContactLog,
     matchLogCounts,

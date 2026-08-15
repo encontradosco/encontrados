@@ -111,6 +111,23 @@ async function createPostgresAdapter(connectionString) {
     );
     CREATE INDEX IF NOT EXISTS idx_contact_log_person ON contact_log(person_id);
     CREATE INDEX IF NOT EXISTS idx_contact_log_created ON contact_log(created_at);
+
+    -- Constancia de acciones de privacidad hechas a mano desde /admin (#161):
+    -- hoy solo "retirar la firma facial sin borrar la ficha", a pedido de una
+    -- familia que ya encontró a la persona. A diferencia de match_log/contact_log
+    -- esto SÍ guarda quién la ejecutó ('actor', el correo del admin autenticado):
+    -- no es una bitácora de producto, es la prueba de que una acción de habeas
+    -- data ocurrió y quién la autorizó — lo que exige poder demostrar Ley 1581.
+    -- Misma retención heredada que el resto del esquema: ON DELETE CASCADE.
+    CREATE TABLE IF NOT EXISTS privacy_actions (
+      id SERIAL PRIMARY KEY,
+      person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+      action TEXT NOT NULL CHECK (action IN ('forget_face')),
+      actor TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_privacy_actions_person ON privacy_actions(person_id);
+    CREATE INDEX IF NOT EXISTS idx_privacy_actions_created ON privacy_actions(created_at);
   `);
   if (hasTrgm) {
     await pool.query(`
@@ -478,6 +495,17 @@ async function createPostgresAdapter(connectionString) {
     },
     async deletePerson(id) {
       return one('DELETE FROM people WHERE id = $1 RETURNING *', [id]);
+    },
+    async recordPrivacyAction({ personId, action, actor }) {
+      return one(
+        'INSERT INTO privacy_actions (person_id, action, actor) VALUES ($1, $2, $3) RETURNING *',
+        [personId, action, actor]
+      );
+    },
+    async privacyActionsForPerson(personId) {
+      return all('SELECT * FROM privacy_actions WHERE person_id = $1 ORDER BY created_at DESC', [
+        personId
+      ]);
     },
     async counts() {
       const r = await one(`SELECT

@@ -15,6 +15,7 @@ const {
 } = require('../adminAuth');
 const { gatherCheapReportData, gatherFunnelStats, gatherDailySeries, gatherPanelExtras } = require('../report');
 const { buildStatsPageHtml, buildFunnelFragmentHtml } = require('../adminStats');
+const { forgetPersonFaces } = require('../facematch');
 
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
@@ -169,13 +170,49 @@ function adminRoutes(store, matcher) {
   return router;
 }
 
-// Router aparte para /api/admin/* — hoy sin ningún endpoint propio (el panel
-// real, PR 6, es quien los va a necesitar), pero con el MISMO gate ya
-// montado y probado: cualquier ruta que se agregue ahí después nace
-// protegida, sin tener que acordarse de aplicar el middleware.
-function adminApiRoutes() {
+// Router aparte para /api/admin/* — el gate ya montado y probado: cualquier
+// ruta que se agregue acá nace protegida, sin tener que acordarse de aplicar
+// el middleware.
+function adminApiRoutes(store, matcher) {
   const router = express.Router();
   router.use(requireAdminSession);
+
+  // POST /api/admin/people/:id/forget-face — retira la firma facial de una
+  // persona SIN borrar su ficha (#161). A diferencia de DELETE
+  // /api/people/:id, la persona se queda, y con ella la línea de tiempo de su
+  // reporte — pensado para cuando una familia avisa que ya la encontró y pide
+  // que deje de ser encontrable por reconocimiento facial.
+  router.post(
+    '/people/:id/forget-face',
+    wrap(async (req, res) => {
+      const person = await store.getPerson(req.params.id);
+      if (!person) return res.status(404).json({ error: 'Persona no encontrada' });
+
+      // Los ids se leen ANTES de nada — mismo motivo que en DELETE
+      // /api/people/:id: es la única fuente de qué hay que retirar.
+      const faceIds = await store.faceIdsForPerson(person.id);
+      const faces = await forgetPersonFaces(matcher, faceIds, person.id);
+
+      // A propósito NO se pone face_id en NULL: si se pusiera, el próximo
+      // backfillUnindexedPhotos (que solo mira face_id IS NULL) volvería a
+      // indexar la misma foto y deshacía en silencio lo que se le prometió a
+      // la familia. La fila se queda con un face_id que ya no existe en la
+      // colección — inerte, y por eso no vuelve a coincidir con nadie.
+      const action = await store.recordPrivacyAction({
+        personId: person.id,
+        action: 'forget_face',
+        actor: req.adminEmail
+      });
+
+      res.json({
+        ok: true,
+        person: { id: person.id, full_name: person.full_name },
+        faces,
+        action: { id: action.id, created_at: action.created_at }
+      });
+    })
+  );
+
   return router;
 }
 
