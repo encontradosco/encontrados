@@ -1,0 +1,21 @@
+services:
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+    volumes:
+      # Código en vivo: editas en el equipo, node --watch reinicia adentro.
+      - .:/app
+      # Preserva los node_modules compilados para linux dentro de la imagen.
+      # Sin esto, el bind mount de arriba los tapa con los del equipo (macOS)
+      # y los módulos nativos (better-sqlite3, sharp) dejan de cargar.
+      - /app/node_modules
+      # La base SQLite persiste en ./data del equipo entre reinicios.
+      - ./data:/app/data
+    environment:
+      - PORT=3000
+    # Variables locales opcionales. El archivo no existe por defecto y no hace
+    # falta: sin credenciales cada función se apaga sola y lo dice en el log.
+    env_file:
+      - path: .env
+        required: false

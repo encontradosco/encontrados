@@ -773,8 +773,18 @@ ${
   function rescueForm({ email = '', phone = '', searchOnly = false } = {}) {
     return `
 <form class="stack compact" method="post" action="/rescate" enctype="multipart/form-data" data-resize-photos data-require-photo>
-  <label class="file-label"><span>📷 Foto de la persona que tienes contigo *</span>
-    <input type="file" name="photo" accept="image/*" required></label>
+  <div class="photo-field" data-photo-field>
+    <label class="file-label" data-photo-native><span>📷 Foto de la persona que tienes contigo *</span>
+      <input type="file" name="photo" accept="image/*" required></label>
+    <div class="photo-buttons" data-photo-enhanced hidden>
+      <span class="photo-field-label">📷 Foto de la persona que tienes contigo *</span>
+      <div class="photo-buttons-row">
+        <button type="button" data-photo-camera>📷 Tomar foto</button>
+        <button type="button" class="secondary" data-photo-gallery>🖼️ Elegir de galería</button>
+      </div>
+      <p class="subtle" data-photo-picked aria-live="polite" hidden></p>
+    </div>
+  </div>
   ${RESCUE_PRIVACY}
   <label class="field-label"><span>Tu correo (opcional — te avisamos si alguien la busca después)</span>
     <input type="email" name="email" value="${esc(email)}" placeholder="tucorreo@ejemplo.com" autocomplete="email"></label>
@@ -793,6 +803,37 @@ document.addEventListener('submit', function (ev) {
     alert('Sube una foto de la persona.');
   }
 }, true);
+
+// El rescatista que tiene a la persona al lado abre la cámara sin salir de la
+// app. Con JS, dos botones manejan UN solo input: «Tomar foto» le pone el
+// atributo capture y dispara la cámara; «Elegir de galería» lo quita y abre el
+// carrete. Sin JS queda el input nativo, que ya ofrece las dos opciones.
+(function () {
+  var field = document.querySelector('[data-photo-field]');
+  if (!field) return;
+  var input = field.querySelector('input[type=file]');
+  var native = field.querySelector('[data-photo-native]');
+  var enhanced = field.querySelector('[data-photo-enhanced]');
+  var picked = field.querySelector('[data-photo-picked]');
+  native.hidden = true;
+  enhanced.hidden = false;
+  // Un input required oculto bloquea el envío con un error que el navegador no
+  // puede enfocar; la validación de arriba ya cubre el caso sin foto.
+  input.removeAttribute('required');
+  field.querySelector('[data-photo-camera]').addEventListener('click', function () {
+    input.setAttribute('capture', 'environment');
+    input.click();
+  });
+  field.querySelector('[data-photo-gallery]').addEventListener('click', function () {
+    input.removeAttribute('capture');
+    input.click();
+  });
+  input.addEventListener('change', function () {
+    var has = input.files.length > 0;
+    picked.textContent = has ? '✓ Foto seleccionada' : '';
+    picked.hidden = !has;
+  });
+})();
 </script>`;
   }
 
