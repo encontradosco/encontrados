@@ -173,6 +173,28 @@ test('subscribe registers the sender phone; unsubscribe removes it', async () =>
   assert.equal((await store.getSubscriptions(person.id)).length, 0);
 });
 
+// #78: the bot answers "where is this person" from store.getLatestUpdate,
+// which is the SAME "current status" invariant the home page's missing/
+// reunited lists use. Filtering the aggregator-safe noise only from the home
+// queries and not from here would have a family texting the bot and being
+// told "A SALVO" from a public-registry sync, while the site's own listing
+// still (correctly) shows them as missing.
+test('BUSCAR does not report someone as found from a public-registry sync alone', async () => {
+  const store = await freshStore();
+  const { person } = await store.findOrCreatePerson('Camilo Andrade Ríos');
+  await store.addUpdate(person.id, { status: 'missing', source: 'web', location: 'Bosa' });
+  await store.addUpdate(person.id, { status: 'safe', source: 'aggregator', message: 'Localizada' });
+
+  const r = await handleInbound(store, { channel: 'whatsapp', from: '573009998877', text: 'BUSCAR Camilo Andrade' });
+  assert.match(r, /DESAPARECID/i, 'la fila del agregador no puede pisar el reporte real de desaparición');
+  assert.doesNotMatch(r, /A SALVO/);
+
+  // A REAL confirmation must still flip it.
+  await store.addUpdate(person.id, { status: 'safe', source: 'web', message: 'Confirmado por la familia' });
+  const r2 = await handleInbound(store, { channel: 'whatsapp', from: '573009998877', text: 'BUSCAR Camilo Andrade' });
+  assert.match(r2, /A SALVO/);
+});
+
 test('help for unknown/empty messages', async () => {
   const store = await freshStore();
   const r = await handleInbound(store, { channel: 'whatsapp', from: '99', text: 'ayuda' });

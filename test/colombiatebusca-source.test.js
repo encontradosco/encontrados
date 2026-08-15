@@ -279,10 +279,24 @@ test('external_id es idéntico aunque la URL de entrada varíe', () => {
 
 test('external_id es estable entre lecturas de la misma ficha', () => {
   const a = toUpdate(parsePersonPage(fichaHtml(), PAGE_URL), PAGE_URL).update;
-  const b = toUpdate(parsePersonPage(fichaHtml({ estado: 'Localizada' }), PAGE_URL), PAGE_URL).update;
-  assert.strictEqual(a.external_id, b.external_id);
   assert.strictEqual(a.status, 'missing');
-  assert.strictEqual(b.status, 'safe');
+  assert.strictEqual(a.external_id, canonicalPersonUrl(personIdFromUrl(PAGE_URL)));
+});
+
+// #78: una ficha "Localizada" en la fuente no llega como `safe` — llega como
+// si el barrido nunca hubiera visto esta ficha. Empujarla inflaba el conteo
+// público de "reencontradas" con gente que nunca pasó por esta app.
+test('una ficha ya localizada en la fuente no se empuja como update', () => {
+  const localizada = toUpdate(parsePersonPage(fichaHtml({ estado: 'Localizada' }), PAGE_URL), PAGE_URL);
+  assert.strictEqual(localizada, null);
+
+  const localizado = toUpdate(parsePersonPage(fichaHtml({ estado: 'Localizado' }), PAGE_URL), PAGE_URL);
+  assert.strictEqual(localizado, null);
+
+  // El filtro solo actúa sobre `safe` — cualquier otro estado (incluido
+  // 'unknown', que es donde cae "No localizada") sigue empujándose igual.
+  const noLocalizada = toUpdate(parsePersonPage(fichaHtml({ estado: 'No localizada' }), PAGE_URL), PAGE_URL);
+  assert.strictEqual(noLocalizada.update.status, 'unknown');
 });
 
 // Emitir `location: undefined` hacía que el upsert lo escribiera como NULL,

@@ -3,6 +3,10 @@
 // the shared JS scorer in people.js does the final ranking.
 const { Pool } = require('pg');
 
+// #78: see the same constant in src/store/sqlite.js for why "latest status"
+// must treat an aggregator-sourced 'safe' row as if it were never written.
+const AGGREGATOR_SAFE_EXCLUSION = `WHERE NOT (u.source = 'aggregator' AND u.status = 'safe')`;
+
 async function createPostgresAdapter(connectionString) {
   const pool = new Pool({
     connectionString,
@@ -241,9 +245,15 @@ async function createPostgresAdapter(connectionString) {
         personId
       ]);
     },
+    // "El estado actual de una persona es el de su update más reciente" (ver
+    // POST /rescate/aviso en src/routes/web.js) es la regla que lee el bot de
+    // WhatsApp, GET /api/people y las tarjetas de duplicados — no solo el
+    // home. Sin el mismo filtro, esas tres superficies seguirían anunciando
+    // "Localizada" por una fila del agregador que el home ya ignora.
     async latestUpdate(personId) {
       return one(
-        'SELECT * FROM updates WHERE person_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1',
+        `SELECT * FROM updates WHERE person_id = $1 AND NOT (source = 'aggregator' AND status = 'safe')
+         ORDER BY created_at DESC, id DESC LIMIT 1`,
         [personId]
       );
     },
@@ -261,6 +271,7 @@ async function createPostgresAdapter(connectionString) {
            SELECT u.person_id, u.status, u.created_at,
                   ROW_NUMBER() OVER (PARTITION BY u.person_id ORDER BY u.created_at DESC, u.id DESC) AS rn
            FROM updates u
+           ${AGGREGATOR_SAFE_EXCLUSION}
          )
          SELECT p.id, p.full_name, l.status, l.created_at AS last_report
          FROM people p
@@ -279,6 +290,7 @@ async function createPostgresAdapter(connectionString) {
            SELECT u.person_id, u.status,
                   ROW_NUMBER() OVER (PARTITION BY u.person_id ORDER BY u.created_at DESC, u.id DESC) AS rn
            FROM updates u
+           ${AGGREGATOR_SAFE_EXCLUSION}
          )
          SELECT COUNT(*)::int AS n FROM latest WHERE rn = 1 AND status = 'safe'`
       );

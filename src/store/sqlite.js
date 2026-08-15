@@ -3,6 +3,20 @@ const fs = require('fs');
 const path = require('path');
 const Database = require('better-sqlite3');
 
+// #78: the public-registry sweep (source='aggregator') used to push a person
+// already marked "Localizada" in the source as status='safe' here, even when
+// nobody had ever reported them missing through this app. That row would then
+// win "latest status" and count toward the public reunited counter — someone
+// who never passed through encontrados.co, inflating a number families and
+// rescuers read as this app's own signal.
+//
+// The feed no longer produces that row going forward (see toUpdate in
+// src/sources/colombiatebusca.js), but rows synced before that fix already
+// exist. Rather than delete history, "latest status" pretends they were never
+// written: whatever real status came before resurfaces, and a person with no
+// other update simply has none — neither missing nor reunited.
+const AGGREGATOR_SAFE_EXCLUSION = `WHERE NOT (u.source = 'aggregator' AND u.status = 'safe')`;
+
 async function createSqliteAdapter(dbPath) {
   if (dbPath !== ':memory:') {
     fs.mkdirSync(path.dirname(dbPath), { recursive: true });
@@ -211,9 +225,17 @@ async function createSqliteAdapter(dbPath) {
         .prepare('SELECT * FROM updates WHERE person_id = ? ORDER BY created_at DESC, id DESC')
         .all(personId);
     },
+    // "El estado actual de una persona es el de su update más reciente" (ver
+    // POST /rescate/aviso en src/routes/web.js) es la regla que lee el bot de
+    // WhatsApp, GET /api/people y las tarjetas de duplicados — no solo el
+    // home. Sin el mismo filtro, esas tres superficies seguirían anunciando
+    // "Localizada" por una fila del agregador que el home ya ignora.
     async latestUpdate(personId) {
       return db
-        .prepare('SELECT * FROM updates WHERE person_id = ? ORDER BY created_at DESC, id DESC LIMIT 1')
+        .prepare(
+          `SELECT * FROM updates WHERE person_id = ? AND NOT (source = 'aggregator' AND status = 'safe')
+           ORDER BY created_at DESC, id DESC LIMIT 1`
+        )
         .get(personId);
     },
     // Everyone currently reported missing, most recent report first.
@@ -232,6 +254,7 @@ async function createSqliteAdapter(dbPath) {
              SELECT u.person_id, u.status, u.created_at,
                     ROW_NUMBER() OVER (PARTITION BY u.person_id ORDER BY u.created_at DESC, u.id DESC) AS rn
              FROM updates u
+             ${AGGREGATOR_SAFE_EXCLUSION}
            )
            SELECT p.id, p.full_name, l.status, l.created_at AS last_report
            FROM people p
@@ -251,6 +274,7 @@ async function createSqliteAdapter(dbPath) {
              SELECT u.person_id, u.status,
                     ROW_NUMBER() OVER (PARTITION BY u.person_id ORDER BY u.created_at DESC, u.id DESC) AS rn
              FROM updates u
+             ${AGGREGATOR_SAFE_EXCLUSION}
            )
            SELECT COUNT(*) AS n FROM latest WHERE rn = 1 AND status = 'safe'`
         )
