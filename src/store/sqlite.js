@@ -434,6 +434,15 @@ async function createSqliteAdapter(dbPath) {
         .prepare('SELECT id, person_id, kind, face_id FROM photos WHERE face_id IS NOT NULL ORDER BY id')
         .all();
     },
+    // Las firmas faciales de las fotos de una persona. Hay que leerlas ANTES de
+    // borrarla: la cascada se lleva las filas de `photos` y con ellas el único
+    // registro de qué retirar de la colección de Rekognition.
+    async faceIdsForPerson(personId) {
+      return db
+        .prepare('SELECT face_id FROM photos WHERE person_id = ? AND face_id IS NOT NULL')
+        .all(personId)
+        .map((r) => r.face_id);
+    },
     async deletePerson(id) {
       const person = getPersonStmt.get(id);
       if (!person) return null;

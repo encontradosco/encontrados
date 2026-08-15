@@ -10,6 +10,7 @@ const {
 const { STATUSES, SOURCES } = require('../people');
 const {
   processPhoto,
+  forgetPersonFaces,
   backfillUnindexedPhotos,
   backfillPhotoDerivatives,
   computeMatchStats,
@@ -260,27 +261,48 @@ function apiRoutes(store, matcher) {
     'conteo prueba'
   ];
 
-  // POST /api/maintenance/purge-test-data — remove only the seeded test rows.
+  // POST /api/maintenance/purge-test-data — remove only the seeded test rows,
+  // y ahora también sus firmas faciales: un registro de prueba no tiene por qué
+  // dejar un dato biométrico en la colección después de que su ficha se fue.
+  //
+  // Sigue siendo segura sin llave, y el radio no cambió: solo puede tocar a
+  // quien tenga uno de los nombres de la lista fija de arriba, igual que antes.
+  // Y cuando no hay nada que purgar no gasta ni una llamada a Rekognition,
+  // porque el retiro va después del borrado y ese bucle no entra.
   router.post(
     '/maintenance/purge-test-data',
     wrap(async (req, res) => {
       const { normalize } = require('../names');
       const removed = [];
+      const firmas = { total: 0, deleted: 0, unconfirmed: [] };
       for (const name of TEST_RECORD_NAMES) {
         for (const p of await store.searchPeople(name, { limit: 20, minScore: 0.6 })) {
           const norm = normalize(p.full_name);
           // Only exact matches or the same name plus a trailing id.
           if (!TEST_RECORD_NAMES.some((t) => norm === t || norm.startsWith(t + ' '))) continue;
+          // Mismo orden que el DELETE del ARCO, y por la misma razón: los ids
+          // antes del borrado porque la cascada se los lleva, y las firmas
+          // después, cuando ya no hay ficha que dejar huérfana.
+          const faceIds = await store.faceIdsForPerson(p.id);
           const deleted = await store.deletePerson(p.id);
-          if (deleted) removed.push({ id: p.id, name: p.full_name });
+          if (!deleted) continue;
+          removed.push({ id: p.id, name: p.full_name });
+          const faces = await forgetPersonFaces(matcher, faceIds, p.id);
+          firmas.total += faces.total;
+          firmas.deleted += faces.deleted;
+          firmas.unconfirmed.push(...faces.unconfirmed);
         }
       }
-      res.json({ ok: true, removed_count: removed.length, removed });
+      res.json({ ok: true, removed_count: removed.length, removed, faces: firmas });
     })
   );
 
   // DELETE /api/people/:id — honours the deletion requests promised in the
   // privacy policy. Requires API_KEY; disabled entirely when it is unset.
+  //
+  // Borra las dos copias del rastro: la fila (y en cascada sus reportes,
+  // suscripciones y fotos) y las firmas faciales en la colección de
+  // Rekognition, que no viven en la base y por tanto la cascada no toca.
   router.delete(
     '/people/:id',
     wrap(async (req, res) => {
@@ -292,9 +314,28 @@ function apiRoutes(store, matcher) {
       if ((req.get('authorization') || '') !== `Bearer ${env.API_KEY}`) {
         return res.status(401).json({ error: 'API key inválida o ausente' });
       }
+      // Los ids se leen ANTES del borrado: la cascada se lleva las filas de
+      // `photos` y con ellas la única forma de saber qué firmas retirar.
+      const faceIds = await store.faceIdsForPerson(req.params.id);
       const deleted = await store.deletePerson(req.params.id);
       if (!deleted) return res.status(404).json({ error: 'Persona no encontrada' });
-      res.json({ ok: true, deleted: { id: deleted.id, full_name: deleted.full_name } });
+      // Y las firmas DESPUÉS, ya sabiendo que la ficha se fue. Al revés —como
+      // abrió este PR— si la base fallaba en el medio quedaban las firmas
+      // borradas y la ficha viva: una persona listada como desaparecida y
+      // permanentemente invisible para el matcher, porque
+      // `backfillUnindexedPhotos` solo recoge fotos con `face_id` nulo y estas
+      // lo conservan. De las dos huérfanas posibles esa es la peor, porque le
+      // cuesta algo a quien está buscando a un familiar. Nunca lanza, así que
+      // un Rekognition caído tampoco deshace el borrado ya hecho.
+      const faces = await forgetPersonFaces(matcher, faceIds, deleted.id);
+      res.json({
+        ok: true,
+        deleted: { id: deleted.id, full_name: deleted.full_name },
+        // Lo que quedó por retirar. Reintentar el DELETE ya no sirve —la
+        // persona no existe y sus ids se fueron con ella—, así que esta
+        // respuesta y el log son el único rastro para limpiarlo a mano.
+        faces
+      });
     })
   );
 

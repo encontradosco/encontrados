@@ -447,6 +447,16 @@ async function createPostgresAdapter(connectionString) {
         []
       );
     },
+    // Las firmas faciales de las fotos de una persona. Hay que leerlas ANTES de
+    // borrarla: la cascada se lleva las filas de `photos` y con ellas el único
+    // registro de qué retirar de la colección de Rekognition.
+    async faceIdsForPerson(personId) {
+      const rows = await all(
+        'SELECT face_id FROM photos WHERE person_id = $1 AND face_id IS NOT NULL',
+        [personId]
+      );
+      return rows.map((r) => r.face_id);
+    },
     async deletePerson(id) {
       return one('DELETE FROM people WHERE id = $1 RETURNING *', [id]);
     },
