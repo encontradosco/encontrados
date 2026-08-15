@@ -180,3 +180,51 @@ test('marcar una mascota como encontrada lo refleja en su ficha', async (t) => {
   const html = await (await fetch(`${base}${location}`)).text();
   assert.match(html, /ya fue encontrada/);
 });
+
+test('GET /api/diag informa el estado del matching de mascotas', async (t) => {
+  delete process.env.PET_MATCH_API_URL;
+  const { server, base } = await startApp();
+  t.after(() => server.close());
+  const diag = await (await fetch(`${base}/api/diag`)).json();
+  assert.equal(diag.pet_matching.api_url_present, false);
+  assert.equal(diag.pet_matching.enabled, false);
+});
+
+test('/api/reindex recoge fotos de mascotas que quedaron sin embedding', async (t) => {
+  delete process.env.PET_MATCH_API_URL;
+  const adapter = await createSqliteAdapter(':memory:');
+
+  // Primera instancia: sin PET_MATCH_API_URL, como si el servicio estuviera caído al reportar.
+  const app1 = await createApp(adapter);
+  const server1 = await new Promise((resolve) => {
+    const s = app1.listen(0, () => resolve(s));
+  });
+  const base1 = `http://127.0.0.1:${server1.address().port}`;
+
+  const fd = new FormData();
+  fd.set('species', 'dog');
+  fd.append('photos', new File([await photoBytes({ r: 3, g: 3, b: 3 })], 'p.jpg', { type: 'image/jpeg' }));
+  fd.set('contact_phone', '300 000 0000');
+  await fetch(`${base1}/mascotas/reporte`, { method: 'POST', body: fd, redirect: 'manual' });
+  server1.close();
+
+  // El servicio "vuelve" — se levanta el doble y se pone la variable.
+  const pm = await fakePetMatcher();
+  t.after(() => pm.stop());
+
+  // Segunda instancia, mismo adapter (misma base): como una instancia nueva
+  // que arranca ya con el servicio disponible — no es el MISMO petMatcher
+  // "recuperándose", es lo que de verdad pasaría en producción con una
+  // instancia serverless nueva.
+  const app2 = await createApp(adapter);
+  const server2 = await new Promise((resolve) => {
+    const s = app2.listen(0, () => resolve(s));
+  });
+  t.after(() => server2.close());
+  const base2 = `http://127.0.0.1:${server2.address().port}`;
+
+  const res = await fetch(`${base2}/api/reindex`, { method: 'POST' });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.pets.processed, 1);
+});
