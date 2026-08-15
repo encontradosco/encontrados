@@ -13,7 +13,9 @@ async function startApp() {
   const server = await new Promise((resolve) => {
     const s = app.listen(0, () => resolve(s));
   });
-  return { server, base: `http://127.0.0.1:${server.address().port}` };
+  // El store va de vuelta porque una prueba de acá necesita mirar la fila
+  // guardada, no solo la página que la muestra.
+  return { server, base: `http://127.0.0.1:${server.address().port}`, store: app.locals.store };
 }
 
 // A real JPEG: the report path decodes it to build the thumbnail.
@@ -101,13 +103,24 @@ test('un POST que todavía traiga el campo no manda nada al buzón de operación
 // existiendo y la siguen llenando el API y los agregadores (ver app.test.js),
 // así que lo único que cambia es que un reporte web no la trae.
 test('un reporte web ya no guarda nombre de quien reporta', async (t) => {
-  const { server, base } = await startApp();
+  const { server, base, store } = await startApp();
   t.after(() => server.close());
 
   const res = await report(base, { reporter_name: 'Ana Carolina Restrepo' });
   assert.equal(res.status, 303);
 
-  const html = await (await fetch(`${base}${res.headers.get('location')}`)).text();
+  const location = res.headers.get('location');
+
+  // La fila guardada es lo que de verdad importa: la página oculta o enmascara
+  // el nombre de todas formas, así que mirarla sola dejaría pasar un servidor
+  // que volviera a persistirlo.
+  const personId = Number(location.match(/^\/person\/(\d+)\?/)[1]);
+  const updates = await store.getUpdates(personId);
+  assert.equal(updates.length, 1);
+  assert.equal(updates[0].reporter, null, 'el reporte web no puede guardar quién reporta');
+
+  // Y la página tampoco lo muestra: las dos capas valen.
+  const html = await (await fetch(`${base}${location}`)).text();
   assert.doesNotMatch(html, /Reportado por/);
   assert.doesNotMatch(html, /Ana C/);
 });
