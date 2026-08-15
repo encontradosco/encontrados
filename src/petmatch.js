@@ -1,0 +1,122 @@
+// Orquestación de mascotas — espejo de src/facematch.js, pero comparando
+// embeddings en JS en vez de usar la colección administrada de Rekognition:
+// pet-matcher/ (ver ese folder) solo calcula vectores, no compara nada.
+//
+// Dos tipos de foto, igual que con personas:
+//   'report' — mascota reportada como perdida. Se guarda y se publica.
+//   'query'  — foto de quien encontró una mascota. Se compara y se borra —
+//              solo el embedding sobrevive, nunca los bytes.
+const { toMatchable } = require('./photo');
+const { makeThumbnail } = require('./thumbs');
+
+const PET_MATCH_THRESHOLD = parseFloat(process.env.PET_MATCH_THRESHOLD || '80');
+
+function cosineSimilarity(a, b) {
+  let dot = 0;
+  let na = 0;
+  let nb = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    na += a[i] * a[i];
+    nb += b[i] * b[i];
+  }
+  if (!na || !nb) return 0;
+  return dot / (Math.sqrt(na) * Math.sqrt(nb));
+}
+
+// Compara contra el lado OPUESTO (report ⟷ query), filtrando por especie —
+// nunca cruza perro con gato. Devuelve [{ id, pet_id, similarity }] ordenado
+// de mayor a menor similitud, solo por encima del umbral.
+async function matchPetPhoto(petStore, { kind, species, embedding }) {
+  const oppositeKind = kind === 'report' ? 'query' : 'report';
+  const candidates = await petStore.petPhotosForMatching(oppositeKind, species);
+  return candidates
+    .map((c) => ({ ...c, similarity: cosineSimilarity(embedding, c.embedding) * 100 }))
+    .filter((c) => c.similarity >= PET_MATCH_THRESHOLD)
+    .sort((a, b) => b.similarity - a.similarity);
+}
+
+// Guarda la foto, pide su embedding, compara, y (solo para kind='report')
+// genera la miniatura que ve la ficha pública. Nunca lanza: un servicio de
+// embeddings caído apaga el matching, no tumba el reporte — mismo principio
+// que processPhoto en facematch.js.
+async function processPetPhoto(petStore, petMatcher, { petId, kind, species, subscriptionId, bytes, contentType }) {
+  const usable = await toMatchable(bytes, contentType);
+
+  const photo = await petStore.addPetPhoto({
+    petId: petId || null,
+    kind,
+    species,
+    subscriptionId: subscriptionId || null,
+    content: usable ? usable.bytes : bytes,
+    contentType: usable ? usable.contentType : contentType
+  });
+
+  if (!usable) {
+    console.warn(`[petmatch] foto ${photo.id} ilegible (${contentType}) — guardada sin comparar`);
+    photo.unreadable = true;
+    return { photo, matches: [] };
+  }
+  const content = usable.bytes;
+
+  if (kind === 'report') {
+    const thumb = await makeThumbnail(content, null);
+    if (thumb) await petStore.setPetPhotoThumbnail(photo.id, { small: thumb.bytes, contentType: thumb.contentType });
+  }
+
+  if (!petMatcher.enabled) {
+    console.warn(`[petmatch] matcher deshabilitado — foto ${photo.id} guardada sin comparar (backfill la recoge después)`);
+    return { photo, matches: [] };
+  }
+
+  const result = await petMatcher.embed(content, contentType);
+  if (!result) return { photo, matches: [] };
+  await petStore.setPetPhotoEmbedding(photo.id, result.embedding, result.model);
+
+  const matches = await matchPetPhoto(petStore, { kind, species, embedding: result.embedding });
+
+  // La foto de quien encontró una mascota nunca se conserva — solo su
+  // embedding, para que un reporte futuro sí pueda coincidir con ella.
+  if (kind === 'query') await petStore.clearPetPhotoContent(photo.id);
+
+  if (kind === 'report' && matches.length) {
+    // Hoy no hay contacto de quien encontró la mascota (pet_subscriptions
+    // existe pero no se usa todavía — ver el plan), así que no hay a quién
+    // avisar de este lado. Se deja visible en el log para operación.
+    console.log(
+      `[petmatch] el reporte de la mascota ${photo.pet_id} coincide con ${matches.length} avistamiento(s) previo(s), sin contacto para avisar en esta versión`
+    );
+  }
+
+  return { photo, matches };
+}
+
+// Red de seguridad: fotos que quedaron sin embedding porque el servicio
+// estaba caído o sin configurar al momento de subirlas. Mismo rol que
+// backfillUnindexedPhotos en facematch.js — no es el camino principal.
+async function backfillUnindexedPetPhotos(petStore, petMatcher, limit = 100) {
+  if (!petMatcher.enabled) {
+    return { ok: false, error: 'El servicio de mascotas no está activo.', processed: 0 };
+  }
+  const pending = await petStore.petPhotosMissingEmbedding(limit);
+  let processed = 0;
+  let failed = 0;
+  for (const photo of pending) {
+    try {
+      const bytes = Buffer.isBuffer(photo.content) ? photo.content : Buffer.from(photo.content);
+      const result = await petMatcher.embed(bytes, photo.content_type);
+      if (result) {
+        await petStore.setPetPhotoEmbedding(photo.id, result.embedding, result.model);
+        processed++;
+      } else {
+        failed++;
+      }
+    } catch (e) {
+      console.error(`[petmatch:backfill] foto ${photo.id} falló:`, e.message);
+      failed++;
+    }
+  }
+  return { ok: true, pending: pending.length, processed, failed };
+}
+
+module.exports = { processPetPhoto, backfillUnindexedPetPhotos, PET_MATCH_THRESHOLD, cosineSimilarity };
