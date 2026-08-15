@@ -122,6 +122,9 @@ async function createPostgresAdapter(connectionString) {
   await pool.query('ALTER TABLE updates ADD COLUMN IF NOT EXISTS lat DOUBLE PRECISION');
   await pool.query('ALTER TABLE updates ADD COLUMN IF NOT EXISTS lng DOUBLE PRECISION');
   await pool.query('ALTER TABLE updates ADD COLUMN IF NOT EXISTS contact TEXT');
+  // De dónde salió la afirmación: el enlace a la noticia que confirma que una
+  // persona apareció. Un `safe` con enlace carga su propia prueba.
+  await pool.query('ALTER TABLE updates ADD COLUMN IF NOT EXISTS source_url TEXT');
   // Detection geometry (bounding box + landmarks) for the public overlay, and
   // the face thumbnail the public listing loads instead of the full photo.
   await pool.query('ALTER TABLE photos ADD COLUMN IF NOT EXISTS face_detail JSONB');
@@ -213,16 +216,17 @@ async function createPostgresAdapter(connectionString) {
     // new one (the aggregator re-sending its latest snapshot doesn't duplicate
     // the person's history). Without externalId, behavior is unchanged: a
     // plain insert every time.
-    async insertUpdate(personId, { status, message, location, lat, lng, source, reporter, contact, externalId }) {
+    async insertUpdate(personId, { status, message, location, lat, lng, source, sourceUrl, reporter, contact, externalId }) {
       return one(
-        `INSERT INTO updates (person_id, status, message, location, lat, lng, source, reporter, contact, external_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        `INSERT INTO updates (person_id, status, message, location, lat, lng, source, source_url, reporter, contact, external_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
          ON CONFLICT (external_id) WHERE external_id IS NOT NULL DO UPDATE SET
            status = EXCLUDED.status,
            message = EXCLUDED.message,
            location = EXCLUDED.location,
            lat = EXCLUDED.lat,
            lng = EXCLUDED.lng,
+           source_url = EXCLUDED.source_url,
            reporter = EXCLUDED.reporter,
            contact = EXCLUDED.contact
          RETURNING *`,
@@ -234,6 +238,7 @@ async function createPostgresAdapter(connectionString) {
           Number.isFinite(lat) ? lat : null,
           Number.isFinite(lng) ? lng : null,
           source,
+          sourceUrl || null,
           reporter || null,
           contact || null,
           externalId || null

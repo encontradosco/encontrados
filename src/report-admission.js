@@ -33,6 +33,37 @@ const notifyModule = require('./notify');
 const duplicatesModule = require('./duplicates');
 const facematchModule = require('./facematch');
 
+// El enlace a la fuente pública que respalda un reporte — hoy, la noticia que
+// dice que una persona apareció.
+//
+// Se normaliza acá y no en cada handler por la misma razón que existe este
+// módulo: el valor termina siendo un href clickeable en la ficha de una persona
+// desaparecida, que lee su familia. Un `javascript:` o un `data:text/html`
+// guardado ahí sería un hueco de seguridad servido a quien menos puede
+// permitírselo, y una regla repetida en tres puertas es una regla que se afloja
+// en dos de ellas sin que nadie lo note.
+//
+// Un enlace inválido se descarta con un log y NO tumba el reporte: perder el
+// aviso de que alguien apareció por culpa de un enlace mal formado sería peor
+// que ignorar el enlace.
+function normalizeSourceUrl(value) {
+  if (value == null) return null;
+  const raw = String(value).trim();
+  if (!raw) return null;
+  let parsed;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    console.warn('[report-admission] source_url descartado, no es una URL');
+    return null;
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    console.warn(`[report-admission] source_url descartado, protocolo ${parsed.protocol}`);
+    return null;
+  }
+  return parsed.href;
+}
+
 // Dependencies are injected so the service can be tested directly with fakes.
 // Defaults are the real modules, so a caller that only passes { store, matcher }
 // gets production behavior.
@@ -50,6 +81,13 @@ function createReportAdmission({
   // service never touches multipart, base64 or WhatsApp media APIs — that is
   // transport detail the handler owns.
   //
+  // sourceUrl: the public link backing this report. Every entry point can pass
+  // it and gets the same http(s)-only rule; today only the JSON API has an
+  // input where a link exists (the web form has no such field and the WhatsApp
+  // grammar has no such token), so the other two simply leave it unset. That is
+  // a transport difference, not a behavior one — the day the form grows a
+  // "link to the news" field it passes `sourceUrl` and inherits the rule.
+  //
   // checkDuplicates / includePriorPhoto: each is its own Rekognition call or
   // extra store read, and only the web form and (for duplicates) the JSON API
   // render anything from them — the WhatsApp bot's reply never mentions a
@@ -63,6 +101,7 @@ function createReportAdmission({
     lat,
     lng,
     source,
+    sourceUrl = null,
     reporter = null,
     contact = null,
     externalId,
@@ -82,6 +121,7 @@ function createReportAdmission({
       return { ok: false, errors };
     }
     const cleanSource = SOURCES.includes(source) ? source : 'api';
+    const cleanSourceUrl = normalizeSourceUrl(sourceUrl);
     const usablePhotos = (photos || []).filter((p) => p && p.bytes && p.bytes.length);
 
     // ---- 2. Find or create the person ----------------------------------
@@ -105,6 +145,7 @@ function createReportAdmission({
       lat,
       lng,
       source: cleanSource,
+      sourceUrl: cleanSourceUrl,
       reporter,
       contact,
       externalId
@@ -194,4 +235,4 @@ function createReportAdmission({
   return { admitReport };
 }
 
-module.exports = { createReportAdmission };
+module.exports = { createReportAdmission, normalizeSourceUrl };

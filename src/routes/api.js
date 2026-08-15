@@ -111,14 +111,20 @@ function apiRoutes(store, matcher) {
   );
 
   // POST /api/updates — report status by name (creates the person if new)
-  // { name, status, message?, location?, reporter?, source?, external_id?,
+  // { name, status, message?, location?, reporter?, source?, source_url?, external_id?,
   //   photo?: { base64, content_type } }
   // The photo is used ONLY for face matching; it is never displayed or shared.
   // - source: one of 'web'|'whatsapp'|'api'|'aggregator'; defaults to 'api' if
   //   omitted or not one of those values (e.g. an aggregator identifying itself).
+  // - source_url: public link backing this report — the news story saying the
+  //   person turned up. Rendered as a clickable link on the person's page, so
+  //   only http(s) is accepted; anything else is dropped with a log and the
+  //   report still goes through. The rule lives in the shared admission
+  //   service, not here (src/report-admission.js).
   // - external_id: the caller's own id for this update. When present, a repeat
   //   POST with the same external_id updates this same update idempotently
   //   instead of creating a duplicate — safe to retry or re-sync from upstream.
+  //   source_url is part of that upsert, so a re-push corrects a wrong link.
   router.post(
     '/updates',
     requireKey,
@@ -146,6 +152,10 @@ function apiRoutes(store, matcher) {
         lat: typeof req.body.lat === 'number' ? req.body.lat : parseFloat(req.body.lat),
         lng: typeof req.body.lng === 'number' ? req.body.lng : parseFloat(req.body.lng),
         source: req.body.source,
+        // Straight from the body, unvalidated on purpose: the service owns the
+        // http(s)-only rule, so it can't end up meaning one thing here and
+        // another one on the next entry point that starts accepting a link.
+        sourceUrl: req.body.source_url,
         reporter,
         contact,
         externalId,
