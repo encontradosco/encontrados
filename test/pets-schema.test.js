@@ -106,3 +106,20 @@ test('setPetPhotoThumbnail y petPhotosForPet', async () => {
   assert.equal(forPet.length, 1);
   assert.equal(forPet[0].thumb_type, 'image/jpeg');
 });
+
+const { createPetStore } = require('../src/pets');
+
+test('createPetStore.petPhotosForMatching devuelve el embedding ya parseado', async () => {
+  const adapter = await freshAdapter();
+  const petStore = createPetStore(adapter);
+  const pet = await petStore.addPet({ species: 'dog', petName: null, description: null, contact: '300 000 0000' });
+  const photo = await petStore.addPetPhoto({
+    petId: pet.id, kind: 'report', species: 'dog', content: Buffer.from('f'), contentType: 'image/jpeg'
+  });
+  await petStore.setPetPhotoEmbedding(photo.id, [0.5, 0.25, 0.1], 'modelo-test');
+
+  const candidates = await petStore.petPhotosForMatching('report', 'dog');
+  assert.equal(candidates.length, 1);
+  assert.deepEqual(candidates[0].embedding, [0.5, 0.25, 0.1]);
+  assert.equal(typeof candidates[0].embedding[0], 'number');
+});
