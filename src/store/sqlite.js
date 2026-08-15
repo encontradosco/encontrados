@@ -426,6 +426,21 @@ async function createSqliteAdapter(dbPath) {
     async clearPhotoContent(photoId) {
       db.prepare('UPDATE photos SET content = ? WHERE id = ?').run(Buffer.alloc(0), photoId);
     },
+    // La misma foto exacta ya indexada para esta persona: su face_id, para
+    // reusarlo en vez de sumar una firma nueva por la misma cara (#160 — un
+    // reporte re-empujado con la misma foto multiplicaba firmas). face_id
+    // IS NOT NULL ya excluye a la fila que se está procesando ahora mismo,
+    // que todavía no tiene el suyo escrito.
+    async photoFaceIdForContent(personId, kind, content) {
+      const row = db
+        .prepare(
+          `SELECT face_id FROM photos
+           WHERE person_id = ? AND kind = ? AND face_id IS NOT NULL AND content = ?
+           LIMIT 1`
+        )
+        .get(personId, kind, content);
+      return row ? row.face_id : null;
+    },
     async photosByFaceIds(faceIds) {
       if (!faceIds.length) return [];
       const marks = faceIds.map(() => '?').join(',');

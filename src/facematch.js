@@ -451,7 +451,23 @@ async function matchStoredPhoto(store, matcher, photo, bytes) {
   // Search BEFORE indexing so the photo never matches itself.
   const matches = await matcher.searchByImage(bytes);
   console.log(`[facematch] photo ${id} (${kind}) → ${matches.length} raw match(es)`);
-  const { faceId, geometry } = await matcher.indexFace(bytes, id);
+
+  // Esta misma persona ya tiene esta foto exacta indexada — un reporte
+  // re-empujado por el agregador trae los mismos bytes cada vez (#160). Sin
+  // esto, cada re-empuje sumaba una firma nueva por la misma cara: hasta 118
+  // para una sola persona, medido en producción. Reusar el face_id evita la
+  // llamada a IndexFaces; detectFace da la geometría para la miniatura sin
+  // volver a indexar (mismo patrón que ya usa backfillPhotoDerivatives para
+  // no duplicar una cara que ya está en la colección).
+  const reusedFaceId = await store.photoFaceIdForContent(personId, kind, bytes);
+  let faceId, geometry;
+  if (reusedFaceId) {
+    faceId = reusedFaceId;
+    geometry = await matcher.detectFace(bytes);
+    console.log(`[facematch] photo ${id} (${kind}) bytes ya indexados para persona ${personId} — se reusa ${faceId}`);
+  } else {
+    ({ faceId, geometry } = await matcher.indexFace(bytes, id));
+  }
   if (faceId) await store.setPhotoFaceId(id, faceId);
   // Report photos are shown publicly: they get the geometry to draw and the
   // face thumbnail the listing loads instead of the full image.
