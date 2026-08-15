@@ -3,6 +3,20 @@ const fs = require('fs');
 const path = require('path');
 const Database = require('better-sqlite3');
 
+// #78: the public-registry sweep (source='aggregator') used to push a person
+// already marked "Localizada" in the source as status='safe' here, even when
+// nobody had ever reported them missing through this app. That row would then
+// win "latest status" and count toward the public reunited counter — someone
+// who never passed through encontrados.co, inflating a number families and
+// rescuers read as this app's own signal.
+//
+// The feed no longer produces that row going forward (see toUpdate in
+// src/sources/colombiatebusca.js), but rows synced before that fix already
+// exist. Rather than delete history, "latest status" pretends they were never
+// written: whatever real status came before resurfaces, and a person with no
+// other update simply has none — neither missing nor reunited.
+const AGGREGATOR_SAFE_EXCLUSION = `WHERE NOT (u.source = 'aggregator' AND u.status = 'safe')`;
+
 async function createSqliteAdapter(dbPath) {
   if (dbPath !== ':memory:') {
     fs.mkdirSync(path.dirname(dbPath), { recursive: true });
@@ -105,6 +119,12 @@ async function createSqliteAdapter(dbPath) {
   try {
     db.exec('ALTER TABLE updates ADD COLUMN contact TEXT');
   } catch { /* already exists */ }
+  // De dónde salió la afirmación: el enlace a la noticia que confirma que una
+  // persona apareció. Un `safe` con enlace carga su propia prueba; uno sin
+  // enlace es una afirmación que nadie puede verificar.
+  try {
+    db.exec('ALTER TABLE updates ADD COLUMN source_url TEXT');
+  } catch { /* already exists */ }
   // Detection geometry (bounding box + landmarks) for the public overlay, and
   // the face thumbnail the public listing loads instead of the full photo.
   for (const col of ['face_detail TEXT', 'thumb BLOB', 'thumb_type TEXT', 'thumb_large BLOB']) {
@@ -172,18 +192,19 @@ async function createSqliteAdapter(dbPath) {
     // externalId updates the existing row's status/message/location/lat/lng/
     // reporter/contact instead of inserting a duplicate. Without externalId,
     // behavior is unchanged.
-    async insertUpdate(personId, { status, message, location, lat, lng, source, reporter, contact, externalId }) {
+    async insertUpdate(personId, { status, message, location, lat, lng, source, sourceUrl, reporter, contact, externalId }) {
       const extId = externalId || null;
       const info = db
         .prepare(
-          `INSERT INTO updates (person_id, status, message, location, lat, lng, source, reporter, contact, external_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO updates (person_id, status, message, location, lat, lng, source, source_url, reporter, contact, external_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT (external_id) WHERE external_id IS NOT NULL DO UPDATE SET
              status = excluded.status,
              message = excluded.message,
              location = excluded.location,
              lat = excluded.lat,
              lng = excluded.lng,
+             source_url = excluded.source_url,
              reporter = excluded.reporter,
              contact = excluded.contact`
         )
@@ -195,6 +216,7 @@ async function createSqliteAdapter(dbPath) {
           Number.isFinite(lat) ? lat : null,
           Number.isFinite(lng) ? lng : null,
           source,
+          sourceUrl || null,
           reporter || null,
           contact || null,
           extId
@@ -211,9 +233,17 @@ async function createSqliteAdapter(dbPath) {
         .prepare('SELECT * FROM updates WHERE person_id = ? ORDER BY created_at DESC, id DESC')
         .all(personId);
     },
+    // "El estado actual de una persona es el de su update más reciente" (ver
+    // POST /rescate/aviso en src/routes/web.js) es la regla que lee el bot de
+    // WhatsApp, GET /api/people y las tarjetas de duplicados — no solo el
+    // home. Sin el mismo filtro, esas tres superficies seguirían anunciando
+    // "Localizada" por una fila del agregador que el home ya ignora.
     async latestUpdate(personId) {
       return db
-        .prepare('SELECT * FROM updates WHERE person_id = ? ORDER BY created_at DESC, id DESC LIMIT 1')
+        .prepare(
+          `SELECT * FROM updates WHERE person_id = ? AND NOT (source = 'aggregator' AND status = 'safe')
+           ORDER BY created_at DESC, id DESC LIMIT 1`
+        )
         .get(personId);
     },
     // Everyone currently reported missing, most recent report first.
@@ -232,6 +262,7 @@ async function createSqliteAdapter(dbPath) {
              SELECT u.person_id, u.status, u.created_at,
                     ROW_NUMBER() OVER (PARTITION BY u.person_id ORDER BY u.created_at DESC, u.id DESC) AS rn
              FROM updates u
+             ${AGGREGATOR_SAFE_EXCLUSION}
            )
            SELECT p.id, p.full_name, l.status, l.created_at AS last_report
            FROM people p
@@ -251,6 +282,7 @@ async function createSqliteAdapter(dbPath) {
              SELECT u.person_id, u.status,
                     ROW_NUMBER() OVER (PARTITION BY u.person_id ORDER BY u.created_at DESC, u.id DESC) AS rn
              FROM updates u
+             ${AGGREGATOR_SAFE_EXCLUSION}
            )
            SELECT COUNT(*) AS n FROM latest WHERE rn = 1 AND status = 'safe'`
         )
@@ -409,6 +441,15 @@ async function createSqliteAdapter(dbPath) {
       return db
         .prepare('SELECT id, person_id, kind, face_id FROM photos WHERE face_id IS NOT NULL ORDER BY id')
         .all();
+    },
+    // Las firmas faciales de las fotos de una persona. Hay que leerlas ANTES de
+    // borrarla: la cascada se lleva las filas de `photos` y con ellas el único
+    // registro de qué retirar de la colección de Rekognition.
+    async faceIdsForPerson(personId) {
+      return db
+        .prepare('SELECT face_id FROM photos WHERE person_id = ? AND face_id IS NOT NULL')
+        .all(personId)
+        .map((r) => r.face_id);
     },
     async deletePerson(id) {
       const person = getPersonStmt.get(id);

@@ -134,6 +134,72 @@ test('no match tells the rescuer nobody is looking yet', async (t) => {
   fd.set('photo', new File([await photoBytes('nadie')], 'r.jpg', { type: 'image/jpeg' }));
   const html = await (await fetch(`${base}/rescate`, { method: 'POST', body: fd })).text();
   assert.match(html, /Nadie ha reportado a esta persona/);
+
+  // …y no es un callejón sin salida. Quien llega acá buscando a alguien —el
+  // caso más común de esta pantalla— tiene el formulario de reporte enfrente.
+  // La acción va DETRÁS de la pregunta, no suelta: un rescatista con una
+  // persona sin identificar al lado no debe reportarla como desaparecida, y si
+  // responde «no» no llega a ver el botón.
+  assert.match(html, /¿Eres tú quien está buscando a esta persona\?/);
+  assert.match(html, /<summary class="big-btn secondary">🙋 Sí, la estoy buscando<\/summary>/);
+  assert.match(html, /class="big-btn search" href="\/report">📢 Reportar a la persona que busco/);
+  // Y la instrucción para el rescatista, que hasta acá no existía en ninguna
+  // parte del sitio.
+  assert.match(html, /Si la tienes contigo y no sabes quién es, no la reportes como desaparecida/);
+});
+
+// El pie de estas pantallas NO puede llevar la salida a reportar: sale también
+// en «Aviso enviado» y en la pantalla con coincidencia, o sea justo donde la
+// persona acaba de decirnos que tiene a alguien consigo. Un botón de reportar
+// ahí, sin pregunta delante, es la ficha equivocada como última cosa que se ve.
+//
+// Este test existe porque la versión anterior mentía: afirmaba sobre un string
+// que salía TANTO del pie como del bloque de la pregunta, así que quitarlo del
+// pie lo dejaba verde igual. Acá se recorta el pie y se mira solo ahí.
+// Solo el contenido de la página: el nav global trae su propio «Reporta
+// desaparecido» (src/html.js), que es la cuarta entrada del sitio y no tiene
+// nada que ver con estas pantallas. Contar enlaces sin recortar el chrome hace
+// que cualquier aserción sobre /report pase o falle por la razón equivocada.
+function cuerpo(html) {
+  const a = html.indexOf('<main');
+  const b = html.indexOf('</main>');
+  return a === -1 || b === -1 ? html : html.slice(a, b);
+}
+
+const enlacesAReportar = (html) => (cuerpo(html).match(/href="\/report[?"]/g) || []).length;
+
+test('el pie del flujo del rescatista no ofrece reportar, y el bloque con la pregunta sí', async (t) => {
+  const matcher = fakeMatcher();
+  const { server, base } = await startApp(matcher);
+  t.after(() => server.close());
+
+  const conFoto = async () => {
+    const fd = new FormData();
+    fd.set('photo', new File([await photoBytes('nadie')], 'r.jpg', { type: 'image/jpeg' }));
+    return (await fetch(`${base}/rescate`, { method: 'POST', body: fd })).text();
+  };
+
+  const sinMatch = await conFoto();
+  assert.match(sinMatch, /href="\/rescate">🔍 Consultar otra persona/, 'el pie sí tiene su única salida');
+  // UNO solo, y es el que está detrás de la pregunta. Si alguien vuelve a
+  // ponerlo en el pie, este número pasa a 2 y el test cae — que es justamente
+  // lo que la versión anterior de este test no sabía distinguir.
+  assert.equal(enlacesAReportar(sinMatch), 1, 'un único enlace a reportar en la página, el de detrás de la pregunta');
+  const trasLaPregunta = cuerpo(sinMatch).slice(cuerpo(sinMatch).indexOf('aviso-si-cuerpo'));
+  assert.match(trasLaPregunta, /href="\/report">📢 Reportar a la persona que busco/, 'y está dentro del bloque desplegable');
+
+  // Con Rekognition caído tampoco se queda sin salida: hasta acá esa pantalla
+  // era una frase de error y nada más. Se comprueba primero que estamos EN esa
+  // rama (`available: false`) y no en la de «nadie la ha reportado», que trae el
+  // mismo bloque y taparía el fallo.
+  matcher.searchByImage = async () => {
+    throw new Error('rekognition caído');
+  };
+  const caido = await conFoto();
+  assert.match(caido, /El reconocimiento facial no está disponible/, 'esta es la rama del matcher caído');
+  assert.doesNotMatch(caido, /Nadie ha reportado a esta persona/);
+  assert.match(caido, /¿Eres tú quien está buscando a esta persona\?/);
+  assert.match(caido, /href="\/report">📢 Reportar a la persona que busco/);
 });
 
 // NOTIFY_MODE=direct: la cadena completa sin relevo, tal como quedaba antes.
@@ -567,7 +633,7 @@ test('a match without family contact offers the aviso form and stores the aviso'
   assert.match(html, /No — yo soy quien la está buscando/);
   assert.match(
     html,
-    /href="\/report\?name=Mariana%20Prueba%20Torres"/,
+    /href="\/report\?name=Mariana%20Prueba%20Torres&desde=\d+"/,
     'quien la busca sale de acá al formulario de reporte, con el nombre ya puesto'
   );
 
@@ -588,7 +654,17 @@ test('a match without family contact offers the aviso form and stores the aviso'
     })
   });
   assert.equal(res.status, 200);
-  assert.match(await res.text(), /Aviso enviado/);
+  const avisoEnviado = await res.text();
+  assert.match(avisoEnviado, /Aviso enviado/);
+
+  // Esta pantalla la ve alguien que ACABA de decirnos que tiene a una persona
+  // consigo. Es el peor sitio posible para un botón de «reporta un
+  // desaparecido»: sería la última cosa que ve, sin ninguna pregunta delante, y
+  // lo que crearía es una ficha de desaparecida para alguien que está a salvo,
+  // con su propio teléfono en el lugar del de la familia.
+  assert.match(avisoEnviado, /href="\/rescate">🔍 Consultar otra persona/, 'su única salida');
+  assert.equal(enlacesAReportar(avisoEnviado), 0, 'ni un solo enlace a reportar en el cuerpo de esta pantalla');
+  assert.doesNotMatch(avisoEnviado, /¿Eres tú quien está buscando a esta persona\?/);
 
   // On the timeline, without delisting, with the whereabouts kept out of the
   // public fields (they travel in `contact`, which updateCard never renders).

@@ -195,6 +195,17 @@ h1.compact .subtle { font-family: var(--font-sans); font-weight: 400; font-size:
 .aviso-si > summary::-webkit-details-marker { display: none; }
 .aviso-si > summary:focus-visible { outline: 3px solid var(--accent-dark); outline-offset: 2px; }
 .aviso-si[open] > summary { border-radius: 12px 12px 0 0; }
+/* Un .big-btn dentro de un recuadro de aviso queda pegado al párrafo de arriba:
+   ni el botón ni el párrafo traían margen porque hasta acá nunca convivieron —
+   el botón siempre había vivido suelto en la página. */
+.notice > .big-btn,
+.error > .big-btn,
+.aviso-si-cuerpo > .big-btn { margin-top: 0.7rem; }
+/* Y la pregunta que abre un recuadro no necesita el margen de arriba: el
+   padding del recuadro ya puso ese aire. */
+.notice > .aviso-pregunta:first-child,
+.error > .aviso-pregunta:first-child { margin-top: 0; }
+
 .aviso-si-cuerpo {
   border: 2px solid var(--accent);
   border-top: none;
@@ -270,6 +281,31 @@ h1.compact .subtle { font-family: var(--font-sans); font-weight: 400; font-size:
   margin: 1.2rem 0 0.4rem;
 }
 .sticky-cta .big-btn { box-shadow: 0 6px 20px rgba(31, 30, 29, 0.25); }
+
+/* Dos caminos, no uno. Acá abajo está la ficha de una persona desaparecida, y
+   quien la mira es casi siempre su familia — que hasta ahora solo tenía un
+   botón, y decía «¿la tienes contigo?». Medimos a dónde llevaba eso: de 23
+   avisos de rescatista recibidos, uno solo venía de un rescate. Los demás los
+   mandó gente que estaba buscando a esa persona y no tenía otro botón que
+   tocar. Los dos tienen el mismo tamaño a propósito: el segundo no es una
+   salida de emergencia escondida al pie, es la mitad de la pregunta.
+   Lado a lado apenas hay ancho; apilados en un teléfono, que es donde se lee
+   esta página. */
+.cta-par { display: grid; gap: 0.5rem; }
+@media (min-width: 520px) {
+  .cta-par { grid-template-columns: 1fr 1fr; }
+}
+/* Con UN botón fijo la barra no necesitaba fondo: el botón tapaba su propia
+   huella. Con dos, la ranura de 0.5rem entre ellos es un hueco por el que se ve
+   el texto de la ficha deslizándose mientras se hace scroll. El fondo del papel
+   —el mismo del body, así que no se nota como caja— más un poco de aire
+   alrededor la cierran. */
+.sticky-cta.cta-par {
+  background: var(--paper);
+  padding: 0.5rem;
+  border-radius: 14px;
+  bottom: 0.4rem;
+}
 
 /* Person page: name and reports on the left, a bigger version of the same face
    spanning both on the right — so it starts level with the title. */
@@ -735,3 +771,17 @@ details.stats-detail table { font-size: 0.85rem; }
   .stats-hero { grid-template-columns: repeat(2, 1fr); }
   .stat-card__value { font-size: 1.6rem; }
 }
+
+/* El enlace a la noticia que respalda un update. Cuando confirma que la
+   persona apareció es lo más importante de la tarjeta, así que se lee como
+   una afirmación y no como un pie de página. */
+.source-link { margin: 0.35rem 0 0; font-size: 0.9rem; }
+.source-link a { color: var(--accent-dark); font-weight: 600; }
+.source-link.found {
+  padding: 0.5rem 0.7rem;
+  background: rgba(34, 122, 62, 0.08);
+  border-left: 3px solid #227a3e;
+  border-radius: 6px;
+}
+.source-link.found a { color: #1b5e31; text-decoration: none; }
+.source-link.found a:hover { text-decoration: underline; }

@@ -297,7 +297,7 @@ function layout(title, body, meta = {}) {
 ${body}
 </main>
 <footer>
-  <p><span class="credit">Hecho con 💙 por <a href="https://x.com/ni500" target="_blank" rel="noopener">Ni500</a> y <a href="https://me.torrenegra.com" target="_blank" rel="noopener">Torrenegra</a></span> · <a href="/ideas">💡 Ideas</a> · <a href="/bug">🐛 Reporta bug</a> · <a href="https://github.com/encontradosco/encontrados" target="_blank" rel="noopener">Github</a> · <a href="/privacidad">Privacidad</a> · <a href="/terminos">Términos</a></p>
+  <p><span class="credit">Hecho con 💙 por <a href="https://x.com/ni500" target="_blank" rel="noopener">Ni500</a> y <a href="https://me.torrenegra.com" target="_blank" rel="noopener">Torrenegra</a>, y mantenido por grandes contribuidores y voluntarios ✊🇨🇴</span> · <a href="/ideas">💡 Ideas</a> · <a href="/bug">🐛 Reporta bug</a> · <a href="https://github.com/encontradosco/encontrados" target="_blank" rel="noopener">Github</a> · <a href="/privacidad">Privacidad</a> · <a href="/terminos">Términos</a></p>
 ${OUTREACH}
 ${GIVE}
 </footer>
@@ -369,6 +369,18 @@ const SOURCE_LABEL = {
   rescate: 'rescatista'
 };
 
+// El enlace a la noticia que respalda este update. Se muestra distinto cuando
+// la persona aparece como encontrada: ahí no es un dato más, es lo que quien
+// la está buscando vino a ver. `rel="noopener nofollow"` porque es un destino
+// externo que no controlamos, y `target=_blank` para no sacar a nadie de la
+// ficha que está leyendo.
+function sourceLink(u) {
+  if (!u.source_url) return '';
+  const label = u.status === 'safe' ? '✅ Encontrado — ver noticia' : 'Ver la fuente de este reporte';
+  const cls = u.status === 'safe' ? 'source-link found' : 'source-link';
+  return `<p class="${cls}"><a href="${esc(u.source_url)}" target="_blank" rel="noopener nofollow">${label}</a></p>`;
+}
+
 function updateCard(u, personName) {
   // Never render the raw `reporter` — it may be a phone number or email
   // (see src/privacy.js). Only the masked public label is safe to show.
@@ -378,6 +390,7 @@ function updateCard(u, personName) {
   <p>${statusBadge(u.status)} ${timeTag(u.created_at)}</p>
   ${u.message ? `<p class="msg">${esc(u.message)}</p>` : ''}
   ${u.location ? `<p class="loc">📍 ${esc(u.location)}${mapLink(u)}</p>` : u.lat != null && u.lng != null ? `<p class="loc">📍 Ubicación GPS${mapLink(u)}</p>` : ''}
+  ${sourceLink(u)}
   <p class="meta">Fuente: ${esc(SOURCE_LABEL[u.source] || u.source)}${reporterLabel ? ` · Reportado por: ${esc(reporterLabel)}` : ''}</p>
 </article>`;
 }

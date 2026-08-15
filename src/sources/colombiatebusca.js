@@ -287,17 +287,27 @@ function parseRegisteredAt(value) {
 // ya tenía. Este módulo no puede arreglarlo desde acá —es semántica del
 // endpoint— pero quien lo llame tiene que saberlo antes de programarlo en un
 // barrido periódico.
+//
+// #78: una ficha "Localizada" en el registro público no significa que ALGUIEN
+// la reportó como desaparecida acá — puede llegar así desde la primera vez que
+// el barrido la ve. Empujarla como `safe` inflaba el conteo público de
+// "reencontradas" con personas que nunca pasaron por esta app. El feed solo
+// trae a quienes siguen buscados; una persona confirmada como hallada por una
+// noticia (#75·#76·#77) es un flujo distinto y aparte, con su propia señal.
 function toUpdate(parsed, pageUrl) {
   if (!parsed) return null;
   const personId = personIdFromUrl(pageUrl);
   if (!personId) return null;
 
   const f = parsed.fields || {};
+  const status = mapStatus(f['Estado']);
+  if (status === 'safe') return null;
+
   const location = f['Último lugar visto'];
   return {
     update: {
       name: parsed.fullName,
-      status: mapStatus(f['Estado']),
+      status,
       ...(location ? { location } : {}),
       // El registro de origen es quien reporta, no quien corre el proceso.
       // Ojo al mostrarlo: maskReporter() está pensado para nombres de persona

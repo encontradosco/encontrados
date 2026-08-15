@@ -61,7 +61,7 @@ function createStore(adapter) {
     return { person: isoRow(person), created: true };
   }
 
-  async function addUpdate(personId, { status, message, location, lat, lng, source, reporter, contact, externalId }) {
+  async function addUpdate(personId, { status, message, location, lat, lng, source, sourceUrl, reporter, contact, externalId }) {
     if (!STATUSES.includes(status)) throw new Error(`Invalid status: ${status}`);
     return isoRow(
       await adapter.insertUpdate(personId, {
@@ -71,6 +71,7 @@ function createStore(adapter) {
         lat,
         lng,
         source,
+        sourceUrl,
         reporter,
         contact,
         externalId
@@ -272,6 +273,13 @@ function createStore(adapter) {
     return adapter.counts();
   }
 
+  // Face signatures of every photo anchored to this person — the report photos
+  // AND any rescuer 'query' rows attached to a subscription on them. Read this
+  // before deletePerson: the cascade takes the photo rows with it.
+  async function faceIdsForPerson(personId) {
+    return adapter.faceIdsForPerson(personId);
+  }
+
   // Deletes the person and, by cascade, their reports, subscriptions and photos.
   async function deletePerson(id) {
     return isoRow(await adapter.deletePerson(id));
@@ -362,6 +370,7 @@ function createStore(adapter) {
     photosMissingFaceId,
     photosMissingDerivatives,
     counts,
+    faceIdsForPerson,
     deletePerson,
     insertMatchLog,
     insertContactLog,
