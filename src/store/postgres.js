@@ -385,11 +385,13 @@ async function createPostgresAdapter(connectionString) {
         address
       ]);
       if (!subs.length) return { count: 0, faceIds: [] };
-      const faceIds = await faceIdsForSubscriptionIds(subs.map((s) => s.id));
-      const r = await pool.query('DELETE FROM subscriptions WHERE channel = $1 AND address = $2', [
-        channel,
-        address
-      ]);
+      const ids = subs.map((s) => s.id);
+      const faceIds = await faceIdsForSubscriptionIds(ids);
+      // Por id, no por (channel, address): una suscripción creada entre el
+      // SELECT de arriba y este DELETE no está en `ids`, así que este WHERE no
+      // debe alcanzarla — si la alcanzara, se borraría sin haber leído su
+      // face_id, el mismo hueco que cierra el resto de este archivo (#162).
+      const r = await pool.query('DELETE FROM subscriptions WHERE id = ANY($1)', [ids]);
       return { count: r.rowCount, faceIds };
     },
     async subscriptionsForPerson(personId) {

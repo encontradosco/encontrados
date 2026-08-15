@@ -366,10 +366,13 @@ async function createSqliteAdapter(dbPath) {
         .prepare('SELECT id FROM subscriptions WHERE channel = ? AND address = ?')
         .all(channel, address);
       if (!subs.length) return { count: 0, faceIds: [] };
-      const faceIds = faceIdsForSubscriptionIds(subs.map((s) => s.id));
-      const info = db
-        .prepare('DELETE FROM subscriptions WHERE channel = ? AND address = ?')
-        .run(channel, address);
+      const ids = subs.map((s) => s.id);
+      const faceIds = faceIdsForSubscriptionIds(ids);
+      // Por id, no por (channel, address): ver el comentario equivalente en
+      // postgres.js — una suscripción creada entre el SELECT y este DELETE no
+      // debe quedar alcanzada por él (#162).
+      const marks = ids.map(() => '?').join(',');
+      const info = db.prepare(`DELETE FROM subscriptions WHERE id IN (${marks})`).run(...ids);
       return { count: info.changes, faceIds };
     },
     async subscriptionsForPerson(personId) {

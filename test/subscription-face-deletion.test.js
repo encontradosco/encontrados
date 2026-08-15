@@ -37,6 +37,24 @@ function deletingMatcher({ broken = false } = {}) {
   };
 }
 
+// Arranca en frío: `enabled` miente hasta que alguien llama a ensureReady() —
+// es el caso que documenta src/facematch.js (#89). forgetPersonFaces despierta
+// el matcher antes de leer `enabled`; sin este doble esa rama queda sin cubrir
+// en los tres caminos de baja.
+function coldMatcher() {
+  return {
+    enabled: false,
+    deleteCalls: [],
+    async ensureReady() {
+      this.enabled = true;
+    },
+    async deleteFaces(faceIds) {
+      this.deleteCalls.push([...faceIds]);
+      return { deleted: [...faceIds], unconfirmed: [] };
+    }
+  };
+}
+
 async function startApp(matcher) {
   const app = await createApp(await createSqliteAdapter(':memory:'), matcher);
   const server = await new Promise((resolve) => {
@@ -201,6 +219,27 @@ test('BAJA <nombre> retira la firma facial de esa suscripción', async (t) => {
   assert.equal(await store.getSubscriptionById(sub.id), undefined);
 });
 
+test('BAJA <nombre> despierta un matcher en frío antes de retirar la firma', async (t) => {
+  const store = await freshStore();
+  const matcher = coldMatcher();
+  const phone = '573001112255';
+
+  const { sub } = await subscribedWithFaces(store, 'Gabi Prueba Uno', 'whatsapp', phone, ['face-gabi']);
+
+  const reply = await handleInbound(store, {
+    channel: 'whatsapp',
+    from: phone,
+    text: 'BAJA Gabi Prueba Uno',
+    matcher
+  });
+
+  assert.match(reply, /ya no recibirás avisos/);
+  // Si esto queda vacío, forgetPersonFaces leyó `enabled` en frío (falso) y
+  // nunca llegó a llamar a deleteFaces — el bug clase #89.
+  assert.deepEqual(matcher.deleteCalls.flat(), ['face-gabi']);
+  assert.equal(await store.getSubscriptionById(sub.id), undefined);
+});
+
 test('BAJA <nombre> sin suscripción no gasta una llamada a la colección', async (t) => {
   const store = await freshStore();
   const matcher = deletingMatcher();
@@ -293,4 +332,62 @@ test('sin reconocimiento facial, la baja no se ve afectada', async (t) => {
   });
 
   assert.match(reply, /ya no recibirás avisos/);
+});
+
+// ---------------------------------------- Postgres: forma del SQL (sin DB real)
+//
+// BAJA TODO puede afectar varias suscripciones a la vez, y la primera versión
+// de este arreglo borraba con `WHERE channel = $1 AND address = $2` — el mismo
+// filtro que ya usó el SELECT de arriba. Eso reabre el propio hueco del #162:
+// una suscripción creada entre el SELECT y el DELETE cae en ese WHERE sin que
+// su face_id se haya leído nunca. El DELETE tiene que ir por los ids ya
+// leídos, no repetir el filtro original. Mismo patrón de FakePool que
+// test/panel-extras.test.js usa para fijar la forma del SQL sin una base real.
+async function withFakePostgresAdapter(run) {
+  const pgPath = require.resolve('pg');
+  const storePath = require.resolve('../src/store/postgres');
+  const savedPg = require.cache[pgPath];
+  const savedStore = require.cache[storePath];
+  const calls = [];
+
+  class FakePool {
+    constructor() {}
+    async query(sql, params) {
+      const text = String(sql);
+      calls.push({ sql: text, params });
+      if (/^SELECT id FROM subscriptions/.test(text)) return { rows: [{ id: 10 }, { id: 11 }] };
+      if (/^SELECT face_id FROM photos/.test(text)) {
+        return { rows: [{ face_id: 'face-a' }, { face_id: 'face-b' }] };
+      }
+      if (/^DELETE FROM subscriptions/.test(text)) return { rowCount: 2 };
+      return { rows: [] };
+    }
+  }
+  require.cache[pgPath] = { id: pgPath, filename: pgPath, loaded: true, exports: { Pool: FakePool } };
+  delete require.cache[storePath];
+  try {
+    const { createPostgresAdapter } = require('../src/store/postgres');
+    const adapter = await createPostgresAdapter('postgres://fake/db');
+    await run(adapter, calls);
+  } finally {
+    delete require.cache[storePath];
+    if (savedPg) require.cache[pgPath] = savedPg;
+    else delete require.cache[pgPath];
+    if (savedStore) require.cache[storePath] = savedStore;
+  }
+}
+
+test('Postgres: BAJA TODO borra por los ids ya leídos, no por (channel, address)', async () => {
+  await withFakePostgresAdapter(async (adapter, calls) => {
+    const result = await adapter.deleteSubscriptionsForAddress('whatsapp', '573000000000');
+    assert.deepEqual(result.faceIds.sort(), ['face-a', 'face-b']);
+
+    const del = calls.find((c) => /^DELETE FROM subscriptions/.test(c.sql));
+    assert.ok(del, 'debía emitirse un DELETE sobre subscriptions');
+    // Por id: una suscripción creada DESPUÉS del SELECT no coincide con
+    // ninguno de estos ids, así que este WHERE no puede alcanzarla.
+    assert.match(del.sql, /WHERE id = ANY\(\$1\)/);
+    assert.deepEqual(del.params, [[10, 11]]);
+    assert.doesNotMatch(del.sql, /channel/, 'el DELETE no debe volver a filtrar por channel/address');
+  });
 });

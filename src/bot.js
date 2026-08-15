@@ -260,7 +260,7 @@ async function handleInbound(store, { channel, from, text, photo, matcher = null
     if (!matches.length) return `No encontré a "${parsed.name}" entre tus suscripciones.`;
     const { count, faceIds } = await store.unsubscribe(matches[0].id, channel, from);
     if (!count) return `No estabas suscrito(a) a ${matches[0].full_name}.`;
-    await forgetPersonFaces(matcher, faceIds, `persona ${matches[0].id}`);
+    await forgetPersonFaces(matcher, faceIds, `suscripción de persona ${matches[0].id}`);
     return `Listo, ya no recibirás avisos sobre *${matches[0].full_name}*.`;
   }
 
