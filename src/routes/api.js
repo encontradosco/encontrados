@@ -1,13 +1,12 @@
 const express = require('express');
 const env = require('../env');
 const {
-  notifySubscribers,
   sendVerificationEmail,
   notifyMode,
   relayEnabled,
   avisoEmail
 } = require('../notify');
-const { STATUSES, SOURCES } = require('../people');
+const { STATUSES } = require('../people');
 const {
   processPhoto,
   forgetPersonFaces,
@@ -17,9 +16,9 @@ const {
   MAX_QUERY_PHOTOS
 } = require('../facematch');
 const { publicUpdate } = require('../privacy');
-const { findDuplicateCandidates, duplicateWarning } = require('../duplicates');
 const gh = require('../github');
 const { sendReport } = require('../report');
+const { createReportAdmission } = require('../report-admission');
 
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
@@ -66,6 +65,8 @@ function emailVerdict(email) {
 function apiRoutes(store, matcher) {
   const router = express.Router();
   router.use(express.json({ limit: '16mb' }));
+
+  const admission = createReportAdmission({ store, matcher });
 
   // If API_KEY is set, writes require `Authorization: Bearer <key>`.
   // Reads stay open — emergency information wants to be found.
@@ -127,68 +128,50 @@ function apiRoutes(store, matcher) {
       if (!STATUSES.includes(status)) {
         return res.status(400).json({ error: `status debe ser uno de: ${STATUSES.join(', ')}` });
       }
-      const source = SOURCES.includes(req.body.source) ? req.body.source : 'api';
       const externalId =
         req.body.external_id != null && String(req.body.external_id).trim()
           ? String(req.body.external_id).trim()
           : undefined;
-      const { person, created } = await store.findOrCreatePerson(name);
-      const update = await store.addUpdate(person.id, {
+      const photo = decodePhoto(req.body.photo);
+
+      // Thin adapter: the shared report-admission service owns the whole domain
+      // sequence (owner resolution after external_id upsert, photo indexing,
+      // subscriber notification, and — LAST, once the report is durable — the
+      // duplicate check). This route only decodes JSON in and shapes JSON out.
+      const result = await admission.admitReport({
+        name,
         status,
         message,
         location,
         lat: typeof req.body.lat === 'number' ? req.body.lat : parseFloat(req.body.lat),
         lng: typeof req.body.lng === 'number' ? req.body.lng : parseFloat(req.body.lng),
-        source,
+        source: req.body.source,
         reporter,
         contact,
-        externalId
+        externalId,
+        photos: photo ? [photo] : [],
+        checkDuplicates: true
       });
-      // With external_id, the upsert may have landed on a different person
-      // than the one just looked up (e.g. the aggregator's name for this
-      // external_id drifted). Resolve who actually owns the timeline row
-      // before notifying, so alerts never go to the wrong subscribers.
-      const owner = update.person_id === person.id ? person : (await store.getPerson(update.person_id)) || person;
-      await notifySubscribers(store, owner, update);
-      const photo = decodePhoto(req.body.photo);
-
-      // Duplicate check BEFORE the photo is indexed: afterwards it would match
-      // itself. Advisory only — the write above already happened and is never
-      // undone, so a caller re-syncing in bulk cannot lose a report to this.
-      const candidates = await findDuplicateCandidates(store, matcher, {
-        name,
-        photos: photo ? [photo.bytes] : [],
-        excludePersonId: owner.id
-      });
-
-      if (photo) {
-        await processPhoto(store, matcher, {
-          personId: owner.id,
-          kind: 'report',
-          updateId: update.id,
-          bytes: photo.bytes,
-          contentType: photo.contentType
-        });
+      // Unreachable today — the checks above already cover exactly what the
+      // service validates — but the service is the single source of truth for
+      // its own contract: a caller that stops prevalidating, or a validation
+      // rule that changes only on one side, must get a 400 with `errors` here
+      // instead of a TypeError on `result.person`.
+      if (!result.ok) {
+        return res.status(400).json({ error: result.errors.join(' ') });
       }
-      // "This report was appended to a record that already existed." Read from
-      // where the update ACTUALLY landed, not from the name lookup: with
-      // external_id the upsert can keep its original person while
-      // findOrCreatePerson inserted a fresh row for the drifted name, and
-      // reporting `false` there would be exactly backwards — the caller is told
-      // "new person created" precisely when the report joined an old one.
-      const mergedIntoExisting = !created || String(owner.id) !== String(person.id);
 
       res.status(201).json({
-        person_id: owner.id,
-        person_created: created,
-        update,
+        person_id: result.person.id,
+        person_created: result.personCreated,
+        update: result.update,
         photo_stored: !!photo,
         // What the caller needs to reconcile on their side. `person_created:
         // false` already meant "appended to an existing record"; this spells
         // that out and adds the face-based collisions a name never sees.
         duplicate: {
-          merged_into_existing_person: mergedIntoExisting,
-          candidates: candidates.map((c) => ({
+          merged_into_existing_person: result.mergedIntoExisting,
+          candidates: result.candidates.map((c) => ({
             person_id: c.person.id,
             full_name: c.person.full_name,
             reason: c.reason,
@@ -201,7 +184,7 @@ function apiRoutes(store, matcher) {
             name_score: c.reason === 'name' ? c.similarity / 100 : null,
             url: `${env.BASE_URL}/person/${c.person.id}`
           })),
-          warning: duplicateWarning({ mergedIntoExisting, candidates })
+          warning: result.warning
         }
       });
     })

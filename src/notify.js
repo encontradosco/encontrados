@@ -411,7 +411,10 @@ async function notifySubscribers(store, person, update, { skipAddress, skipAddre
     `[notify] persona ${person.id} (modo ${notifyMode()}): ${subs.length} suscripción(es), ` +
       `${results.length} intento(s), ${sent} ${relay ? 'relevado(s)' : 'enviado(s)'}`
   );
-  return results.length;
+  // `sent`, no `results.length`: el primero cuenta entregas reales (o relevos
+  // exitosos al buzón), el segundo solo intentos. Quien reciba este número
+  // (hoy nadie) espera "a cuántos les llegó", no "a cuántos se les intentó".
+  return sent;
 }
 
 module.exports = {

@@ -149,10 +149,10 @@ test('every uploaded photo is searched, not just the first', async (t) => {
   assert.equal(found.length, 1, 'el retrato #2 debe encontrar el duplicado');
 });
 
-// POST /api/updates runs the duplicate check BEFORE the photo is indexed, so
-// on a cold invocation it is the first face call of the request — and
-// `enabled` reads false until something wakes the lazy matcher. The check must
-// wake it itself, or a bulk sync into a fresh instance silently loses every
+// `enabled` reads false until something wakes the lazy matcher, and this
+// function is called directly here (no report-admission.js in front of it,
+// so nothing else has woken the matcher first). The check must wake it
+// itself, or a bulk sync into a fresh instance silently loses every
 // duplicate advisory.
 test('the duplicate check wakes a matcher that is still asleep', async (t) => {
   const store = createStore(await createSqliteAdapter(':memory:'));
@@ -213,9 +213,11 @@ test("a rescuer's face is never reported as a duplicate report", async (t) => {
   assert.deepEqual(found, []);
 });
 
-// The web caller runs detection BEFORE the report is written, so anything that
-// escapes this function discards a report — the one outcome an emergency
-// service must never produce.
+// report-admission.js runs detection LAST, once the report is already
+// written, indexed and notified — but this function is advisory and must
+// NEVER throw regardless of when it runs: an exception escaping it would
+// still turn an already-successful report into a broken response, the one
+// outcome an emergency service must never produce.
 test('detection never throws, whatever fails underneath', async (t) => {
   const store = createStore(await createSqliteAdapter(':memory:'));
   t.after(() => store.close());

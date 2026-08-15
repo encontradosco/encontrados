@@ -1,13 +1,14 @@
 // Conversation engine for WhatsApp.
 // Understands Spanish (primary) and English commands; always replies in Spanish.
 const { normalize } = require('./names');
-const { notifySubscribers, relayEnabled, STATUS_LABEL } = require('./notify');
+const { relayEnabled, STATUS_LABEL } = require('./notify');
 const {
   processPhoto,
   resolveRescueAnswer,
   MAX_QUERY_PHOTOS
 } = require('./facematch');
 const { nullMatcher } = require('./faces');
+const { createReportAdmission } = require('./report-admission');
 
 const HELP = [
   '🆘 *encontrados.co* — información de personas en emergencias.',
@@ -181,29 +182,32 @@ async function handleInbound(store, { channel, from, text, photo, matcher = null
   }
 
   if (parsed.intent === 'report') {
-    const { person, created } = await store.findOrCreatePerson(parsed.name);
-    const update = await store.addUpdate(person.id, {
+    // Thin adapter over the shared report-admission flow: WhatsApp parsing and
+    // reply text stay here, the domain sequence (person, update, owner
+    // resolution, duplicate check, photo indexing, notification) lives in the
+    // service so web, API and WhatsApp behave the same.
+    const admission = createReportAdmission({ store, matcher });
+    const result = await admission.admitReport({
+      name: parsed.name,
       status: parsed.status,
       message: parsed.note || null,
       location: parsed.location || null,
       source: channel,
-      reporter: from
+      reporter: from,
+      photos: photo ? [photo] : [],
+      skipAddresses: [from]
     });
-    await notifySubscribers(store, person, update, { skipAddress: from });
-    if (photo) {
-      await processPhoto(store, matcher, {
-        personId: person.id,
-        kind: 'report',
-        updateId: update.id,
-        bytes: photo.bytes,
-        contentType: photo.contentType
-      });
-    }
+    // Unreachable today — parseMessage only reaches intent 'report' with a
+    // name (checked above) and a status straight from COMMANDS, always one of
+    // STATUSES — but the WhatsApp reply text assumes `result.person` exists,
+    // so a validation rule that ever diverges must get a message back instead
+    // of throwing mid-conversation.
+    if (!result.ok) return HELP;
     return [
-      `✅ Registrado: *${person.full_name}* — ${STATUS_LABEL[parsed.status]}.`,
-      created ? null : 'Se agregó a los reportes existentes de esta persona.',
+      `✅ Registrado: *${result.person.full_name}* — ${STATUS_LABEL[parsed.status]}.`,
+      result.personCreated ? null : 'Se agregó a los reportes existentes de esta persona.',
       photo ? '📷 Foto recibida. Nunca se compartirá: solo se usa para reconocimiento facial.' : null,
-      `Gracias por ayudar. Para seguir sus novedades: SUSCRIBIR ${person.full_name}`
+      `Gracias por ayudar. Para seguir sus novedades: SUSCRIBIR ${result.person.full_name}`
     ]
       .filter(Boolean)
       .join('\n');

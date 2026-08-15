@@ -2,20 +2,19 @@ const crypto = require('crypto');
 const express = require('express');
 const multer = require('multer');
 const env = require('../env');
-const { sendVerificationEmail, sendEmail, avisoEmail, relayEnabled, notifySubscribers } = require('../notify');
+const { sendVerificationEmail, sendEmail, avisoEmail, relayEnabled } = require('../notify');
 const {
-  processPhoto,
   identifyRescuedPerson,
   notifyRescuerOfMatches,
   backfillPhotoDerivatives,
   MAX_QUERY_PHOTOS
 } = require('../facematch');
 const { esc, layout, updateCard, timeTag, facePlate, LOCATION_SCRIPT } = require('../html');
-const { findDuplicateCandidates } = require('../duplicates');
 const { isReadyToShow } = require('../report-photo');
 const gh = require('../github');
 const { logContact, resultFromSend } = require('../logbook');
 const { RESCUE_ANCHOR_PREFIX } = require('../people');
+const { createReportAdmission } = require('../report-admission');
 
 // Express 4 doesn't catch async errors on its own.
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
@@ -554,6 +553,7 @@ function webRoutes(store, matcher) {
   const router = express.Router();
   router.use(express.urlencoded({ extended: true }));
   const sweepPhotoDerivatives = createSweeper(store, matcher);
+  const admission = createReportAdmission({ store, matcher });
 
   // ---------------------------------------------------------------- home
   router.get(
@@ -1147,14 +1147,6 @@ ${LOCATION_SCRIPT}`,
         place: String(req.body.place || '').trim().slice(0, 160)
       };
 
-      const { person, created } = await store.findOrCreatePerson(name);
-
-      // Read the record's existing photo BEFORE this report's own photos are
-      // stored below — afterwards there is no way to tell, from the person id
-      // alone, which face was already there and which one just arrived. That
-      // pre-existing face is the whole point of the comparison.
-      const priorPhoto = created ? null : (await store.reportPhotoByPerson([person.id])).get(person.id);
-
       // El nombre de quien reporta va a `reporter`, la columna que ya existía
       // para esto y que `maskReporter()` publica reducida a "María G." — no se
       // guarda ninguna columna nueva. Los tres campos de ubicación desglosada,
@@ -1162,43 +1154,46 @@ ${LOCATION_SCRIPT}`,
       // Colombia Te Busca, la ubicación que la app usa ya está en `location`, y
       // agregar columnas a los dos adaptadores para un dato que solo viaja en un
       // correo no se paga.
-      const update = await store.addUpdate(person.id, {
+      //
+      // Thin adapter: the shared report-admission service owns the whole domain
+      // sequence — person, update, owner resolution, photo indexing, and
+      // subscriber notification (skipping both contact fields this form
+      // collects so the reporter isn't echoed their own report). The
+      // duplicate check runs LAST, once the report is durable. This handler
+      // keeps only the web-specific parts: multipart files in, cookies, the
+      // Colombia Te Busca relay, and the 303.
+      const result = await admission.admitReport({
+        name,
         status: 'missing',
         message,
         location,
         source: 'web',
         contact,
-        reporter: relay.reporterName || null
+        reporter: relay.reporterName || null,
+        photos: files.map((f) => ({ bytes: f.buffer, contentType: f.mimetype })),
+        skipAddresses: [phone, email.toLowerCase()].filter(Boolean),
+        checkDuplicates: true,
+        includePriorPhoto: true
       });
+      // Unreachable today — the check above already covers the one field the
+      // service validates that this route doesn't (`name`) — but the service
+      // is the single source of truth for its own contract: a caller that
+      // stops prevalidating, or a validation rule that changes only on one
+      // side, must get a 400 here instead of a TypeError on `result.person`.
+      if (!result.ok) {
+        return res
+          .status(400)
+          .send(
+            layout(
+              'Error',
+              '<p class="error">Faltan datos: hacen falta las fotos, el nombre, el lugar y un teléfono o correo de contacto.</p>'
+            )
+          );
+      }
+      const { person, personCreated: created, update, photos, priorPhoto, candidates } = result;
+
       remember(res, REPORTER_COOKIE, phone || contact);
       remember(res, EMAIL_COOKIE, email);
-
-      // POST /api/updates and the WhatsApp bot both fan this out to anyone
-      // already subscribed to this person; this route was the one place a
-      // report could land without them hearing about it — a family whose
-      // subscription came from the bot or the API got no word when the next
-      // update on that same person arrived through the web form instead.
-      // skipAddresses covers both contact fields the form collects, so this
-      // reporter doesn't get their own report echoed back if they happen to
-      // already be subscribed under either address.
-      await notifySubscribers(store, person, update, {
-        skipAddresses: [phone, email.toLowerCase()].filter(Boolean)
-      });
-
-      // Each photo is indexed so a rescuer holding this person can find the
-      // report; a match also alerts any rescuer already waiting for news.
-      const photos = [];
-      for (const f of files) {
-        photos.push(
-          await processPhoto(store, matcher, {
-            personId: person.id,
-            kind: 'report',
-            updateId: update.id,
-            bytes: f.buffer,
-            contentType: f.mimetype
-          })
-        );
-      }
 
       // The family ticked "report this on Colombia Te Busca too". That registry
       // has no API, so the relay is a human filling their form: this mail is
@@ -1217,19 +1212,6 @@ ${LOCATION_SCRIPT}`,
         // exactamente lo que es esta solicitud.
         await logContact(store, { personId: person.id, updateId: update.id, channel: 'relevo', result: resultFromSend(relayRes) });
       }
-
-      // Duplicate detection runs LAST, once the report is durable. Everything
-      // above is the family's data; everything here is a courtesy. Running the
-      // face searches first meant a slow Rekognition call — or a serverless
-      // timeout inside it — could take the whole report down with it, which is
-      // the one outcome this service must never produce. The photos are already
-      // indexed by now and would match themselves, but `excludePersonId` drops
-      // every hit on this record, so self-matching is a non-issue.
-      const candidates = await findDuplicateCandidates(store, matcher, {
-        name,
-        photos: files.map((f) => f.buffer),
-        excludePersonId: person.id
-      });
 
       // Two different ways this report can be a duplicate:
       //   created === false → the NAME matched, so it was appended to a record
