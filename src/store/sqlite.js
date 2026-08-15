@@ -108,6 +108,43 @@ async function createSqliteAdapter(dbPath) {
     );
     CREATE INDEX IF NOT EXISTS idx_contact_log_person ON contact_log(person_id);
     CREATE INDEX IF NOT EXISTS idx_contact_log_created ON contact_log(created_at);
+
+    CREATE TABLE IF NOT EXISTS pets (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      species TEXT NOT NULL CHECK (species IN ('dog','cat')),
+      pet_name TEXT,
+      description TEXT,
+      contact TEXT,
+      resolved_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS pet_subscriptions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      channel TEXT NOT NULL CHECK (channel IN ('email','whatsapp')),
+      address TEXT NOT NULL,
+      verified INTEGER NOT NULL DEFAULT 0,
+      verify_token TEXT,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS pet_photos (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      pet_id INTEGER REFERENCES pets(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL CHECK (kind IN ('report','query')),
+      species TEXT NOT NULL CHECK (species IN ('dog','cat')),
+      subscription_id INTEGER REFERENCES pet_subscriptions(id) ON DELETE CASCADE,
+      content BLOB NOT NULL,
+      content_type TEXT NOT NULL,
+      embedding TEXT,
+      embedding_model TEXT,
+      thumb BLOB,
+      thumb_type TEXT,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+      CHECK (kind <> 'report' OR pet_id IS NOT NULL)
+    );
+    CREATE INDEX IF NOT EXISTS idx_pet_photos_pet ON pet_photos(pet_id);
+    CREATE INDEX IF NOT EXISTS idx_pet_photos_kind_species ON pet_photos(kind, species);
   `);
 
   // Older dev databases: add the GPS columns if missing.
@@ -594,6 +631,63 @@ async function createSqliteAdapter(dbPath) {
     },
     async matchLogSimilarityRows() {
       return db.prepare('SELECT similarity, surface FROM match_log').all();
+    },
+
+    async insertPet({ species, petName, description, contact }) {
+      const info = db
+        .prepare('INSERT INTO pets (species, pet_name, description, contact) VALUES (?, ?, ?, ?)')
+        .run(species, petName || null, description || null, contact || null);
+      return db.prepare('SELECT * FROM pets WHERE id = ?').get(info.lastInsertRowid);
+    },
+    async getPet(id) {
+      return db.prepare('SELECT * FROM pets WHERE id = ?').get(id);
+    },
+    async markPetResolved(id) {
+      db.prepare("UPDATE pets SET resolved_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?").run(id);
+      return db.prepare('SELECT * FROM pets WHERE id = ?').get(id);
+    },
+    async insertPetPhoto({ petId, kind, species, subscriptionId, content, contentType }) {
+      const info = db
+        .prepare(
+          'INSERT INTO pet_photos (pet_id, kind, species, subscription_id, content, content_type) VALUES (?, ?, ?, ?, ?, ?)'
+        )
+        .run(petId || null, kind, species, subscriptionId || null, content, contentType);
+      return db
+        .prepare('SELECT id, pet_id, kind, species, content_type, created_at FROM pet_photos WHERE id = ?')
+        .get(info.lastInsertRowid);
+    },
+    async getPetPhoto(id) {
+      return db.prepare('SELECT * FROM pet_photos WHERE id = ?').get(id);
+    },
+    async setPetPhotoEmbedding(photoId, embedding, model) {
+      db.prepare('UPDATE pet_photos SET embedding = ?, embedding_model = ? WHERE id = ?').run(
+        JSON.stringify(embedding),
+        model || null,
+        photoId
+      );
+    },
+    async setPetPhotoThumbnail(photoId, { small, contentType }) {
+      db.prepare('UPDATE pet_photos SET thumb = ?, thumb_type = ? WHERE id = ?').run(small, contentType, photoId);
+    },
+    async clearPetPhotoContent(photoId) {
+      db.prepare('UPDATE pet_photos SET content = ? WHERE id = ?').run(Buffer.alloc(0), photoId);
+    },
+    async petPhotosForMatching(kind, species) {
+      return db
+        .prepare(
+          'SELECT id, pet_id, embedding FROM pet_photos WHERE kind = ? AND species = ? AND embedding IS NOT NULL'
+        )
+        .all(kind, species);
+    },
+    async petPhotosMissingEmbedding(limit) {
+      return db.prepare('SELECT * FROM pet_photos WHERE embedding IS NULL ORDER BY id LIMIT ?').all(limit);
+    },
+    async petPhotosForPet(petId) {
+      return db
+        .prepare(
+          "SELECT id, pet_id, content_type, thumb_type FROM pet_photos WHERE kind = 'report' AND pet_id = ? ORDER BY id"
+        )
+        .all(petId);
     },
 
     async close() {
