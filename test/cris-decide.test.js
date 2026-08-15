@@ -63,6 +63,15 @@ test('sin la etiqueta que declara el efecto en el usuario, NO firma', () => {
   assert.match(d.note, /recibiría, vería o haría algo distinto/i);
 });
 
+test('si la etiqueta que autoriza ya no está en el PR, no firma', () => {
+  // El workflow arranca por un evento `labeled`, que dice que alguien la puso
+  // en algún momento — no que siga ahí. Si alguien se arrepintió mientras
+  // corría, esto lo respeta en vez de firmar por inercia.
+  const d = decide(pr({ labels: ['efecto-usuario:ninguno'] }));
+  assert.equal(d.decision, 'abstain');
+  assert.match(d.reason, /ready-to-merge/);
+});
+
 test('la ausencia de esa etiqueta no se compensa con nada más', () => {
   // Todo lo demás perfecto —incluida una aprobación humana vigente— y aun así
   // no firma: la declaración falta, y este módulo no la adivina.
@@ -108,6 +117,41 @@ test('un PR que mezcla lo rutinario con una ruta restringida tampoco pasa', () =
   const d = decide(pr({ files: ['README.md', 'src/privacy.js'] }));
   assert.notEqual(d.decision, 'approve_and_merge');
   assert.notEqual(d.decision, 'approve');
+});
+
+test('no puede tocar lo que le da poder: `.github/` lo excluye', () => {
+  // Si el agente pudiera aprobar cambios a `.github/`, podría firmar el PR que
+  // le quita el freno — su propio workflow, su propio CODEOWNERS, o el check
+  // obligatorio de la regla de rama. Todo lo demás en este archivo colgaría de
+  // ahí.
+  const d = decide(pr({ files: ['.github/workflows/cris-approve.yml'] }));
+  assert.notEqual(d.decision, 'approve_and_merge');
+
+  const rules = parseCodeowners(CODEOWNERS);
+  assert.ok(
+    !ownersOf(rules, '.github/workflows/cris-approve.yml').includes(CRIS),
+    'NO debería ser owner de su propio workflow'
+  );
+  assert.ok(!ownersOf(rules, '.github/CODEOWNERS').includes(CRIS), 'NO debería ser owner del CODEOWNERS');
+});
+
+test('el gate acepta a CodeRabbit, que llega como commit status y no como check run', () => {
+  // CodeRabbit no aparece en `checks.listForRef`: es un `context` de status.
+  // Quien llama tiene que mezclar las dos fuentes y normalizarlas, y esta
+  // prueba fija esa forma — si alguien deja de mezclarlas, el aprobador aborta
+  // en todos los PRs por un check que sí corrió.
+  const d = decide(pr());
+  assert.equal(d.decision, 'approve_and_merge');
+
+  const sinCodeRabbit = decide(
+    pr({
+      checkRuns: [
+        { name: 'npm test', status: 'completed', conclusion: 'success', started_at: '2026-08-15T10:00:00Z' },
+      ],
+    })
+  );
+  assert.equal(sinCodeRabbit.decision, 'abort');
+  assert.match(sinCodeRabbit.reason, /CodeRabbit/);
 });
 
 test('los owners NO se acumulan entre reglas: el catch-all no posee lo restringido', () => {

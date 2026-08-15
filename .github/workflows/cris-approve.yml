@@ -50,9 +50,26 @@ env:
 jobs:
   approve:
     name: Cris revisa y decide
-    if: github.event.label.name == 'ready-to-merge'
+    # Dos condiciones, y la segunda no es redundante.
+    #
+    # Un PR desde un fork recibe un `GITHUB_TOKEN` de SOLO LECTURA, así que
+    # `createComment` y `removeLabel` devuelven 403 y el job muere en rojo sin
+    # dejar ni una palabra en el PR — el peor desenlace posible: parece que
+    # algo falló, y quien contribuyó no tiene forma de saber qué. Como el
+    # agente tampoco puede firmar ahí (los secretos no existen en un fork), no
+    # hay nada que ganar corriendo: se corta antes y esos PRs los mira una
+    # persona, que es lo que ya prometía el CONTRIBUTING.
+    if: >-
+      github.event.label.name == 'ready-to-merge' &&
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    env:
+      # El contexto `secrets` NO existe en un `if:` de paso — solo en `env` de
+      # job. Así que la presencia del token se resuelve acá, una vez, y los
+      # pasos preguntan por `env.HAS_PAT`. El valor es un booleano como TEXTO
+      # ('true'/'false'); compararlo contra el string es intencional.
+      HAS_PAT: ${{ secrets.CRIS_APPROVE_PAT != '' }}
     steps:
       # ── El módulo de decisión, traído de la BASE ──
       - name: Traer el módulo de decisión (de la rama base)
@@ -128,9 +145,31 @@ jobs:
             const reviews = await github.paginate(github.rest.pulls.listReviews, {
               owner, repo, pull_number: pr.number, per_page: 100,
             });
-            const { data: checks } = await github.rest.checks.listForRef({
+            // Los checks vienen de DOS fuentes que la API mantiene separadas, y
+            // hay que mezclarlas: los check runs (`npm test`) y los commit
+            // statuses (`CodeRabbit`, que es un `context`, no un check run).
+            // Mirar solo la primera hace que el gate aborte en TODOS los PRs
+            // por un check que sí corrió pero vive en la otra lista.
+            //
+            // Van paginadas: con más de 100 entradas, un check obligatorio
+            // puede quedar fuera de la primera página y leerse como "no
+            // corrió".
+            const checkRuns = await github.paginate(github.rest.checks.listForRef, {
               owner, repo, ref: pr.head.sha, per_page: 100,
             });
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              owner, repo, ref: pr.head.sha, per_page: 100,
+            });
+            // Un status se normaliza a la forma de un check run para que el
+            // módulo de decisión no tenga que conocer las dos formas. `pending`
+            // se traduce a "todavía no concluyó", que es justo lo que significa.
+            const statusesComoChecks = statuses.map((s) => ({
+              name: s.context,
+              status: s.state === 'pending' ? 'in_progress' : 'completed',
+              conclusion: s.state === 'pending' ? null : s.state === 'success' ? 'success' : s.state,
+              started_at: s.created_at,
+              completed_at: s.updated_at,
+            }));
             // El head al MOMENTO de decidir, no el congelado del payload.
             const { data: fresco } = await github.rest.pulls.get({
               owner, repo, pull_number: pr.number,
@@ -149,7 +188,7 @@ jobs:
               labels: (fresco.labels || []).map((l) => l.name),
               files: files.map((f) => f.filename),
               reviews,
-              checkRuns: checks.check_runs || [],
+              checkRuns: [...checkRuns, ...statusesComoChecks],
             });
 
             core.info(`Decisión: ${resultado.decision}`);
@@ -180,10 +219,14 @@ jobs:
       #
       # Si el secreto no está configurado, este paso no corre y el siguiente lo
       # dice en voz alta. Nunca se finge una firma.
+      # Si el secreto no está configurado, este paso NO corre: sin él,
+      # `github-token` iría vacío y github-script fallaría con un 401 que no le
+      # dice nada a nadie. El paso siguiente lo dice con todas las letras.
       - name: Aprobar
         if: |
-          steps.gate.outputs.decision == 'approve' ||
-          steps.gate.outputs.decision == 'approve_and_merge'
+          (steps.gate.outputs.decision == 'approve' ||
+           steps.gate.outputs.decision == 'approve_and_merge') &&
+          env.HAS_PAT == 'true'
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         with:
           github-token: ${{ secrets.CRIS_APPROVE_PAT }}
@@ -214,6 +257,29 @@ jobs:
         env:
           NOTE: ${{ steps.gate.outputs.note }}
 
+      # Sin el secreto no hubo firma, y decirlo en voz alta es lo único que
+      # evita que alguien lea el job verde y crea que el PR quedó aprobado.
+      - name: Avisar que falta el token
+        if: |
+          (steps.gate.outputs.decision == 'approve' ||
+           steps.gate.outputs.decision == 'approve_and_merge') &&
+          env.HAS_PAT != 'true'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const { owner, repo } = context.repo;
+            const motivo =
+              'Decidí que puedo aprobar, pero **no hay firma**: falta el secreto `CRIS_APPROVE_PAT`. ' +
+              'Sin él no puedo dejar una reseña con mi cuenta, y una aprobación del `GITHUB_TOKEN` ' +
+              'vendría de `github-actions[bot]`, que no está en CODEOWNERS y no satisface nada. ' +
+              'Configúralo en Settings → Secrets y vuelve a poner la etiqueta.';
+            await github.rest.issues.createComment({
+              owner, repo, issue_number: context.payload.pull_request.number,
+              body: `### No pude firmar\n\n${motivo}`,
+            });
+            core.setFailed('Falta CRIS_APPROVE_PAT.');
+
       # ── Armar el auto-merge NATIVO de GitHub ──
       #
       # No mergea este workflow: le pide a GitHub que mergee cuando TODAS las
@@ -224,7 +290,6 @@ jobs:
         if: steps.gate.outputs.decision == 'approve_and_merge'
         env:
           GH_TOKEN: ${{ secrets.CRIS_APPROVE_PAT }}
-          HAS_PAT: ${{ secrets.CRIS_APPROVE_PAT != '' }}
           PR: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
         run: |

@@ -28,9 +28,23 @@
 // consulta a GitHub vive en `run()`, abajo. Eso es lo que hace que las pruebas
 // puedan ejercitar la decisión real en vez de una imitación.
 
-// Los checks que tienen que estar verdes en el commit evaluado. `npm test` es
-// el que exige la regla de rama; CodeRabbit es la revisión automática. Si
-// alguno no corrió, o no concluyó, o concluyó en rojo, no se firma.
+// Los checks que tienen que estar verdes en el commit evaluado. Si alguno no
+// corrió, o no concluyó, o concluyó en rojo, no se firma.
+//
+// Ojo con estos dos, porque no son la misma clase de señal ni prometen lo
+// mismo:
+//
+//   • `npm test` es un CHECK RUN y es el que exige la regla de rama. Verde
+//     significa que las pruebas pasaron.
+//
+//   • `CodeRabbit` NO es un check run: es un COMMIT STATUS (un `context`), y
+//     por eso no aparece en `checks.listForRef`. Quien llame tiene que
+//     mezclar las dos fuentes — si solo mira check runs, este gate aborta en
+//     todos los PRs y el aprobador queda muerto sin que nadie entienda por
+//     qué. Y su verde significa **«la revisión corrió»**, no «la revisión
+//     salió limpia»: CodeRabbit reporta `success` incluso cuando dejó
+//     hallazgos, así que exigirlo garantiza que el revisor miró, nunca que
+//     estuvo de acuerdo.
 const REQUIRED_CHECKS = ['npm test', 'CodeRabbit'];
 
 // La segunda etiqueta, y la razón de que este aprobador no sea un clon del de
@@ -212,6 +226,18 @@ function decide(input) {
       decision: 'abstain',
       reason:
         '`.github/CODEOWNERS` en la rama base está vacío: mi aprobación satisfaría el gate sin respaldo de ningún owner.',
+    };
+  }
+
+  // La etiqueta que autoriza tiene que estar PUESTA ahora, no solo haber
+  // disparado el evento. El workflow arranca por un evento `labeled`, que dice
+  // que alguien la puso en algún momento — no que siga ahí cuando llega esta
+  // decisión. Si alguien se arrepintió y la quitó mientras corría, esto lo
+  // respeta en vez de firmar por inercia.
+  if (!labelSet.has(AUTHORIZING_LABEL)) {
+    return {
+      decision: 'abstain',
+      reason: `la etiqueta \`${AUTHORIZING_LABEL}\` ya no está en el PR: sin la orden, no firmo.`,
     };
   }
 
