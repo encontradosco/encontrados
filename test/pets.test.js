@@ -228,3 +228,10 @@ test('/api/reindex recoge fotos de mascotas que quedaron sin embedding', async (
   const body = await res.json();
   assert.equal(body.pets.processed, 1);
 });
+
+test('el sitio enlaza a mascotas desde la navegación', async (t) => {
+  const { server, base } = await startApp();
+  t.after(() => server.close());
+  const html = await (await fetch(base)).text();
+  assert.match(html, /href="\/mascotas"/);
+});
