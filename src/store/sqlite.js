@@ -164,6 +164,20 @@ async function createSqliteAdapter(dbPath) {
 
   const getPersonStmt = db.prepare('SELECT * FROM people WHERE id = ?');
 
+  // Las firmas faciales atadas a una o más suscripciones. Hay que leerlas
+  // ANTES de borrar la suscripción: `photos.subscription_id` también cascada
+  // (ver el esquema arriba), y con la suscripción se va la única fila que
+  // decía qué firma retirar de Rekognition — el mismo problema que
+  // `faceIdsForPerson` ya resuelve para el borrado de persona (#162).
+  function faceIdsForSubscriptionIds(subscriptionIds) {
+    if (!subscriptionIds.length) return [];
+    const marks = subscriptionIds.map(() => '?').join(',');
+    return db
+      .prepare(`SELECT face_id FROM photos WHERE subscription_id IN (${marks}) AND face_id IS NOT NULL`)
+      .all(...subscriptionIds)
+      .map((r) => r.face_id);
+  }
+
   return {
     async insertPerson(fullName, normalized, phonetic) {
       const info = db
@@ -328,21 +342,35 @@ async function createSqliteAdapter(dbPath) {
       db.prepare('UPDATE subscriptions SET verified = 1 WHERE id = ?').run(sub.id);
       return { ...sub, verified: 1 };
     },
+    // Igual que deletePerson en src/routes/api.js: los face_id se leen ANTES
+    // de borrar la fila, porque la cascada de subscription_id se la lleva
+    // junto con la única forma de saber qué firma retirar (#162).
     async deleteSubscriptionByToken(token) {
       const sub = db.prepare('SELECT * FROM subscriptions WHERE verify_token = ?').get(token);
       if (!sub) return null;
+      const faceIds = faceIdsForSubscriptionIds([sub.id]);
       db.prepare('DELETE FROM subscriptions WHERE id = ?').run(sub.id);
-      return sub;
+      return { ...sub, faceIds };
     },
     async deleteSubscription(personId, channel, address) {
-      return db
-        .prepare('DELETE FROM subscriptions WHERE person_id = ? AND channel = ? AND address = ?')
-        .run(personId, channel, address).changes;
+      const sub = db
+        .prepare('SELECT id FROM subscriptions WHERE person_id = ? AND channel = ? AND address = ?')
+        .get(personId, channel, address);
+      if (!sub) return { count: 0, faceIds: [] };
+      const faceIds = faceIdsForSubscriptionIds([sub.id]);
+      const info = db.prepare('DELETE FROM subscriptions WHERE id = ?').run(sub.id);
+      return { count: info.changes, faceIds };
     },
     async deleteSubscriptionsForAddress(channel, address) {
-      return db
+      const subs = db
+        .prepare('SELECT id FROM subscriptions WHERE channel = ? AND address = ?')
+        .all(channel, address);
+      if (!subs.length) return { count: 0, faceIds: [] };
+      const faceIds = faceIdsForSubscriptionIds(subs.map((s) => s.id));
+      const info = db
         .prepare('DELETE FROM subscriptions WHERE channel = ? AND address = ?')
-        .run(channel, address).changes;
+        .run(channel, address);
+      return { count: info.changes, faceIds };
     },
     async subscriptionsForPerson(personId) {
       return db.prepare('SELECT * FROM subscriptions WHERE person_id = ?').all(personId);

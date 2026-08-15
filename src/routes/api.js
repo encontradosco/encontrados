@@ -280,7 +280,7 @@ function apiRoutes(store, matcher) {
           const deleted = await store.deletePerson(p.id);
           if (!deleted) continue;
           removed.push({ id: p.id, name: p.full_name });
-          const faces = await forgetPersonFaces(matcher, faceIds, p.id);
+          const faces = await forgetPersonFaces(matcher, faceIds, `persona ${p.id}`);
           firmas.total += faces.total;
           firmas.deleted += faces.deleted;
           firmas.unconfirmed.push(...faces.unconfirmed);
@@ -320,7 +320,7 @@ function apiRoutes(store, matcher) {
       // lo conservan. De las dos huérfanas posibles esa es la peor, porque le
       // cuesta algo a quien está buscando a un familiar. Nunca lanza, así que
       // un Rekognition caído tampoco deshace el borrado ya hecho.
-      const faces = await forgetPersonFaces(matcher, faceIds, deleted.id);
+      const faces = await forgetPersonFaces(matcher, faceIds, `persona ${deleted.id}`);
       res.json({
         ok: true,
         deleted: { id: deleted.id, full_name: deleted.full_name },
