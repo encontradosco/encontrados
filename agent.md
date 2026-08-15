@@ -173,11 +173,12 @@ hay framework de frontend ni paso de build: lo que se lee es lo que corre.
 - `src/faces.js` — el proveedor de reconocimiento: Rekognition, o `nullMatcher`
   cuando no hay credenciales. Nunca tumba la app; degrada.
 - `src/facematch.js` — la orquestación encima del proveedor: `processPhoto`,
-  `identifyRescuedPerson` (el flujo del rescatista) y los dos barridos,
-  `backfillUnindexedPhotos` y `backfillPhotoDerivatives`. Cada camino que
-  produce una coincidencia real (`matchStoredPhoto`, `identifyRescuedPerson`)
-  y cada intento de aviso (`notifyFaceMatch`, `requestRescueConfirmation`,
-  `resolveRescueAnswer`) llama a `src/logbook.js` (#116, PR 4).
+  `identifyRescuedPerson` (el flujo del rescatista), `forgetPersonFaces` (el
+  borrado) y los dos barridos, `backfillUnindexedPhotos` y
+  `backfillPhotoDerivatives`. Cada camino que produce una coincidencia real
+  (`matchStoredPhoto`, `identifyRescuedPerson`) y cada intento de aviso
+  (`notifyFaceMatch`, `requestRescueConfirmation`, `resolveRescueAnswer`) llama
+  a `src/logbook.js` (#116, PR 4).
 - `src/thumbs.js` — el recorte cuadrado sobre el rostro, con `sharp`, en dos
   tamaños (240 para la lista, 480 para la ficha).
 - `src/html.js` — `layout()`, `esc()`, `facePlate()`, `statusBadge()` y los
@@ -411,10 +412,26 @@ alguien, sí:
   un `GET`.
 - `POST /api/maintenance/purge-test-data` — **sin llave**, y es seguro sin ella
   porque solo puede tocar una lista fija de nombres de prueba que está en el
-  código. Cualquier otra cosa la ignora.
+  código. Cualquier otra cosa la ignora. Retira también las firmas faciales de
+  lo que borra, con el mismo orden que el DELETE del ARCO; el radio no cambia,
+  y cuando no hay nada que purgar no gasta ni una llamada a Rekognition.
 - `DELETE /api/people/:id` — **con llave**, y deshabilitado (503) si no hay
-  `API_KEY`. Cumple el borrado que promete la política de privacidad. Ojo: la
-  fila se va en cascada, pero el rostro **sigue en la colección de Rekognition**.
+  `API_KEY`. Cumple el borrado que promete la política de privacidad, y se lleva
+  las dos copias del rastro: la fila (en cascada) y las firmas faciales de sus
+  fotos, que viven en la colección de Rekognition y a las que la cascada no
+  llega. **El orden importa y está elegido:** los `face_id` se leen antes del
+  borrado (después la cascada ya se los llevó) pero las firmas se retiran
+  *después*, ya sabiendo que la ficha se fue — al revés, un fallo de base en el
+  medio dejaba una persona listada como desaparecida y permanentemente
+  invisible para el matcher, que es la huérfana que sí le cuesta algo a
+  alguien. Es **best effort a propósito**: un Rekognition caído no puede
+  bloquear un borrado ya prometido, así que la fila se va igual y la respuesta
+  trae `faces.unconfirmed` con lo que quedó, más `faces.face_matching` en
+  `false` si el matcher estaba apagado. Reintentar el DELETE ya no sirve —la
+  persona no existe y sus ids se fueron con ella—, así que esa respuesta y la
+  línea `[facematch:olvido]` del log son el único rastro para limpiarlo a mano.
+  `POST /api/maintenance/purge-test-data` usa el mismo orden y también retira
+  firmas: los dos caminos de borrado se comportan igual.
 - `GET /api/match-stats` — **con llave.** Recomputa el cruce facial histórico
   buscando por `face_id` contra la colección (las firmas sobreviven aunque la
   foto del rescatista se haya borrado) y devuelve solo cifras agregadas: fotos

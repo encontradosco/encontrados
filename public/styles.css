@@ -151,6 +151,11 @@ h1.compact .subtle { font-family: var(--font-sans); font-weight: 400; font-size:
   font-weight: 600;
   text-decoration: none;
   transition: background 0.15s ease, border-color 0.15s ease;
+  /* Transparente, pero reservado: la variante en contorno (.secondary) suma
+     2px por lado, y sobre una base sin borde eso la dejaba 4px más alta que la
+     principal justo donde el diseño promete que son del mismo tamaño. El
+     espacio se paga acá una vez, para todos. */
+  border: 2px solid transparent;
 }
 .btn-title { display: block; }
 .btn-sub {
@@ -164,6 +169,38 @@ h1.compact .subtle { font-family: var(--font-sans); font-weight: 400; font-size:
 .big-btn.report:hover { background: var(--accent-dark); }
 .big-btn.search { background: var(--accent); color: #fff; }
 .big-btn.search:hover { background: var(--accent-dark); }
+/* La alternativa de una pareja de acciones. Mismo tamaño y mismo peso de letra
+   que la principal —no es "la opción chiquita"— pero en contorno, para que un
+   ojo que barre la pantalla vea DOS caminos y no dos veces el mismo. */
+.big-btn.secondary {
+  background: var(--surface);
+  color: var(--accent-dark);
+  border: 2px solid var(--accent);
+}
+.big-btn.secondary:hover { background: rgba(43, 108, 176, 0.08); }
+
+/* La bifurcación del bloque de aviso: "¿la tienes contigo?" antes del
+   formulario. <details> y no JavaScript — esta pantalla la abre alguien parado
+   al lado de una persona, con la señal que tenga. */
+.aviso-pregunta {
+  font-weight: 600;
+  font-size: 1.05rem;
+  margin: 0.9rem 0 0.6rem;
+}
+.aviso-si { margin-bottom: 0.6rem; }
+.aviso-si > summary {
+  list-style: none;
+  cursor: pointer;
+}
+.aviso-si > summary::-webkit-details-marker { display: none; }
+.aviso-si > summary:focus-visible { outline: 3px solid var(--accent-dark); outline-offset: 2px; }
+.aviso-si[open] > summary { border-radius: 12px 12px 0 0; }
+.aviso-si-cuerpo {
+  border: 2px solid var(--accent);
+  border-top: none;
+  border-radius: 0 0 12px 12px;
+  padding: 0.9rem 1rem 1rem;
+}
 
 .card {
   background: var(--surface);
@@ -408,6 +445,12 @@ button:disabled { opacity: 0.55; cursor: progress; }
 .search-row { display: flex; gap: 0.5rem; }
 .search-row input { flex: 1; }
 .search-row button { width: auto; }
+
+/* Rescuer photo field: one native input for no-JS, two buttons when JS runs. */
+.photo-field-label { font-weight: 400; font-size: 0.85rem; color: var(--muted); display: block; margin-bottom: 0.25rem; }
+.photo-buttons-row { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.photo-buttons-row button { flex: 1 1 45%; }
+[data-photo-picked] { margin: 0.35rem 0 0; }
 
 .notice {
   background: #eef3ee;

@@ -733,10 +733,25 @@ async function identifyRescuedPerson(
     const person = await store.getPerson(mp.person_id);
     if (!person) continue;
     const latest = await store.getLatestUpdate(mp.person_id);
+    // El teléfono al que hay que llamar puede NO estar en el último update, y
+    // eso no es un borde: un aviso de rescatista queda como el más reciente y
+    // su `contact` es de un tercero, así que filtrarlo (#120) tapaba también el
+    // contacto que la familia sí había dejado en un reporte anterior. Que una
+    // familia no reciba la llamada es exactamente el daño que esto existe para
+    // evitar, así que la pantalla busca el contacto más reciente que de verdad
+    // sea de quien la busca, no el del update más nuevo.
+    //
+    // `updatesForPerson` viene ordenado por fecha descendente en los dos
+    // adaptadores, así que el primero que cumple es el más reciente.
+    const contactUpdate =
+      latest && latest.contact && latest.source !== 'rescate'
+        ? latest
+        : (await store.getUpdates(mp.person_id)).find((u) => u.contact && u.source !== 'rescate') || null;
     found.push({
       person,
       similarity: bySimilarity.get(mp.face_id) || 0,
-      update: latest
+      update: latest,
+      contactUpdate
     });
   }
   found.sort((a, b) => b.similarity - a.similarity);
@@ -873,9 +888,64 @@ async function computeMatchStats(store, matcher) {
   return stats;
 }
 
+// Retira de la colección las firmas faciales que ya perdieron su ficha. La
+// firma no vive en la base: vive en Rekognition, así que ninguna cascada la
+// toca, y sin esto sobrevivía al borrado para siempre — una foto de rescatista
+// seguiría coincidiendo con alguien cuya ficha ya no existe, y quedaría un dato
+// biométrico retenido sin el registro que lo justificaba.
+//
+// Recibe los ids en vez de ir a buscarlos: para cuando esto corre, la cascada
+// ya se llevó las filas de `photos`, así que hay que leerlos ANTES del borrado
+// y pasarlos acá (ver la ruta DELETE en src/routes/api.js).
+//
+// Best effort a propósito: la política de privacidad promete el borrado, así
+// que un Rekognition caído NO puede bloquearlo. Lo que no se pudo confirmar se
+// devuelve y se loguea, porque los ids ya no están en ninguna parte de donde
+// volver a leerlos.
+async function forgetPersonFaces(matcher, faceIds, personId) {
+  // Se despierta el matcher primero y en los DOS caminos. El corto también
+  // reporta `face_matching`, y leerlo sin haber inicializado devolvía `false`
+  // con Rekognition perfectamente disponible: cosmético acá, pero es la misma
+  // clase de bug que el #89 y no vale dejarlo sembrado.
+  if (typeof matcher.ensureReady === 'function') await matcher.ensureReady();
+  const faceMatching = !!matcher.enabled;
+
+  const ids = (faceIds || []).filter(Boolean);
+  if (!ids.length) {
+    return { total: 0, deleted: 0, unconfirmed: [], face_matching: faceMatching };
+  }
+
+  let result;
+  try {
+    result = await matcher.deleteFaces(ids);
+  } catch (e) {
+    // El proveedor no debería lanzar (el suyo atrapa por lote), pero la
+    // garantía tiene que ser estructural y no depender de que se porte bien.
+    console.error('[facematch:olvido] DeleteFaces falló:', e.name, e.message);
+    result = { deleted: [], unconfirmed: ids };
+  }
+
+  const unconfirmed = result.unconfirmed || [];
+  if (unconfirmed.length) {
+    // El único rastro duradero: la respuesta HTTP se la lleva quien llamó, y
+    // los ids ya no están en la base para reintentarlo desde ahí.
+    console.error(
+      `[facematch:olvido] persona ${personId}: ${unconfirmed.length} firma(s) sin retirar de la colección —`,
+      unconfirmed.join(', ')
+    );
+  }
+  return {
+    total: ids.length,
+    deleted: (result.deleted || []).length,
+    unconfirmed,
+    face_matching: faceMatching
+  };
+}
+
 module.exports = {
   processPhoto,
   identifyRescuedPerson,
+  forgetPersonFaces,
   notifyRescuerOfMatches,
   requestRescueConfirmation,
   resolveRescueAnswer,

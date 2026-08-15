@@ -17,10 +17,114 @@ test('parseMessage understands report with note and location', () => {
   assert.equal(p.location, 'albergue San José');
 });
 
-test('bare text is treated as a search', () => {
+// #118: un texto sin comando ya no se convierte en búsqueda por nombre.
+test('bare text without a command is not a search', () => {
   const p = parseMessage('Juan Pérez');
-  assert.equal(p.intent, 'find');
-  assert.equal(p.name, 'Juan Pérez');
+  assert.equal(p.intent, 'unrecognized');
+  // La otra mitad del arreglo: del fallback no sale ningún nombre. `name` era
+  // el campo que se interpolaba en la respuesta, y por ahí se ecoaba la frase
+  // de la persona de vuelta.
+  assert.ok(!p.name, 'del fallback no puede salir un nombre que alguien interpole');
+});
+
+// Las dos frases que motivaron volver estricto el SÍ (ver ANSWERS en src/bot.js).
+// Ya no confirman un rescate; acá se fija además que tampoco caen en la otra
+// trampa —convertirse en una búsqueda por su texto entero—, que es lo que las
+// dejaba volver como "No encontré reportes sobre «Claro que no es ella»".
+test('las frases que parecen un SÍ tampoco disparan una búsqueda (#118)', () => {
+  for (const frase of ['Claro que no es ella', 'Si la veo te aviso']) {
+    const p = parseMessage(frase);
+    assert.equal(p.intent, 'unrecognized', `"${frase}" no es un comando`);
+    assert.ok(!p.name, `"${frase}" no puede convertirse en un nombre a buscar`);
+  }
+});
+
+test('free text never touches the store and is not echoed back (#118)', async () => {
+  const store = await freshStore();
+  let searched = false;
+  const spied = new Proxy(store, {
+    get(target, prop) {
+      if (prop === 'searchPeople') {
+        return (...args) => {
+          searched = true;
+          return target.searchPeople(...args);
+        };
+      }
+      return target[prop];
+    }
+  });
+  const phrase =
+    'La plataforma me mostró una coincidencia alta pero no aparecen datos de quien la busca, qué hago';
+  const reply = await handleInbound(spied, {
+    channel: 'whatsapp',
+    from: '573009998877',
+    text: phrase
+  });
+  assert.equal(searched, false, 'free text must never call searchPeople');
+  assert.ok(!reply.includes(phrase), 'the reply must not echo the user phrase');
+  assert.ok(!/No encontré reportes/.test(reply), 'the reply must not look like a search result');
+  assert.match(reply, /BUSCAR/);
+  assert.match(reply, /AYUDA/);
+});
+
+test('explicit BUSCAR keyword still searches (#118)', async () => {
+  const store = await freshStore();
+  await handleInbound(store, { channel: 'whatsapp', from: '1', text: 'BIEN Persona Prueba Uno' });
+  const r = await handleInbound(store, { channel: 'whatsapp', from: '2', text: 'BUSCAR Persona Prueba Uno' });
+  assert.match(r, /Persona Prueba Uno/);
+});
+
+// BAJA TODO es la salida de emergencia del canal: es lo que se le ofrece a
+// alguien a quien le estamos escribiendo por error. Pasa por `parsed.name`, el
+// mismo campo que #118 vacía en el fallback, así que roza la condición tocada y
+// no tenía prueba propia en ningún archivo.
+test('BAJA TODO sigue cancelando todas las suscripciones (#118)', async () => {
+  const store = await freshStore();
+  const phone = '573004445566';
+  await handleInbound(store, { channel: 'whatsapp', from: phone, text: 'SUSCRIBIR Ana Prueba Uno' });
+  await handleInbound(store, { channel: 'whatsapp', from: phone, text: 'SUSCRIBIR Beto Prueba Dos' });
+  const r = await handleInbound(store, { channel: 'whatsapp', from: phone, text: 'BAJA TODO' });
+  assert.match(r, /cancelé tus 2 suscripciones/);
+  for (const nombre of ['ana prueba uno', 'beto prueba dos']) {
+    const [persona] = await store.searchPeople(nombre);
+    assert.equal((await store.getSubscriptions(persona.id)).length, 0);
+  }
+});
+
+// Una foto llega con su leyenda como texto. Si la leyenda no es un comando, la
+// foto no se indexa a espaldas de quien la mandó: se le contesta el acuse y se
+// le dice con qué palabra reenviarla. Que el rostro NO entre al índice es lo
+// que se está fijando acá — es una foto de una persona real que nadie pidió
+// guardar.
+test('una foto con leyenda de texto libre no indexa el rostro (#118)', async () => {
+  const store = await freshStore();
+  let tocado = false;
+  const matcher = {
+    enabled: true,
+    async indexFace() {
+      tocado = true;
+      return { faceId: 'cara-de-prueba', geometry: null };
+    },
+    async detectFace() {
+      tocado = true;
+      return null;
+    },
+    async searchByImage() {
+      tocado = true;
+      return [];
+    }
+  };
+  const leyenda = 'la vi cerca del albergue pero no sé cómo se llama';
+  const r = await handleInbound(store, {
+    channel: 'whatsapp',
+    from: '573007778899',
+    text: leyenda,
+    photo: { bytes: Buffer.from('jpeg-de-prueba'), contentType: 'image/jpeg' },
+    matcher
+  });
+  assert.equal(tocado, false, 'una leyenda sin comando no puede indexar un rostro');
+  assert.ok(!r.includes(leyenda), 'la respuesta no ecoa la leyenda');
+  assert.match(r, /BUSCAR/);
 });
 
 test('report then fuzzy find via WhatsApp flow', async () => {
@@ -67,6 +171,28 @@ test('subscribe registers the sender phone; unsubscribe removes it', async () =>
   const r2 = await handleInbound(store, { channel: 'whatsapp', from: phone, text: 'BAJA Ana Maria Ruiz' });
   assert.match(r2, /ya no recibirás avisos/);
   assert.equal((await store.getSubscriptions(person.id)).length, 0);
+});
+
+// #78: the bot answers "where is this person" from store.getLatestUpdate,
+// which is the SAME "current status" invariant the home page's missing/
+// reunited lists use. Filtering the aggregator-safe noise only from the home
+// queries and not from here would have a family texting the bot and being
+// told "A SALVO" from a public-registry sync, while the site's own listing
+// still (correctly) shows them as missing.
+test('BUSCAR does not report someone as found from a public-registry sync alone', async () => {
+  const store = await freshStore();
+  const { person } = await store.findOrCreatePerson('Camilo Andrade Ríos');
+  await store.addUpdate(person.id, { status: 'missing', source: 'web', location: 'Bosa' });
+  await store.addUpdate(person.id, { status: 'safe', source: 'aggregator', message: 'Localizada' });
+
+  const r = await handleInbound(store, { channel: 'whatsapp', from: '573009998877', text: 'BUSCAR Camilo Andrade' });
+  assert.match(r, /DESAPARECID/i, 'la fila del agregador no puede pisar el reporte real de desaparición');
+  assert.doesNotMatch(r, /A SALVO/);
+
+  // A REAL confirmation must still flip it.
+  await store.addUpdate(person.id, { status: 'safe', source: 'web', message: 'Confirmado por la familia' });
+  const r2 = await handleInbound(store, { channel: 'whatsapp', from: '573009998877', text: 'BUSCAR Camilo Andrade' });
+  assert.match(r2, /A SALVO/);
 });
 
 test('help for unknown/empty messages', async () => {

@@ -1,13 +1,14 @@
 // Conversation engine for WhatsApp.
 // Understands Spanish (primary) and English commands; always replies in Spanish.
 const { normalize } = require('./names');
-const { notifySubscribers, relayEnabled, STATUS_LABEL } = require('./notify');
+const { relayEnabled, STATUS_LABEL } = require('./notify');
 const {
   processPhoto,
   resolveRescueAnswer,
   MAX_QUERY_PHOTOS
 } = require('./facematch');
 const { nullMatcher } = require('./faces');
+const { createReportAdmission } = require('./report-admission');
 
 const HELP = [
   '🆘 *encontrados.co* — información de personas en emergencias.',
@@ -55,9 +56,25 @@ function parseMessage(text) {
       };
     }
   }
-  // No keyword: treat the whole message as a lookup by name.
-  return { intent: 'find', name: raw, note: '', location: '' };
+  // Sin comando reconocido: no se asume nada (#118). Antes esto era una
+  // búsqueda por nombre con el mensaje entero, y una frase en lenguaje
+  // natural ("la vi en el albergue pero no sé quién la busca") se convertía
+  // en "No encontré reportes sobre <su frase>" — la peor respuesta posible
+  // para alguien que está al lado de una persona rescatada. Un texto libre
+  // no dispara ninguna acción sobre datos; buscar exige BUSCAR.
+  return { intent: 'unrecognized' };
 }
+
+// Acuse fijo para un mensaje que no es un comando (#118). No repite la frase
+// de la persona (ecoarla sonaba a error suyo) y no promete cosas que este
+// cambio no hace: la bitácora y el escalamiento a una persona son #119.
+const UNRECOGNIZED_REPLY = [
+  'Recibí tu mensaje, pero no lo entendí como un comando, así que no hice ninguna búsqueda ni cambié ningún dato.',
+  '',
+  '• Si buscas a alguien: BUSCAR <nombre>',
+  '• Para ver todos los comandos: AYUDA',
+  '• Para dejar de recibir mensajes: BAJA TODO'
+].join('\n');
 
 // Respuesta a la plantilla `confirmacion_rescatista_encontrados` (paso 1 de la
 // entrega en dos pasos, en src/facematch.js). Esa plantilla pide dos respuestas
@@ -143,6 +160,10 @@ async function handleInbound(store, { channel, from, text, photo, matcher = null
 
   const parsed = parseMessage(text);
 
+  if (parsed.intent === 'unrecognized') {
+    return UNRECOGNIZED_REPLY;
+  }
+
   if (parsed.intent === 'help' || (parsed.intent !== 'help' && !parsed.name)) {
     return HELP;
   }
@@ -161,29 +182,32 @@ async function handleInbound(store, { channel, from, text, photo, matcher = null
   }
 
   if (parsed.intent === 'report') {
-    const { person, created } = await store.findOrCreatePerson(parsed.name);
-    const update = await store.addUpdate(person.id, {
+    // Thin adapter over the shared report-admission flow: WhatsApp parsing and
+    // reply text stay here, the domain sequence (person, update, owner
+    // resolution, duplicate check, photo indexing, notification) lives in the
+    // service so web, API and WhatsApp behave the same.
+    const admission = createReportAdmission({ store, matcher });
+    const result = await admission.admitReport({
+      name: parsed.name,
       status: parsed.status,
       message: parsed.note || null,
       location: parsed.location || null,
       source: channel,
-      reporter: from
+      reporter: from,
+      photos: photo ? [photo] : [],
+      skipAddresses: [from]
     });
-    await notifySubscribers(store, person, update, { skipAddress: from });
-    if (photo) {
-      await processPhoto(store, matcher, {
-        personId: person.id,
-        kind: 'report',
-        updateId: update.id,
-        bytes: photo.bytes,
-        contentType: photo.contentType
-      });
-    }
+    // Unreachable today — parseMessage only reaches intent 'report' with a
+    // name (checked above) and a status straight from COMMANDS, always one of
+    // STATUSES — but the WhatsApp reply text assumes `result.person` exists,
+    // so a validation rule that ever diverges must get a message back instead
+    // of throwing mid-conversation.
+    if (!result.ok) return HELP;
     return [
-      `✅ Registrado: *${person.full_name}* — ${STATUS_LABEL[parsed.status]}.`,
-      created ? null : 'Se agregó a los reportes existentes de esta persona.',
+      `✅ Registrado: *${result.person.full_name}* — ${STATUS_LABEL[parsed.status]}.`,
+      result.personCreated ? null : 'Se agregó a los reportes existentes de esta persona.',
       photo ? '📷 Foto recibida. Nunca se compartirá: solo se usa para reconocimiento facial.' : null,
-      `Gracias por ayudar. Para seguir sus novedades: SUSCRIBIR ${person.full_name}`
+      `Gracias por ayudar. Para seguir sus novedades: SUSCRIBIR ${result.person.full_name}`
     ]
       .filter(Boolean)
       .join('\n');

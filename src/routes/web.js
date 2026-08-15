@@ -2,20 +2,19 @@ const crypto = require('crypto');
 const express = require('express');
 const multer = require('multer');
 const env = require('../env');
-const { sendVerificationEmail, sendEmail, avisoEmail, relayEnabled, notifySubscribers } = require('../notify');
+const { sendVerificationEmail, sendEmail, avisoEmail, relayEnabled } = require('../notify');
 const {
-  processPhoto,
   identifyRescuedPerson,
   notifyRescuerOfMatches,
   backfillPhotoDerivatives,
   MAX_QUERY_PHOTOS
 } = require('../facematch');
 const { esc, layout, updateCard, timeTag, facePlate, LOCATION_SCRIPT } = require('../html');
-const { findDuplicateCandidates } = require('../duplicates');
 const { isReadyToShow } = require('../report-photo');
 const gh = require('../github');
 const { logContact, resultFromSend } = require('../logbook');
 const { RESCUE_ANCHOR_PREFIX } = require('../people');
+const { createReportAdmission } = require('../report-admission');
 
 // Express 4 doesn't catch async errors on its own.
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
@@ -239,31 +238,59 @@ const SOURCES_NOTE = `<p class="sources-note">Fuentes de información de desapar
 // found, and the operators relay the aviso back to the source registry (for
 // Colombia Te Busca, filling their information form on the rescuer's behalf).
 function matchContactBlock(m) {
-  if (m.update && m.update.contact) {
-    // An aviso's contact is another RESCUER, not the family — say so.
-    const label =
-      m.update.source === 'rescate' ? 'Contacto del rescatista que la tiene' : 'Contacta a quien la busca';
-    return `<p>📞 <strong>${label}:</strong> ${esc(m.update.contact)}</p>`;
+  // El `contact` de un aviso NO es el contacto de quien la busca: es el
+  // teléfono de un tercero que pasó por acá antes, pegado al sitio donde dijo
+  // que estaba la persona. Los dos datos caen en el mismo campo que usa el
+  // reporte de una familia y hasta acá se pintaban igual, así que el siguiente
+  // desconocido que coincidiera con esa cara los veía en pantalla — después de
+  // que a quien los dejó le prometimos que su teléfono no se mostraba (#120).
+  //
+  // El filtro va acá, al PINTAR, y no sobre el dato guardado: así cubre
+  // también los avisos que ya estaban escritos, sin tocar la base y sin perder
+  // el aviso, que es el insumo con el que un operador hace el relevo.
+  //
+  // `contactUpdate` lo resuelve identifyRescuedPerson (src/facematch.js) y NO
+  // es lo mismo que `m.update`: este último es el más reciente —que puede ser
+  // justamente un aviso—, y aquel es el más reciente cuyo contacto es de quien
+  // la busca. Mirar solo el último dejaba sin mostrar el teléfono que la
+  // familia sí había dejado en un reporte anterior.
+  const fromAviso = m.update && m.update.source === 'rescate';
+  if (m.contactUpdate && m.contactUpdate.contact) {
+    return `<p>📞 <strong>Contacta a quien la busca:</strong> ${esc(m.contactUpdate.contact)}</p>`;
   }
-  // El campo del lugar se estaba entendiendo al revés: llegan respuestas con
-  // la ciudad de QUIEN AVISA, o con el nombre de una persona. La
-  // pregunta se hace explícita —el sitio donde está la persona rescatada,
-  // ahora mismo— y se acompaña de un ejemplo del nivel de detalle que sirve.
-  // Sin validación que rechace: un rescatista parado al lado de alguien no
-  // puede quedarse mirando un formulario que no lo deja enviar, y una
-  // respuesta imprecisa que un operador puede repreguntar vale más que un
-  // aviso que nunca se mandó.
+  // La bifurcación de acá arriba existe porque medimos quién estaba llenando
+  // este formulario: de 23 avisos recibidos, uno solo tenía forma de rescate.
+  // Los demás los mandó gente que está BUSCANDO a esa persona y llegó hasta
+  // acá porque el botón que vio decía «¿la tienes contigo?» — y terminaba
+  // escribiendo la dirección de la casa de su familiar en un campo que le
+  // pedía dónde encontrarla. Preguntar de frente es más barato que adivinar
+  // después, y le abre a esa persona la puerta que en realidad venía a buscar.
+  //
+  // El nombre va DENTRO de la pregunta a propósito: «esa persona» es
+  // justamente lo que se venía leyendo al revés.
+  const name = esc(m.person.full_name);
   return `<div class="aviso">
-  <p><strong>La están buscando, pero el reporte no trae un contacto directo.</strong> Déjanos tu número y dónde está ahora esa persona: nosotros nos encargamos de hacerle llegar el aviso a quien la busca.</p>
-  <form class="stack compact" method="post" action="/rescate/aviso">
-    <input type="hidden" name="person_id" value="${m.person.id}">
-    <label class="field-label"><span>Tu teléfono (WhatsApp si tienes) *</span>
-      <input name="phone" required maxlength="60" placeholder="Ej. 300 123 4567" autocomplete="tel" inputmode="tel"></label>
-    <label class="field-label"><span>¿Dónde está ahora esa persona? *</span>
-      <input name="location" required maxlength="160" placeholder="Ej. Hospital San Jorge, Pereira — urgencias"></label>
-    <p class="subtle">El sitio donde está <strong>la persona que rescataste</strong>, no dónde estás tú. Ejemplo: «Hospital San Jorge, Pereira — urgencias» o «Albergue del coliseo, Quibdó».</p>
-    <button class="big-btn report" type="submit">Avisar a quien la busca</button>
-  </form>
+  <p><strong>La están buscando, pero el reporte no trae un teléfono al que llamar.</strong>${
+    fromAviso ? ' Otra persona ya nos avisó por esta misma ficha y el equipo está haciéndole llegar el aviso a quien la busca.' : ''
+  }</p>
+  <p class="aviso-pregunta">¿Tienes a ${name} contigo en este momento?</p>
+  <details class="aviso-si">
+    <summary class="big-btn report">✅ Sí, está aquí conmigo</summary>
+    <div class="aviso-si-cuerpo">
+      <p>Déjanos tu número y dónde está ${name} ahora: nosotros le hacemos llegar el aviso a quien la busca.</p>
+      <form class="stack compact" method="post" action="/rescate/aviso">
+        <input type="hidden" name="person_id" value="${m.person.id}">
+        <label class="field-label"><span>Tu teléfono (WhatsApp si tienes) *</span>
+          <input name="phone" required maxlength="60" placeholder="Ej. 300 123 4567" autocomplete="tel" inputmode="tel"></label>
+        <label class="field-label"><span>¿En qué lugar está ${name} en este momento? *</span>
+          <input name="location" required maxlength="160" placeholder="Ej. Hospital San Jorge, Pereira — urgencias"></label>
+        <p class="subtle">El sitio donde está <strong>${name}</strong>, no dónde estás tú. Ejemplo: «Hospital San Jorge, Pereira — urgencias» o «Albergue del coliseo, Quibdó».</p>
+        <button class="big-btn report" type="submit">Avisar a quien la busca</button>
+      </form>
+    </div>
+  </details>
+  <a class="big-btn secondary" href="/report?name=${encodeURIComponent(m.person.full_name)}">🙋 No — yo soy quien la está buscando</a>
+  <p class="subtle">Si la estás buscando, agrega tu teléfono al reporte: así el rescatista que la encuentre te llama directo, sin que nadie más tenga que intermediar.</p>
 </div>`;
 }
 
@@ -526,6 +553,7 @@ function webRoutes(store, matcher) {
   const router = express.Router();
   router.use(express.urlencoded({ extended: true }));
   const sweepPhotoDerivatives = createSweeper(store, matcher);
+  const admission = createReportAdmission({ store, matcher });
 
   // ---------------------------------------------------------------- home
   router.get(
@@ -701,8 +729,18 @@ ${
   function rescueForm({ email = '', phone = '', searchOnly = false } = {}) {
     return `
 <form class="stack compact" method="post" action="/rescate" enctype="multipart/form-data" data-resize-photos data-require-photo>
-  <label class="file-label"><span>📷 Foto de la persona que tienes contigo *</span>
-    <input type="file" name="photo" accept="image/*" required></label>
+  <div class="photo-field" data-photo-field>
+    <label class="file-label" data-photo-native><span>📷 Foto de la persona que tienes contigo *</span>
+      <input type="file" name="photo" accept="image/*" required></label>
+    <div class="photo-buttons" data-photo-enhanced hidden>
+      <span class="photo-field-label">📷 Foto de la persona que tienes contigo *</span>
+      <div class="photo-buttons-row">
+        <button type="button" data-photo-camera>📷 Tomar foto</button>
+        <button type="button" class="secondary" data-photo-gallery>🖼️ Elegir de galería</button>
+      </div>
+      <p class="subtle" data-photo-picked aria-live="polite" hidden></p>
+    </div>
+  </div>
   ${RESCUE_PRIVACY}
   <label class="field-label"><span>Tu correo (opcional — te avisamos si alguien la busca después)</span>
     <input type="email" name="email" value="${esc(email)}" placeholder="tucorreo@ejemplo.com" autocomplete="email"></label>
@@ -721,6 +759,37 @@ document.addEventListener('submit', function (ev) {
     alert('Sube una foto de la persona.');
   }
 }, true);
+
+// El rescatista que tiene a la persona al lado abre la cámara sin salir de la
+// app. Con JS, dos botones manejan UN solo input: «Tomar foto» le pone el
+// atributo capture y dispara la cámara; «Elegir de galería» lo quita y abre el
+// carrete. Sin JS queda el input nativo, que ya ofrece las dos opciones.
+(function () {
+  var field = document.querySelector('[data-photo-field]');
+  if (!field) return;
+  var input = field.querySelector('input[type=file]');
+  var native = field.querySelector('[data-photo-native]');
+  var enhanced = field.querySelector('[data-photo-enhanced]');
+  var picked = field.querySelector('[data-photo-picked]');
+  native.hidden = true;
+  enhanced.hidden = false;
+  // Un input required oculto bloquea el envío con un error que el navegador no
+  // puede enfocar; la validación de arriba ya cubre el caso sin foto.
+  input.removeAttribute('required');
+  field.querySelector('[data-photo-camera]').addEventListener('click', function () {
+    input.setAttribute('capture', 'environment');
+    input.click();
+  });
+  field.querySelector('[data-photo-gallery]').addEventListener('click', function () {
+    input.removeAttribute('capture');
+    input.click();
+  });
+  input.addEventListener('change', function () {
+    var has = input.files.length > 0;
+    picked.textContent = has ? '✓ Foto seleccionada' : '';
+    picked.hidden = !has;
+  });
+})();
 </script>`;
   }
 
@@ -1078,14 +1147,6 @@ ${LOCATION_SCRIPT}`,
         place: String(req.body.place || '').trim().slice(0, 160)
       };
 
-      const { person, created } = await store.findOrCreatePerson(name);
-
-      // Read the record's existing photo BEFORE this report's own photos are
-      // stored below — afterwards there is no way to tell, from the person id
-      // alone, which face was already there and which one just arrived. That
-      // pre-existing face is the whole point of the comparison.
-      const priorPhoto = created ? null : (await store.reportPhotoByPerson([person.id])).get(person.id);
-
       // El nombre de quien reporta va a `reporter`, la columna que ya existía
       // para esto y que `maskReporter()` publica reducida a "María G." — no se
       // guarda ninguna columna nueva. Los tres campos de ubicación desglosada,
@@ -1093,43 +1154,46 @@ ${LOCATION_SCRIPT}`,
       // Colombia Te Busca, la ubicación que la app usa ya está en `location`, y
       // agregar columnas a los dos adaptadores para un dato que solo viaja en un
       // correo no se paga.
-      const update = await store.addUpdate(person.id, {
+      //
+      // Thin adapter: the shared report-admission service owns the whole domain
+      // sequence — person, update, owner resolution, photo indexing, and
+      // subscriber notification (skipping both contact fields this form
+      // collects so the reporter isn't echoed their own report). The
+      // duplicate check runs LAST, once the report is durable. This handler
+      // keeps only the web-specific parts: multipart files in, cookies, the
+      // Colombia Te Busca relay, and the 303.
+      const result = await admission.admitReport({
+        name,
         status: 'missing',
         message,
         location,
         source: 'web',
         contact,
-        reporter: relay.reporterName || null
+        reporter: relay.reporterName || null,
+        photos: files.map((f) => ({ bytes: f.buffer, contentType: f.mimetype })),
+        skipAddresses: [phone, email.toLowerCase()].filter(Boolean),
+        checkDuplicates: true,
+        includePriorPhoto: true
       });
+      // Unreachable today — the check above already covers the one field the
+      // service validates that this route doesn't (`name`) — but the service
+      // is the single source of truth for its own contract: a caller that
+      // stops prevalidating, or a validation rule that changes only on one
+      // side, must get a 400 here instead of a TypeError on `result.person`.
+      if (!result.ok) {
+        return res
+          .status(400)
+          .send(
+            layout(
+              'Error',
+              '<p class="error">Faltan datos: hacen falta las fotos, el nombre, el lugar y un teléfono o correo de contacto.</p>'
+            )
+          );
+      }
+      const { person, personCreated: created, update, photos, priorPhoto, candidates } = result;
+
       remember(res, REPORTER_COOKIE, phone || contact);
       remember(res, EMAIL_COOKIE, email);
-
-      // POST /api/updates and the WhatsApp bot both fan this out to anyone
-      // already subscribed to this person; this route was the one place a
-      // report could land without them hearing about it — a family whose
-      // subscription came from the bot or the API got no word when the next
-      // update on that same person arrived through the web form instead.
-      // skipAddresses covers both contact fields the form collects, so this
-      // reporter doesn't get their own report echoed back if they happen to
-      // already be subscribed under either address.
-      await notifySubscribers(store, person, update, {
-        skipAddresses: [phone, email.toLowerCase()].filter(Boolean)
-      });
-
-      // Each photo is indexed so a rescuer holding this person can find the
-      // report; a match also alerts any rescuer already waiting for news.
-      const photos = [];
-      for (const f of files) {
-        photos.push(
-          await processPhoto(store, matcher, {
-            personId: person.id,
-            kind: 'report',
-            updateId: update.id,
-            bytes: f.buffer,
-            contentType: f.mimetype
-          })
-        );
-      }
 
       // The family ticked "report this on Colombia Te Busca too". That registry
       // has no API, so the relay is a human filling their form: this mail is
@@ -1148,19 +1212,6 @@ ${LOCATION_SCRIPT}`,
         // exactamente lo que es esta solicitud.
         await logContact(store, { personId: person.id, updateId: update.id, channel: 'relevo', result: resultFromSend(relayRes) });
       }
-
-      // Duplicate detection runs LAST, once the report is durable. Everything
-      // above is the family's data; everything here is a courtesy. Running the
-      // face searches first meant a slow Rekognition call — or a serverless
-      // timeout inside it — could take the whole report down with it, which is
-      // the one outcome this service must never produce. The photos are already
-      // indexed by now and would match themselves, but `excludePersonId` drops
-      // every hit on this record, so self-matching is a non-issue.
-      const candidates = await findDuplicateCandidates(store, matcher, {
-        name,
-        photos: files.map((f) => f.buffer),
-        excludePersonId: person.id
-      });
 
       // Two different ways this report can be a duplicate:
       //   created === false → the NAME matched, so it was appended to a record
