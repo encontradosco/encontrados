@@ -116,11 +116,17 @@ async function createSqliteAdapter(dbPath) {
     -- no es una bitácora de producto, es la prueba de que una acción de habeas
     -- data ocurrió y quién la autorizó — lo que exige poder demostrar Ley 1581.
     -- Misma retención heredada que el resto del esquema: ON DELETE CASCADE.
+    --
+    -- 'unconfirmed_count' es el resultado REAL, no la intención: forgetPersonFaces
+    -- es best effort y no lanza si Rekognition falla, así que sin esto la
+    -- constancia diría "se retiró la firma" incluso cuando quedó indexada —
+    -- inservible para auditar si de verdad se cumplió lo prometido.
     CREATE TABLE IF NOT EXISTS privacy_actions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
       action TEXT NOT NULL CHECK (action IN ('forget_face')),
       actor TEXT NOT NULL,
+      unconfirmed_count INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
     );
     CREATE INDEX IF NOT EXISTS idx_privacy_actions_person ON privacy_actions(person_id);
@@ -489,10 +495,12 @@ async function createSqliteAdapter(dbPath) {
       db.prepare('DELETE FROM people WHERE id = ?').run(id);
       return person;
     },
-    async recordPrivacyAction({ personId, action, actor }) {
+    async recordPrivacyAction({ personId, action, actor, unconfirmedCount = 0 }) {
       const info = db
-        .prepare('INSERT INTO privacy_actions (person_id, action, actor) VALUES (?, ?, ?)')
-        .run(personId, action, actor);
+        .prepare(
+          'INSERT INTO privacy_actions (person_id, action, actor, unconfirmed_count) VALUES (?, ?, ?, ?)'
+        )
+        .run(personId, action, actor, unconfirmedCount);
       return db.prepare('SELECT * FROM privacy_actions WHERE id = ?').get(info.lastInsertRowid);
     },
     async privacyActionsForPerson(personId) {

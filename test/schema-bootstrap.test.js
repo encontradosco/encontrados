@@ -87,6 +87,10 @@ test('esquema: privacy_actions cuelga de people(id) con ON DELETE CASCADE', asyn
   assert.match(schema, /person_id INTEGER NOT NULL REFERENCES people\(id\) ON DELETE CASCADE/);
   assert.match(schema, /action TEXT NOT NULL CHECK \(action IN \('forget_face'\)\)/);
   assert.match(schema, /actor TEXT NOT NULL/);
+  // El resultado REAL del retiro, no la intención — ver el comentario en
+  // src/store/postgres.js. Sin esto la fila no distingue un retiro completo
+  // de uno que dejó firmas indexadas.
+  assert.match(schema, /unconfirmed_count INTEGER NOT NULL DEFAULT 0/);
 });
 
 test('esquema: privacy_actions hereda la retención de people en SQLite (la base real de la suite)', async () => {

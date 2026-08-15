@@ -198,17 +198,24 @@ function adminApiRoutes(store, matcher) {
       // indexar la misma foto y deshacía en silencio lo que se le prometió a
       // la familia. La fila se queda con un face_id que ya no existe en la
       // colección — inerte, y por eso no vuelve a coincidir con nadie.
+      //
+      // La constancia lleva el resultado REAL, no la intención: forgetPersonFaces
+      // es best effort y no lanza si Rekognition falla, así que sin
+      // unconfirmed_count la fila diría "se retiró la firma" aunque hubiera
+      // quedado indexada — inservible para auditar si de verdad se cumplió lo
+      // prometido a la familia.
       const action = await store.recordPrivacyAction({
         personId: person.id,
         action: 'forget_face',
-        actor: req.adminEmail
+        actor: req.adminEmail,
+        unconfirmedCount: faces.unconfirmed.length
       });
 
       res.json({
         ok: true,
         person: { id: person.id, full_name: person.full_name },
         faces,
-        action: { id: action.id, created_at: action.created_at }
+        action: { id: action.id, created_at: action.created_at, unconfirmed_count: action.unconfirmed_count }
       });
     })
   );

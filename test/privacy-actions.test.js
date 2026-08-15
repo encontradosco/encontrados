@@ -125,6 +125,9 @@ test('un admin retira la firma facial sin borrar la ficha', async (t) => {
   assert.deepEqual(matcher.deleteCalls.flat(), ['face-uno']);
   assert.equal(body.faces.deleted, 1);
   assert.ok(body.action.id);
+  // La constancia lleva el resultado real: un retiro completo se anota como
+  // 0 firmas sin confirmar, no solo "la acción se pidió".
+  assert.equal(body.action.unconfirmed_count, 0);
 
   // La ficha sigue viva — a diferencia de DELETE /api/people/:id.
   assert.equal((await fetch(`${base}/api/people/${person.id}`)).status, 200);
@@ -213,7 +216,7 @@ test('sin firmas indexadas, igual queda la constancia pero no gasta una llamada 
   assert.ok(body.action.id, 'la constancia se registra aunque no hubiera nada que retirar');
 });
 
-test('si Rekognition falla, la constancia queda igual y reporta lo pendiente', async (t) => {
+test('si Rekognition falla, la constancia anota el resultado real, no que se cumplió', async (t) => {
   const matcher = deletingMatcher({ broken: true });
   const oauth = await fakeVercelOAuth();
   const { server, base, store } = await startApp(matcher);
@@ -231,6 +234,13 @@ test('si Rekognition falla, la constancia queda igual y reporta lo pendiente', a
   const body = await res.json();
   assert.deepEqual(body.faces.unconfirmed, ['face-cinco']);
   assert.ok(body.action.id, 'la acción se registra aunque Rekognition no responda');
+  // Sin esto la fila diría "se retiró la firma" aunque quedó indexada — el
+  // registro permanente (para Ley 1581) tiene que poder distinguir un retiro
+  // completo de uno que no se pudo confirmar.
+  assert.equal(body.action.unconfirmed_count, 1);
+
+  const [accion] = await store.privacyActionsForPerson(person.id);
+  assert.equal(accion.unconfirmed_count, 1, 'la fila persistida también debe cargar el resultado real');
 });
 
 test('sin sesión de admin, el endpoint redirige al login — mismo gate que el resto de /api/admin', async (t) => {
