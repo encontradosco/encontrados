@@ -18,22 +18,71 @@ const { buildStatsPageHtml, buildFunnelFragmentHtml } = require('../adminStats')
 
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
+// Copy de la pantalla de login: un mensaje por motivo, y cada uno dice qué
+// pasó y qué hacer al respecto. Los motivos los separa completeLogin (ver
+// src/adminAuth.js) — antes casi todos llegaban acá como `state`, y un
+// "la sesión expiró" ante un rechazo de Vercel deja a la persona reintentando
+// justo lo único que no puede funcionar.
+const ERROR_COPY = {
+  oauth: 'Vercel rechazó el inicio de sesión.',
+  no_state: 'La respuesta de Vercel no corresponde a un login iniciado desde acá. Empieza de nuevo con el enlace de abajo.',
+  expired:
+    'La sesión de login expiró o el navegador no conservó su cookie (dura 10 minutos). Empieza de nuevo con el enlace de abajo.',
+  state:
+    'El parámetro de seguridad del login no coincide con el de esta sesión. Si llegaste acá por un enlace que te mandaron, no lo uses: empieza el login desde esta pantalla.',
+  no_code: 'Vercel no devolvió el código de autorización y tampoco dijo por qué. Intenta de nuevo.',
+  token: 'Vercel no pudo confirmar el código de acceso. Intenta de nuevo.',
+  userinfo: 'No se pudo leer tu cuenta de Vercel. Intenta de nuevo.',
+  unverified: 'Tu correo de Vercel no está verificado — Vercel exige un correo verificado para entrar acá.'
+};
+
+// Qué significa cada código del servidor de autorización de Vercel, en
+// términos de qué hay que tocar para arreglarlo.
+// https://vercel.com/docs/sign-in-with-vercel/troubleshooting
+const OAUTH_ERROR_COPY = {
+  access_denied:
+    'La App de Vercel no le está dando acceso a esa cuenta. Si está configurada para admitir solo a miembros del team dueño, hay que entrar con una cuenta de ese team, o cambiarle el ajuste «Sign-In Access» a «Anyone with a Vercel account».',
+  invalid_request: 'Vercel rechazó la petición de autorización porque un parámetro venía mal — el detalle de abajo dice cuál.',
+  server_error: 'Vercel tuvo un error interno procesando la autorización. Intenta de nuevo en un momento.',
+  temporarily_unavailable:
+    'El servicio de autorización de Vercel no está disponible en este momento. Intenta de nuevo en un momento.'
+};
+
+// hasOwnProperty y no `table[key]` a secas: la clave viene de la query, y
+// `?error=constructor` no debería imprimir nada.
+function copyFor(table, key) {
+  return typeof key === 'string' && Object.prototype.hasOwnProperty.call(table, key) ? table[key] : '';
+}
+
+// Todo lo que sale acá viene de la query, así que TODO pasa por esc(). El
+// `error_description` en particular es texto de un tercero (Vercel), y
+// cualquiera puede armar la URL a mano con lo que se le ocurra.
+function loginErrorHtml(query) {
+  const main = copyFor(ERROR_COPY, query.error);
+  if (!main) return '';
+  const lines = [main];
+
+  if (query.error === 'oauth') {
+    const oauthError = typeof query.oauth_error === 'string' ? query.oauth_error.trim() : '';
+    const specific = copyFor(OAUTH_ERROR_COPY, oauthError);
+    if (specific) lines.push(specific);
+    if (oauthError) lines.push(`Código que devolvió Vercel: ${oauthError}`);
+    const description = typeof query.oauth_description === 'string' ? query.oauth_description.trim() : '';
+    if (description) lines.push(`Vercel dice: «${description}»`);
+  }
+
+  return `<p>⚠️ ${lines.map(esc).join('<br>')}</p>`;
+}
+
 function adminRoutes(store, matcher) {
   const router = express.Router();
 
   router.get('/login', (req, res) => {
-    const error = req.query.error;
-    const ERROR_COPY = {
-      state: 'La sesión de login expiró o no coincide. Intenta de nuevo.',
-      token: 'Vercel no pudo confirmar el código de acceso. Intenta de nuevo.',
-      userinfo: 'No se pudo leer tu cuenta de Vercel. Intenta de nuevo.',
-      unverified: 'Tu correo de Vercel no está verificado — Vercel exige un correo verificado para entrar acá.'
-    };
     // Sin estilos propios a propósito: es el gate, no el panel — el PR 6 es
     // quien merece inversión de diseño.
     const body = `
       <h1>Acceso de administración</h1>
-      ${error && ERROR_COPY[error] ? `<p>⚠️ ${esc(ERROR_COPY[error])}</p>` : ''}
+      ${loginErrorHtml(req.query)}
       <p><a href="/admin/login/start">Iniciar sesión con Vercel</a></p>
     `;
     res.send(layout('Acceso de administración', body, { path: '/admin/login' }));
