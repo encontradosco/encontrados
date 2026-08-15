@@ -401,6 +401,16 @@ test('el panel separa las coincidencias que se mostraron en pantalla de las que 
   // El único desenlace que la base puede probar, dicho con esas palabras.
   assert.match(s, /único desenlace que esta base puede probar/i);
 
+  // Una coincidencia es un parecido por encima del umbral, NO una identidad
+  // probada. Decirlo al revés contradice la tabla de "lo que no sabemos", que
+  // en la línea siguiente admite que puede ser un falso positivo.
+  assert.match(s, /No prueba que sean la misma persona/i, 'la coincidencia no se puede presentar como identidad probada');
+
+  // El total de avisos al buzón es contexto global: `contact_log` no guarda
+  // `match_id`, así que atribuirlo a una coincidencia puntual sería inventar
+  // una relación que la base no tiene.
+  assert.match(s, /contexto global y no se puede repartir/i, 'el total de avisos no puede leerse como desenlace de una coincidencia');
+
   // Los límites declarados: si alguno desaparece, el panel promete más
   // certeza de la que tiene.
   assert.match(s, /no guarda <code>match_id<\/code>/i, 'debe seguir diciendo por qué no se puede atar aviso y coincidencia');

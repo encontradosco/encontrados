@@ -556,13 +556,13 @@ function buildStatsPageHtml({ generatedAt, counts, activity, matcherStatus, extr
   const matchKnowledgeSection = `<div class="stats-section">
     ${section('Qué sabemos de cada coincidencia — y qué pudo haber pasado')}
     ${instrumentedSinceNote(activity.instrumentedSince)}
-    <p class="stats-note">Una coincidencia significa que dos fotos son del mismo rostro. <strong>Eso es todo lo que el sistema sabe por sí solo.</strong> Lo que pasó después casi nunca queda escrito acá, así que estas cifras separan lo comprobable de lo que solo se puede acotar — y no se suman entre sí: son dos formas distintas de mirar las mismas ${screenSuppression.total.display} coincidencias.</p>
+    <p class="stats-note">Una coincidencia significa que el reconocimiento facial encontró un parecido por encima de su umbral. <strong>No prueba que sean la misma persona</strong>, y es todo lo que el sistema sabe por sí solo. Lo que pasó después casi nunca queda escrito acá, así que estas cifras separan lo comprobable de lo que solo se puede acotar — y no se suman entre sí: son dos formas distintas de mirar las mismas ${screenSuppression.total.display} coincidencias.</p>
     ${table(['Lo que sí sabemos', 'Cuántas', 'Cómo lo sabemos'], knownRows)}
     ${table(['Lo que no sabemos', 'Por qué'], unknownRows)}
     <p class="stats-note"><strong>Entonces, ¿qué pudo haber pasado con una coincidencia que no podemos trazar?</strong> Una de estas cinco cosas. Con los datos de hoy, las tres últimas son <strong>indistinguibles entre sí</strong>:</p>
     <ol class="stats-note">
       <li><strong>Era un duplicado y no había nada que hacer.</strong> Es lo más probable en el tramo del 100 % (${tier100.display} coincidencias).</li>
-      <li><strong>Era real y el aviso llegó al buzón del equipo</strong>, donde una persona lo revisó y lo enrutó — ${outcomeByKey.relevo.display} avisos llegaron ahí. Si terminó bien, quedó escrito en el correo del equipo, no acá.</li>
+      <li><strong>Era real y disparó un aviso que llegó al buzón del equipo</strong>, donde queda a la espera de que una persona lo revise. Si esa revisión ocurrió, y con qué desenlace, no se puede ver desde acá. (En total han llegado ${outcomeByKey.relevo.display} avisos a ese buzón, sumando todas las coincidencias — ese número es contexto global y no se puede repartir entre ellas.)</li>
       <li><strong>Era real pero no había a quién avisar</strong>, porque el rescatista no dejó contacto — le pasó a ${rescueContactByKey.sinContacto.display} de ${rescueContactSuppression.total.display} consultas.</li>
       <li><strong>Era un falso positivo</strong> y el aviso fue ruido.</li>
       <li><strong>Era real, se avisó, y nadie alcanzó a actuar.</strong></li>
