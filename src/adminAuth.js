@@ -262,6 +262,21 @@ const OAUTH_ERROR_CODE_RE = /^[a-zA-Z0-9_.:-]{1,64}$/;
 // diagnosticar (Vercel dice ahí QUÉ parámetro no le gustó), pero acotado.
 const OAUTH_DESCRIPTION_MAX = 300;
 
+// El mismo texto tiene dos destinos con necesidades opuestas, así que se
+// prepara dos veces:
+//
+//   - La PANTALLA lo quiere corto (OAUTH_DESCRIPTION_MAX) para no volverse
+//     ilegible con un mensaje largo.
+//   - El LOG lo quiere completo: truncarlo antes de registrarlo borra
+//     justamente el detalle por el que existe este bloque.
+//
+// Y en los dos casos hay que neutralizar saltos de línea y control: el valor
+// viene de la query, así que un `%0A` deja escribir una línea entera de log
+// que parece emitida por el servidor. Se colapsa a espacios antes de escribir.
+function oneLine(text) {
+  return text.replace(/[\s\u0000-\u001f\u007f]+/g, ' ').trim();
+}
+
 function redirectToLogin(res, params) {
   return res.redirect(`/admin/login?${new URLSearchParams(params).toString()}`);
 }
@@ -301,9 +316,13 @@ async function completeLogin(req, res) {
   // resultado del cotejo igual queda en el log.
   if (providerError) {
     const oauthError = OAUTH_ERROR_CODE_RE.test(String(providerError)) ? String(providerError) : 'desconocido';
-    const description = String(providerDescription || '').trim().slice(0, OAUTH_DESCRIPTION_MAX);
+    // Completa para el log (es el detalle por el que existe este bloque) y
+    // acotada para la pantalla. Las dos pasan por oneLine: el valor viene de
+    // la query y un salto de línea dejaría escribir una línea de log falsa.
+    const descriptionForLog = oneLine(String(providerDescription || ''));
+    const description = descriptionForLog.slice(0, OAUTH_DESCRIPTION_MAX);
     console.warn(
-      `[admin-auth] Vercel rechazó la autorización: error=${oauthError} error_description=${description || '(ninguna)'} ` +
+      `[admin-auth] Vercel rechazó la autorización: error=${oauthError} error_description=${descriptionForLog || '(ninguna)'} ` +
         `— state ${!state ? 'ausente' : stateMatches ? 'coincide' : 'NO coincide'}`
     );
     return redirectToLogin(res, {
