@@ -44,11 +44,8 @@ const PIEZAS_VIGILADAS = [
     define: /function\s+matchContactBlock\s*\(/,
     porque: 'pinta en pantalla el contacto de una familia que está buscando a alguien',
   },
-  {
-    nombre: 'relayToColombiaTeBusca',
-    define: /function\s+relayToColombiaTeBusca\s*\(/,
-    porque: 'saca los datos de un reporte del sitio y los manda por correo',
-  },
+  // `relayToColombiaTeBusca` se vigilaba acá hasta que se retiró la casilla que
+  // la alimentaba: ya no existe la pieza, así que no hay nada que vigilar.
   {
     nombre: 'relayToOperators',
     define: /function\s+relayToOperators\s*\(/,

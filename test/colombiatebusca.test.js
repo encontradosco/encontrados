@@ -36,26 +36,35 @@ async function report(base, extra = {}) {
   return fetch(`${base}/report`, { method: 'POST', body: fd, redirect: 'manual' });
 }
 
-// The checkbox is the family's consent to be published on a third-party
-// registry, so it must be theirs to give: present, but never pre-ticked.
-test('the report form offers Colombia Te Busca, unticked, right above the submit button', async (t) => {
+// El formulario ofrecía «Reportar también en ColombiaTeBusca.com». Ese registro
+// no tiene forma programática de recibir un reporte, así que cada publicación
+// exigía que una persona llenara su formulario a mano — y ese paso nunca se
+// cerró. Una casilla que promete algo que no ocurre es peor que no tener la
+// casilla, así que se retiró hasta que exista una vía real.
+test('el formulario de reporte ya no ofrece publicar en un registro de terceros', async (t) => {
   const { server, base } = await startApp();
   t.after(() => server.close());
 
   const html = await (await fetch(`${base}/report`)).text();
-  assert.match(html, /Reportar también en ColombiaTeBusca\.com/);
-  assert.match(html, /name="colombiatebusca"/);
-  assert.doesNotMatch(html, /name="colombiatebusca"[^>]*checked/, 'no puede venir marcada por defecto');
+  assert.doesNotMatch(html, /name="colombiatebusca"/);
+  assert.doesNotMatch(html, /Reportar también en ColombiaTeBusca/i);
+  // Las casillas que solo existían para llenar SU formulario se van con ella.
+  for (const field of ['reporter_name', 'department', 'municipality', 'place']) {
+    assert.doesNotMatch(html, new RegExp(`name="${field}"`), `sobra la casilla ${field}`);
+  }
+  assert.doesNotMatch(html, /ctb-fields/);
 
-  // Above the submit button, which is what "al final del formulario" means to
-  // someone filling it: the last decision before sending.
-  assert.ok(
-    html.indexOf('name="colombiatebusca"') < html.indexOf('<button>Reporta desaparecido</button>'),
-    'la casilla va encima del botón de enviar'
-  );
+  // Y el estilo del grupo desplegable tampoco se queda rondando en la hoja.
+  const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'styles.css'), 'utf8');
+  assert.doesNotMatch(css, /\.ctb-fields/);
+  assert.doesNotMatch(css, /\.ctb-why/);
 });
 
-test('ticking it emails the operators everything needed to file the report there', async (t) => {
+// Retirar la casilla no basta: mientras el servidor siguiera atendiendo el
+// campo, una página vieja en caché o un bot que repita el formulario anterior
+// seguiría alimentando una cola que ya nadie atiende. Esto es lo que prueba
+// que la puerta quedó cerrada del lado del servidor, no solo en pantalla.
+test('un POST que todavía traiga el campo no manda nada al buzón de operación', async (t) => {
   const sg = await fakeSendgrid();
   process.env.AVISO_EMAIL = 'avisos@example.com';
   const { server, base } = await startApp();
@@ -65,61 +74,59 @@ test('ticking it emails the operators everything needed to file the report there
     server.close();
   });
 
-  const res = await report(base, { colombiatebusca: '1' });
-  assert.equal(res.status, 303, 'el reporte se guarda igual');
-
-  const mail = sg.received
-    .map((r) => r.body)
-    .find((b) => JSON.stringify(b.personalizations).includes('avisos@example.com'));
-  assert.ok(mail, 'los operadores deben recibir la solicitud');
-  assert.match(mail.subject, /Colombia Te Busca/);
-  assert.match(mail.subject, /Marta Isabel Quintero/);
-
-  const text = mail.content[0].value;
-  assert.match(text, /Marta Isabel Quintero/);
-  assert.match(text, /Barrio San José, Quibdó/);
-  assert.match(text, /hermana@ejemplo\.com/, 'sin el contacto no pueden llenar el formulario');
-  assert.match(text, /chaqueta roja/);
-  assert.match(text, /\/person\/\d+/);
-  assert.match(text, /\/photo\/\d+/, 'la foto es lo que permite reconocerla');
-  assert.match(text, /colombiatebusca\.com/);
-});
-
-// The default path must stay exactly as it was: nothing about this report
-// leaves encontrados.co unless the family asked for it.
-test('leaving it unticked sends nothing to the operators', async (t) => {
-  const sg = await fakeSendgrid();
-  process.env.AVISO_EMAIL = 'avisos@example.com';
-  const { server, base } = await startApp();
-  t.after(() => {
-    sg.stop();
-    delete process.env.AVISO_EMAIL;
-    server.close();
+  const res = await report(base, {
+    colombiatebusca: '1',
+    reporter_name: 'Ana Carolina Restrepo',
+    department: 'Risaralda',
+    municipality: 'Pereira',
+    place: 'Barrio Cuba, cerca del parque'
   });
 
-  const res = await report(base);
+  // El reporte se guarda igual: quitar el relevo no puede costarle el reporte
+  // a nadie.
   assert.equal(res.status, 303);
+  const personUrl = res.headers.get('location');
+  assert.match(personUrl, /^\/person\/\d+\?reported=1$/);
+  assert.equal((await fetch(`${base}${personUrl}`)).status, 200);
+
   assert.equal(
     sg.received.filter((r) => JSON.stringify(r.body).includes('avisos@example.com')).length,
-    0
+    0,
+    'ningún correo de relevo puede salir'
   );
 });
 
-// Without AVISO_EMAIL there is nowhere to relay to — but the report itself is
-// the thing that must survive, so it is stored and the visitor never sees an
-// error about our own missing configuration.
+// Sin casilla, el nombre de quien reporta ya no entra por este formulario —
+// vivía dentro del grupo que ella desplegaba. La columna `reporter` sigue
+// existiendo y la siguen llenando el API y los agregadores (ver app.test.js),
+// así que lo único que cambia es que un reporte web no la trae.
+test('un reporte web ya no guarda nombre de quien reporta', async (t) => {
+  const { server, base } = await startApp();
+  t.after(() => server.close());
+
+  const res = await report(base, { reporter_name: 'Ana Carolina Restrepo' });
+  assert.equal(res.status, 303);
+
+  const html = await (await fetch(`${base}${res.headers.get('location')}`)).text();
+  assert.doesNotMatch(html, /Reportado por/);
+  assert.doesNotMatch(html, /Ana C/);
+});
+
+// Sin AVISO_EMAIL el reporte tiene que pasar igual. Ese buzón sigue vivo para
+// los avisos de rescatista y los relevos de coincidencias, así que la prueba
+// se queda: es el reporte lo que nunca puede depender de nuestra configuración.
 test('a report still goes through when AVISO_EMAIL is not configured', async (t) => {
   delete process.env.AVISO_EMAIL;
   const { server, base } = await startApp();
   t.after(() => server.close());
 
-  const res = await report(base, { colombiatebusca: '1' });
+  const res = await report(base);
   assert.equal(res.status, 303);
 });
 
-// The failure above is silent by design — the family must never be shown an
-// error about our own configuration — so it needs a way to be seen from
-// outside. Presence only: the mailbox itself stays out of a public endpoint.
+// Los avisos que sí siguen saliendo fallan en silencio sin este buzón —el
+// visitante ve su página de éxito igual—, así que necesitan una forma de verse
+// desde afuera. Solo presencia: la dirección no se publica.
 test('/api/diag reports whether the relay mailbox is configured', async (t) => {
   const { server, base } = await startApp();
   t.after(() => {
@@ -135,118 +142,6 @@ test('/api/diag reports whether the relay mailbox is configured', async (t) => {
   const on = await (await fetch(`${base}/api/diag`)).json();
   assert.equal(on.email.aviso_email_present, true);
   assert.doesNotMatch(JSON.stringify(on), /avisos@example\.com/, 'la dirección no se publica');
-});
-
-// --------------------------------------------------------------------------
-// The fields their form needs and ours did not ask for. Every one of them is
-// optional, and the whole point of the group is that it cannot make a report
-// harder to send: someone reporting a missing relative after an earthquake,
-// on a phone with one bar, must never be stopped by a box they left empty.
-
-test('the relay fields are optional and stay out of the way until the box is ticked', async (t) => {
-  const { server, base } = await startApp();
-  t.after(() => server.close());
-
-  const html = await (await fetch(`${base}/report`)).text();
-  const fields = ['reporter_name', 'department', 'municipality', 'place'];
-  for (const field of fields) {
-    const tag = html.match(new RegExp(`<input[^>]*name="${field}"[^>]*>`));
-    assert.ok(tag, `falta la casilla ${field}`);
-    assert.doesNotMatch(tag[0], /required/, `${field} no puede ser obligatoria`);
-  }
-
-  // They live inside the group that the checkbox reveals, and that group is
-  // hidden by CSS alone — no JavaScript stands between a family and a report.
-  assert.match(html, /<div class="ctb-fields">/);
-  const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'styles.css'), 'utf8');
-  assert.match(css, /\.ctb-fields\s*\{\s*display:\s*none;\s*\}/);
-  assert.match(css, /\.share-check:has\(input:checked\)\s*~\s*\.ctb-fields/);
-});
-
-// The regression that matters most: everything above is additive. A report
-// filed exactly the way it was filed yesterday has to land exactly the same.
-test('a report with none of the new fields behaves just like before', async (t) => {
-  const sg = await fakeSendgrid();
-  process.env.AVISO_EMAIL = 'avisos@example.com';
-  const { server, base } = await startApp();
-  t.after(() => {
-    sg.stop();
-    delete process.env.AVISO_EMAIL;
-    server.close();
-  });
-
-  const res = await report(base, { colombiatebusca: '1' });
-  assert.equal(res.status, 303);
-  const personUrl = res.headers.get('location');
-  assert.match(personUrl, /^\/person\/\d+\?reported=1$/);
-  assert.equal((await fetch(`${base}${personUrl}`)).status, 200);
-
-  const text = sg.received
-    .map((r) => r.body)
-    .find((b) => JSON.stringify(b.personalizations).includes('avisos@example.com'))
-    .content[0].value;
-
-  // The single free-text contact still travels as it always did...
-  assert.match(text, /Contacto de quien reporta: hermana@ejemplo\.com/);
-  // ...and every box of their form is listed as empty. Nothing is guessed:
-  // an invented datum in a missing-persons registry is worse than a blank.
-  for (const label of [
-    'Nombre de quien reporta (reporter_name)',
-    'Teléfono de quien reporta (reporter_phone)',
-    'Correo de quien reporta (reporter_email)',
-    'Departamento',
-    'Municipio',
-    'Lugar'
-  ]) {
-    assert.match(text, new RegExp(`${label.replace(/[()]/g, '\\$&')}: \\(sin dato`));
-  }
-});
-
-test('the new fields reach the relay email under the labels their form uses', async (t) => {
-  const sg = await fakeSendgrid();
-  process.env.AVISO_EMAIL = 'avisos@example.com';
-  const { server, base } = await startApp();
-  t.after(() => {
-    sg.stop();
-    delete process.env.AVISO_EMAIL;
-    server.close();
-  });
-
-  const res = await report(base, {
-    colombiatebusca: '1',
-    contact: '',
-    contact_phone: '300 111 2233',
-    contact_email: 'tia@ejemplo.com',
-    reporter_name: 'Ana Carolina Restrepo',
-    department: 'Risaralda',
-    municipality: 'Pereira',
-    place: 'Barrio Cuba, cerca del parque'
-  });
-  assert.equal(res.status, 303);
-
-  const text = sg.received
-    .map((r) => r.body)
-    .find((b) => JSON.stringify(b.personalizations).includes('avisos@example.com'))
-    .content[0].value;
-
-  assert.match(text, /Nombre de quien reporta \(reporter_name\): Ana Carolina Restrepo/);
-  assert.match(text, /Teléfono de quien reporta \(reporter_phone\): 300 111 2233/);
-  assert.match(text, /Correo de quien reporta \(reporter_email\): tia@ejemplo\.com/);
-  assert.match(text, /Departamento: Risaralda/);
-  assert.match(text, /Municipio: Pereira/);
-  assert.match(text, /Lugar: Barrio Cuba, cerca del parque/);
-
-  // Phone and email are two boxes on the form and ONE `contact` downstream —
-  // the string a rescuer is shown after a facial match, which nothing parses.
-  assert.match(text, /Contacto de quien reporta: 300 111 2233 · tia@ejemplo\.com/);
-
-  // The reporter's name is the one new datum that gets stored, in the column
-  // that already existed for it — so it comes back out reduced, never whole.
-  const html = await (await fetch(`${base}${res.headers.get('location')}`)).text();
-  assert.match(html, /Reportado por: Ana C\./);
-  assert.doesNotMatch(html, /Restrepo/, 'el apellido de quien reporta no es público');
-  assert.doesNotMatch(html, /tia@ejemplo\.com/, 'el contacto nunca sale en una página pública');
-  assert.doesNotMatch(html, /300 111 2233/);
 });
 
 // One obligation, two boxes: exactly the rule the single field enforced.
