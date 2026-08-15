@@ -183,14 +183,28 @@ ${body}
       if (!pet) return res.status(404).send(layout('No encontrado', '<p>No existe esa mascota.</p>'));
       const photos = await petStore.petPhotosForPet(pet.id);
       const label = pet.pet_name || `${SPECIES_LABEL[pet.species]} perdido`;
+      // Una foto que processPetPhoto marcó `unreadable` nunca llegó a tener
+      // miniatura (esa etapa ni corre para ella) — un <img> apuntando a
+      // /pet-photo/:id/thumb para esa fila siempre da 404. Mismo dato,
+      // `thumb_type`, que ya trae petPhotosForPet.
       const imgs = photos
-        .map((p) => `<img src="/pet-photo/${p.id}/thumb" alt="Foto de ${esc(label)}" width="240" height="240">`)
+        .map((p) =>
+          p.thumb_type
+            ? `<img src="/pet-photo/${p.id}/thumb" alt="Foto de ${esc(label)}" width="240" height="240">`
+            : '<p class="subtle">📷 Foto no disponible.</p>'
+        )
         .join('');
       const action = pet.resolved_at
         ? '<p class="notice">✅ Esta mascota ya fue encontrada.</p>'
         : `<form method="post" action="/mascota/${pet.id}/encontrado"><button class="secondary">Marcar como encontrada</button></form>`;
       res.send(
         layout(label, `<h1 class="compact">${esc(label)}</h1>
+${req.query.reported ? '<p class="notice">✅ Reporte registrado. Cuando alguien que encontró una mascota parecida la compare, verá tu contacto y podrá avisarte.</p>' : ''}
+${
+  req.query.fotos_ilegibles
+    ? `<div class="error"><p><strong>Ojo: no pudimos leer ${Number(req.query.fotos_ilegibles) === 1 ? 'una de las fotos' : 'algunas de las fotos'} que subiste.</strong> El reporte quedó registrado, pero esa foto no sirve para compararla con otras mascotas.</p></div>`
+    : ''
+}
 <p>${esc(SPECIES_LABEL[pet.species])}${pet.description ? ' · ' + esc(pet.description) : ''}</p>
 ${imgs}
 ${action}`, { path: `/mascota/${pet.id}` })

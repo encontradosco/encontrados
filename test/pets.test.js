@@ -11,6 +11,12 @@ async function photoBytes(color) {
     .toBuffer();
 }
 
+// Un contenedor HEIC cuyo header sharp reconoce pero no puede decodificar —
+// mismo truco que test/photo-upload.test.js usa para "una foto ilegible".
+function heicBytes() {
+  return Buffer.concat([Buffer.from([0, 0, 0, 0x18]), Buffer.from('ftypheic'), Buffer.alloc(64, 7)]);
+}
+
 async function startApp() {
   const app = await createApp(await createSqliteAdapter(':memory:'));
   const server = await new Promise((resolve) => {
@@ -109,6 +115,50 @@ test('sin PET_MATCH_API_URL, el formulario de "encontré" lo dice y no rompe nad
   fd.append('photo', new File([await photoBytes({ r: 7, g: 7, b: 7 })], 'q.jpg', { type: 'image/jpeg' }));
   const html = await (await fetch(`${base}/mascotas/encontre`, { method: 'POST', body: fd })).text();
   assert.match(html, /no está disponible/);
+});
+
+test('un reporte exitoso, sin fotos ilegibles, muestra la confirmación en la ficha', async (t) => {
+  const pm = await fakePetMatcher();
+  const { server, base } = await startApp();
+  t.after(() => {
+    server.close();
+    pm.stop();
+  });
+
+  const fd = new FormData();
+  fd.set('species', 'dog');
+  fd.set('pet_name', 'Firulais');
+  fd.set('contact_phone', '300 444 5555');
+  fd.append('photos', new File([await photoBytes({ r: 3, g: 3, b: 3 })], 'firulais.jpg', { type: 'image/jpeg' }));
+  const res = await fetch(`${base}/mascotas/reporte`, { method: 'POST', body: fd, redirect: 'manual' });
+  const location = res.headers.get('location');
+  assert.match(location, /^\/mascota\/\d+\?reported=1$/);
+
+  const html = await (await fetch(`${base}${location}`)).text();
+  assert.match(html, /Reporte registrado/);
+});
+
+test('una foto ilegible entre varias no rompe el reporte, y la ficha lo dice sin dejar un <img> roto', async (t) => {
+  const pm = await fakePetMatcher();
+  const { server, base } = await startApp();
+  t.after(() => {
+    server.close();
+    pm.stop();
+  });
+
+  const fd = new FormData();
+  fd.set('species', 'dog');
+  fd.set('contact_phone', '300 666 7777');
+  fd.append('photos', new File([heicBytes()], 'ilegible.heic', { type: 'image/heic' }));
+  fd.append('photos', new File([await photoBytes({ r: 4, g: 4, b: 4 })], 'legible.jpg', { type: 'image/jpeg' }));
+  const res = await fetch(`${base}/mascotas/reporte`, { method: 'POST', body: fd, redirect: 'manual' });
+  const location = res.headers.get('location');
+  assert.match(location, /fotos_ilegibles=1/);
+
+  const html = await (await fetch(`${base}${location}`)).text();
+  assert.match(html, /no pudimos leer/i);
+  const imgTags = html.match(/<img src="\/pet-photo\//g) || [];
+  assert.equal(imgTags.length, 1, 'solo la foto legible debe tener un <img>, no una rota para la ilegible');
 });
 
 test('marcar una mascota como encontrada lo refleja en su ficha', async (t) => {
