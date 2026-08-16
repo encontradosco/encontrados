@@ -264,6 +264,106 @@ test('cuando embed() devuelve null para una foto "encontré", se borran sus byte
   );
 });
 
+test('una foto "encontré" ilegible también borra su contenido (nunca queda guardada)', async () => {
+  const { petStore } = await setup();
+  const { processPetPhoto } = require('../src/petmatch');
+  // toMatchable rechaza esto de plano: no es una imagen decodificable.
+  const basura = Buffer.from('esto no es una imagen');
+  const matcher = fakePetMatcherFor({});
+
+  const { photo, matches } = await processPetPhoto(petStore, matcher, {
+    kind: 'query',
+    species: 'dog',
+    bytes: basura,
+    contentType: 'image/jpeg'
+  });
+
+  assert.equal(photo.unreadable, true);
+  assert.deepEqual(matches, []);
+  const stored = await petStore.getPetPhoto(photo.id);
+  assert.equal(
+    stored.content.length,
+    0,
+    'una foto "encontré" ilegible debe perder sus bytes igual que cualquier otra foto "encontré"'
+  );
+});
+
+test('una mascota ya marcada como encontrada no vuelve a aparecer en nuevas coincidencias', async () => {
+  const { petStore } = await setup();
+  const { processPetPhoto } = require('../src/petmatch');
+  const perdido = await photoBytes('perdido-resuelto');
+  const encontrado = await photoBytes('encontrado-resuelto');
+  const matcher = fakePetMatcherFor({
+    [perdido.toString('utf8')]: VECTOR_A,
+    [encontrado.toString('utf8')]: VECTOR_A
+  });
+
+  const pet = await petStore.addPet({ species: 'dog', petName: 'Firulais', description: null, contact: '300 111 2222' });
+  await processPetPhoto(petStore, matcher, {
+    petId: pet.id, kind: 'report', species: 'dog', bytes: perdido, contentType: 'image/jpeg'
+  });
+
+  await petStore.markPetResolved(pet.id);
+
+  const { matches } = await processPetPhoto(petStore, matcher, {
+    kind: 'query', species: 'dog', bytes: encontrado, contentType: 'image/jpeg'
+  });
+
+  assert.equal(matches.length, 0, 'una mascota ya resuelta no debe salir como posible coincidencia');
+});
+
+test('nunca más de MAX_PET_MATCHES coincidencias, y siempre ordenadas de mayor a menor similitud', async () => {
+  const { petStore } = await setup();
+  const { processPetPhoto, MAX_PET_MATCHES } = require('../src/petmatch');
+
+  // Vectores [1, y, 0] con y creciente: contra una consulta [1, 0, 0], la
+  // similitud coseno cae monótonamente al crecer y, así que este orden de
+  // creación es también el orden esperado de mayor a menor similitud.
+  // sim(y) = 1/sqrt(1+y^2) * 100 — para y=0.5 da ~89.4, todavía por encima
+  // del umbral (80), así que las 6 quedan como candidatas antes del tope.
+  const ys = [0, 0.1, 0.2, 0.3, 0.4, 0.5];
+  const vectors = {};
+  const petIdByY = {};
+  for (const y of ys) {
+    const label = `candidato-y${y}`;
+    const bytes = await photoBytes(label);
+    vectors[bytes.toString('utf8')] = [1, y, 0];
+  }
+  const queryLabel = 'buscando-entre-varios';
+  const queryBytes = await photoBytes(queryLabel);
+  vectors[queryBytes.toString('utf8')] = [1, 0, 0];
+  const matcher = fakePetMatcherFor(vectors);
+
+  for (const y of ys) {
+    const pet = await petStore.addPet({ species: 'dog', petName: null, description: null, contact: '300 000 0000' });
+    petIdByY[y] = pet.id;
+    const bytes = await photoBytes(`candidato-y${y}`);
+    await processPetPhoto(petStore, matcher, {
+      petId: pet.id, kind: 'report', species: 'dog', bytes, contentType: 'image/jpeg'
+    });
+  }
+
+  const { matches } = await processPetPhoto(petStore, matcher, {
+    kind: 'query', species: 'dog', bytes: queryBytes, contentType: 'image/jpeg'
+  });
+
+  assert.equal(matches.length, MAX_PET_MATCHES, `nunca deben volver más de ${MAX_PET_MATCHES} coincidencias`);
+  for (let i = 1; i < matches.length; i++) {
+    assert.ok(
+      matches[i - 1].similarity >= matches[i].similarity,
+      'las coincidencias deben venir ordenadas de mayor a menor similitud'
+    );
+  }
+  const matchedPetIds = matches.map((m) => m.pet_id);
+  for (const y of [0, 0.1, 0.2, 0.3, 0.4]) {
+    assert.ok(matchedPetIds.includes(petIdByY[y]), `el candidato y=${y} debía estar entre los ${MAX_PET_MATCHES} mejores`);
+  }
+  assert.ok(
+    !matchedPetIds.includes(petIdByY[0.5]),
+    'el candidato con menor similitud debía quedar fuera del tope'
+  );
+});
+
 test('backfillUnindexedPetPhotos borra bytes de una foto "encontré" después de procesarla', async () => {
   const { petStore } = await setup();
   const { processPetPhoto, backfillUnindexedPetPhotos } = require('../src/petmatch');

@@ -672,15 +672,32 @@ async function createSqliteAdapter(dbPath) {
     async clearPetPhotoContent(photoId) {
       db.prepare('UPDATE pet_photos SET content = ? WHERE id = ?').run(Buffer.alloc(0), photoId);
     },
+    // LEFT JOIN porque una foto 'query' no tiene pet_id (nadie sabe todavía de
+    // qué mascota es) — el filtro de resuelta solo debe aplicar cuando SÍ hay
+    // una mascota asociada (siempre el caso para 'report', nunca para
+    // 'query'). Mostrar como "posible avistamiento" a una mascota que ya se
+    // marcó como encontrada no ayuda a nadie.
     async petPhotosForMatching(kind, species) {
       return db
         .prepare(
-          'SELECT id, pet_id, embedding FROM pet_photos WHERE kind = ? AND species = ? AND embedding IS NOT NULL'
+          `SELECT pet_photos.id, pet_photos.pet_id, pet_photos.embedding
+           FROM pet_photos
+           LEFT JOIN pets ON pets.id = pet_photos.pet_id
+           WHERE pet_photos.kind = ? AND pet_photos.species = ? AND pet_photos.embedding IS NOT NULL
+             AND (pet_photos.pet_id IS NULL OR pets.resolved_at IS NULL)`
         )
         .all(kind, species);
     },
+    // Mismo patrón que photosMissingDerivatives (personas): sin el filtro de
+    // contenido no vacío, una foto 'query' que ya se procesó y se le borraron
+    // los bytes (nunca va a tener embedding si el matcher estaba caído en su
+    // momento y nadie corrió el backfill mientras tanto) queda "pendiente"
+    // para siempre y ahoga la red de seguridad con filas que ya no se pueden
+    // comparar.
     async petPhotosMissingEmbedding(limit) {
-      return db.prepare('SELECT * FROM pet_photos WHERE embedding IS NULL ORDER BY id LIMIT ?').all(limit);
+      return db
+        .prepare('SELECT * FROM pet_photos WHERE embedding IS NULL AND length(content) > 0 ORDER BY id LIMIT ?')
+        .all(limit);
     },
     async petPhotosForPet(petId) {
       return db

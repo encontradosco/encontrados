@@ -31,6 +31,35 @@ test('con la URL puesta, embed() llama al servicio y devuelve el vector', async 
   delete process.env.PET_MATCH_API_URL;
 });
 
+test('el status del matcher activo nunca repite la URL del servicio (sin auth, /api/diag es público)', async () => {
+  const { server, base } = await fakePetMatcherServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ embedding: [0.1, 0.2], model: 'modelo-fake' }));
+  });
+  process.env.PET_MATCH_API_URL = base;
+  const { createPetMatcher } = require('../src/petfaces');
+  const matcher = createPetMatcher();
+  assert.equal(matcher.status, 'activo');
+  assert.ok(!matcher.status.includes(base), 'el status no debe filtrar la dirección del servicio');
+  server.close();
+  delete process.env.PET_MATCH_API_URL;
+});
+
+test('un 200 sin un embedding válido (servicio mal configurado) devuelve null, no basura', async () => {
+  const { server, base } = await fakePetMatcherServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    // Un 200 real, pero de otro servicio cualquiera — sin la forma esperada.
+    res.end(JSON.stringify({ ok: true }));
+  });
+  process.env.PET_MATCH_API_URL = base;
+  const { createPetMatcher } = require('../src/petfaces');
+  const matcher = createPetMatcher();
+  const result = await matcher.embed(Buffer.from('foto'), 'image/jpeg');
+  assert.equal(result, null, 'sin un array de embedding, debe fallar limpio en vez de guardar undefined/undefined');
+  server.close();
+  delete process.env.PET_MATCH_API_URL;
+});
+
 test('si el servicio responde con error, embed() devuelve null sin lanzar', async () => {
   const { server, base } = await fakePetMatcherServer((req, res) => {
     res.writeHead(500).end('boom');

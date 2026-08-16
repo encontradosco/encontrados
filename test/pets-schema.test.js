@@ -85,6 +85,55 @@ test('setPetPhotoEmbedding + petPhotosForMatching filtran por kind y especie', a
   assert.equal((await adapter.petPhotosMissingEmbedding(50)).some((p) => p.id === sinEmbedding.id), true);
 });
 
+test('petPhotosMissingEmbedding no incluye una foto "encontré" cuyo contenido ya se borró', async () => {
+  const adapter = await freshAdapter();
+  // Una foto 'query' cuyo contenido ya se limpió (procesada mientras el
+  // matcher estaba caído, y nadie corrió el backfill desde entonces) no
+  // tiene forma de conseguir jamás un embedding — sin el filtro de contenido
+  // no vacío, se quedaría "pendiente" para siempre y ahogaría la red de
+  // seguridad con filas que ya no se pueden comparar.
+  const cleared = await adapter.insertPetPhoto({
+    petId: null, kind: 'query', species: 'dog', content: Buffer.from('foto'), contentType: 'image/jpeg'
+  });
+  await adapter.clearPetPhotoContent(cleared.id);
+
+  const pending = await adapter.insertPetPhoto({
+    petId: null, kind: 'query', species: 'dog', content: Buffer.from('foto viva'), contentType: 'image/jpeg'
+  });
+
+  const missing = await adapter.petPhotosMissingEmbedding(50);
+  assert.equal(missing.some((p) => p.id === cleared.id), false, 'una foto ya vaciada no debe volver a "pendiente"');
+  assert.equal(missing.some((p) => p.id === pending.id), true, 'una foto con contenido sí debe seguir pendiente');
+});
+
+test('petPhotosForMatching excluye las fotos de una mascota ya marcada como resuelta', async () => {
+  const adapter = await freshAdapter();
+  const pet = await adapter.insertPet({ species: 'dog', description: null, contact: '300 000 0000' });
+  const report = await adapter.insertPetPhoto({
+    petId: pet.id, kind: 'report', species: 'dog', content: Buffer.from('f'), contentType: 'image/jpeg'
+  });
+  await adapter.setPetPhotoEmbedding(report.id, [0.1, 0.2, 0.3], 'modelo-test');
+
+  let candidates = await adapter.petPhotosForMatching('report', 'dog');
+  assert.equal(candidates.length, 1, 'antes de resolverse, sí debe salir como candidata');
+
+  await adapter.markPetResolved(pet.id);
+
+  candidates = await adapter.petPhotosForMatching('report', 'dog');
+  assert.equal(candidates.length, 0, 'una mascota ya resuelta no debe salir como candidata de coincidencia');
+});
+
+test('petPhotosForMatching no excluye fotos "encontré" (que no tienen pet_id) por el filtro de resuelta', async () => {
+  const adapter = await freshAdapter();
+  const query = await adapter.insertPetPhoto({
+    petId: null, kind: 'query', species: 'dog', content: Buffer.from('f'), contentType: 'image/jpeg'
+  });
+  await adapter.setPetPhotoEmbedding(query.id, [0.1, 0.2, 0.3], 'modelo-test');
+
+  const candidates = await adapter.petPhotosForMatching('query', 'dog');
+  assert.equal(candidates.length, 1, 'una foto "encontré" sin mascota asociada no debe caer en el filtro de resuelta');
+});
+
 test('clearPetPhotoContent vacía el contenido sin borrar la fila', async () => {
   const adapter = await freshAdapter();
   const photo = await adapter.insertPetPhoto({

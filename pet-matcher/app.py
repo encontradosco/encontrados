@@ -11,12 +11,21 @@ import io
 from flask import Flask, request, jsonify
 from PIL import Image
 
-from model import embed_image, MODEL_NAME
+from model import embed_image, MODEL_NAME, _load
 
 
 def create_app(embed_fn=None):
     app = Flask(__name__)
-    embed = embed_fn or embed_image
+    if embed_fn is None:
+        # Cargar el modelo AL ARRANCAR, no en el primer /embed que llegue —
+        # así el primer reporte real no paga el costo de la descarga/carga
+        # del modelo, tal como pide el diseño. El camino de pruebas
+        # (embed_fn inyectado) nunca debe tocar el modelo real, así que este
+        # `_load()` eager solo corre cuando NO hay una función de mentira.
+        _load()
+        embed = embed_image
+    else:
+        embed = embed_fn
 
     @app.route('/embed', methods=['POST'])
     def embed_route():

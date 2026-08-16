@@ -15,7 +15,11 @@ function createPetMatcher(timeoutMs = 15000) {
   }
   return {
     enabled: true,
-    status: `activo (${apiUrl})`,
+    // Nunca la URL acá: /api/diag es público y sin llave, y este servicio no
+    // tiene autenticación (ver la nota al tope de pet-matcher/app.py) —
+    // anunciar su dirección exacta es publicarle el blanco a quien quiera
+    // pegarle sin que nadie se lo pida.
+    status: 'activo',
     async embed(bytes, contentType) {
       try {
         const form = new FormData();
@@ -30,6 +34,15 @@ function createPetMatcher(timeoutMs = 15000) {
           return null;
         }
         const body = await res.json();
+        // Un PET_MATCH_API_URL mal configurado, apuntando a otro servicio
+        // cualquiera que responda 200 con JSON, no debe colarse como éxito:
+        // sin esto, body.embedding/body.model llegan `undefined` y la fila
+        // queda con basura en vez de fallar limpio (mismo defecto que un
+        // embedding nunca se borra si nadie lo nota).
+        if (!Array.isArray(body.embedding)) {
+          console.error('[petfaces] /embed respondió 200 sin un embedding válido');
+          return null;
+        }
         return { embedding: body.embedding, model: body.model };
       } catch (e) {
         console.error('[petfaces] no se pudo llamar al servicio de mascotas:', e.message);

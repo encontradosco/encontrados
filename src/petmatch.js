@@ -11,6 +11,12 @@ const { makeThumbnail } = require('./thumbs');
 
 const PET_MATCH_THRESHOLD = parseFloat(process.env.PET_MATCH_THRESHOLD || '80');
 
+// Tope duro de coincidencias devueltas por una comparación — mismo espíritu
+// que MaxFaces/MAX_QUERY_PHOTOS ya usan en el lado de personas: sin esto, una
+// foto genérica (un perro café común) podría devolver decenas de "posibles"
+// avistamientos, que no ayudan a nadie a decidir nada.
+const MAX_PET_MATCHES = 5;
+
 function cosineSimilarity(a, b) {
   let dot = 0;
   let na = 0;
@@ -25,15 +31,20 @@ function cosineSimilarity(a, b) {
 }
 
 // Compara contra el lado OPUESTO (report ⟷ query), filtrando por especie —
-// nunca cruza perro con gato. Devuelve [{ id, pet_id, similarity }] ordenado
-// de mayor a menor similitud, solo por encima del umbral.
+// nunca cruza perro con gato. petPhotosForMatching ya excluye del lado de
+// 'report' cualquier foto de una mascota marcada como resuelta (resolved_at) —
+// mostrar como "posible avistamiento" a una mascota que ya se encontró no
+// ayuda a nadie y confunde. Devuelve [{ id, pet_id, similarity }] ordenado de
+// mayor a menor similitud, solo por encima del umbral, y nunca más de
+// MAX_PET_MATCHES filas.
 async function matchPetPhoto(petStore, { kind, species, embedding }) {
   const oppositeKind = kind === 'report' ? 'query' : 'report';
   const candidates = await petStore.petPhotosForMatching(oppositeKind, species);
   return candidates
     .map((c) => ({ ...c, similarity: cosineSimilarity(embedding, c.embedding) * 100 }))
     .filter((c) => c.similarity >= PET_MATCH_THRESHOLD)
-    .sort((a, b) => b.similarity - a.similarity);
+    .sort((a, b) => b.similarity - a.similarity)
+    .slice(0, MAX_PET_MATCHES);
 }
 
 // Guarda la foto, pide su embedding, compara, y (solo para kind='report')
@@ -55,6 +66,7 @@ async function processPetPhoto(petStore, petMatcher, { petId, kind, species, sub
   if (!usable) {
     console.warn(`[petmatch] foto ${photo.id} ilegible (${contentType}) — guardada sin comparar`);
     photo.unreadable = true;
+    if (kind === 'query') await petStore.clearPetPhotoContent(photo.id);
     return { photo, matches: [] };
   }
   const content = usable.bytes;
@@ -138,4 +150,4 @@ async function backfillUnindexedPetPhotos(petStore, petMatcher, limit = 100) {
   return { ok: true, pending: pending.length, processed, failed };
 }
 
-module.exports = { processPetPhoto, backfillUnindexedPetPhotos, PET_MATCH_THRESHOLD, cosineSimilarity };
+module.exports = { processPetPhoto, backfillUnindexedPetPhotos, PET_MATCH_THRESHOLD, MAX_PET_MATCHES, cosineSimilarity };

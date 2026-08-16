@@ -3,6 +3,7 @@ const assert = require('node:assert');
 const sharp = require('sharp');
 const { createSqliteAdapter } = require('../src/store/sqlite');
 const { createApp } = require('../src/server');
+const { nullMatcher } = require('../src/faces');
 const { fakePetMatcher } = require('./helpers');
 
 async function photoBytes(color) {
@@ -18,7 +19,11 @@ function heicBytes() {
 }
 
 async function startApp() {
-  const app = await createApp(await createSqliteAdapter(':memory:'));
+  // nullMatcher explícito: sin esto, createApp cae en createLazyMatcher()
+  // real — si quien corre `npm test` tiene credenciales de AWS en su .env
+  // local, esta suite (que no habla de caras) terminaría llamando a
+  // Rekognition de verdad. Mismo patrón que ya usa el resto de la suite.
+  const app = await createApp(await createSqliteAdapter(':memory:'), nullMatcher);
   const server = await new Promise((resolve) => {
     const s = app.listen(0, () => resolve(s));
   });
@@ -195,7 +200,9 @@ test('/api/reindex recoge fotos de mascotas que quedaron sin embedding', async (
   const adapter = await createSqliteAdapter(':memory:');
 
   // Primera instancia: sin PET_MATCH_API_URL, como si el servicio estuviera caído al reportar.
-  const app1 = await createApp(adapter);
+  // nullMatcher explícito por la misma razón que en startApp() — esta prueba
+  // no habla de caras y no debe poder tocar AWS real.
+  const app1 = await createApp(adapter, nullMatcher);
   const server1 = await new Promise((resolve) => {
     const s = app1.listen(0, () => resolve(s));
   });
@@ -216,7 +223,7 @@ test('/api/reindex recoge fotos de mascotas que quedaron sin embedding', async (
   // que arranca ya con el servicio disponible — no es el MISMO petMatcher
   // "recuperándose", es lo que de verdad pasaría en producción con una
   // instancia serverless nueva.
-  const app2 = await createApp(adapter);
+  const app2 = await createApp(adapter, nullMatcher);
   const server2 = await new Promise((resolve) => {
     const s = app2.listen(0, () => resolve(s));
   });
