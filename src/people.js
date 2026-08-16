@@ -6,6 +6,12 @@ const { logMerge } = require('./logbook');
 const { canonicalDepartment } = require('./departments');
 const { mergeBlockReason } = require('./merge-guard');
 
+// Cuántos candidatos por encima del umbral se examinan antes de rendirse y
+// abrir un registro nuevo. Cada uno cuesta una lectura de sus updates, y pasar
+// de un puñado solo ocurre con nombres muy comunes, donde el veto es justamente
+// lo que hay que aplicar a cada uno.
+const MERGE_CANDIDATES = 5;
+
 const STATUSES = ['safe', 'injured', 'missing', 'deceased', 'unknown'];
 // 'aggregator': updates pushed by an external data aggregator, distinct from
 // the app's own web/whatsapp/api channels (see POST /api/updates).
@@ -84,21 +90,26 @@ function createStore(adapter) {
     const exact = await adapter.exactByNormalized(norm);
     if (exact) return { person: isoRow(exact), created: false };
 
+    // Se recorren TODOS los candidatos por encima del umbral, de mayor a menor
+    // parecido, no solo el mejor: que el más parecido esté vetado no dice nada
+    // del siguiente, y quedarse en el primero abriría un registro nuevo al lado
+    // de una persona con la que sí cuadraba. `blocked` guarda el primer
+    // rechazado — el que se habría fusionado antes de #150.
+    const incoming = {
+      department: canonicalDepartment(signals.department),
+      age: parseAge(signals.age)
+    };
     let blocked = null;
-    const [best] = await searchPeople(fullName, { limit: 1, minScore: 0.85 });
-    if (best) {
-      const reason = mergeBlockReason(
-        { department: canonicalDepartment(signals.department), age: parseAge(signals.age) },
-        await getUpdates(best.id)
-      );
+    for (const candidate of await searchPeople(fullName, { limit: MERGE_CANDIDATES, minScore: 0.85 })) {
+      const reason = mergeBlockReason(incoming, await getUpdates(candidate.id));
       if (!reason) {
         // Solo la fusión difusa (por score) se registra — un match exacto sobre
         // el mismo normalized_name no es una decisión discutible. Y se registra
         // la que OCURRE: una fusión vetada no es una fusión.
-        await logMerge(adapter, { personId: best.id, submittedName: fullName, score: best.score });
-        return { person: await getPerson(best.id), created: false };
+        await logMerge(adapter, { personId: candidate.id, submittedName: fullName, score: candidate.score });
+        return { person: await getPerson(candidate.id), created: false };
       }
-      blocked = { reason, personId: best.id, score: best.score };
+      if (!blocked) blocked = { reason, personId: candidate.id, score: candidate.score };
     }
 
 

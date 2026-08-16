@@ -159,6 +159,21 @@ test('dos nombres parecidos en departamentos distintos crean personas separadas'
   await store.close();
 });
 
+// Que el candidato MÁS parecido esté vetado no dice nada del siguiente.
+// Quedarse en el primero abriría un registro nuevo al lado de una persona con
+// la que el reporte sí cuadraba — un duplicado fabricado por el propio veto.
+test('si el candidato más parecido queda vetado, se intenta con el siguiente', async () => {
+  const store = await freshStore();
+  const masParecido = await reportar(store, 'Persona Prueva Uno', { department: 'Antioquia' }); // 0.967
+  const compatible = await reportar(store, 'Persona Prueba Nuno', { department: 'Quindío' }); // 0.900
+  assert.notEqual(compatible.person.id, masParecido.person.id, 'el montaje necesita dos registros');
+
+  const nuevo = await reportar(store, 'Persona Prueba Uno', { department: 'Quindío' });
+  assert.equal(nuevo.created, false, 'no puede estrenar registro habiendo uno compatible');
+  assert.equal(nuevo.person.id, compatible.person.id, 'cae en el segundo candidato, no en el primero');
+  await store.close();
+});
+
 test('dos nombres parecidos con edades lejanas crean personas separadas', async () => {
   const store = await freshStore();
   const primero = await reportar(store, 'Persona Prueba Uno', { age: 33 });
