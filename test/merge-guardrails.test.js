@@ -111,6 +111,28 @@ test('nombre >= 0.85, mismo departamento: se fusiona, y department_match queda "
   assert.equal(mergeCheck.blocked, false);
 });
 
+// Señalado en revisión del PR: mirar solo el update MÁS RECIENTE se queda
+// ciego si ESE update en particular no repite el departamento — por ejemplo
+// un update de solo-estado que llega después del reporte original.
+// latestDepartmentForPerson busca hacia atrás en TODOS los updates.
+test('un update posterior sin departamento no tapa el departamento de un update anterior', async () => {
+  const store = await freshStore();
+  const { person: p1 } = await store.findOrCreatePerson('John Alex Gomez');
+  await store.addUpdate(p1.id, { status: 'missing', department: 'Chocó', source: 'web' });
+  // Un segundo update sobre la MISMA persona, sin departamento — por ejemplo
+  // una confirmación de estado que no repitió el dato.
+  await store.addUpdate(p1.id, { status: 'missing', message: 'Sigue sin aparecer', source: 'web' });
+
+  const { person: p2, mergeCheck } = await store.findOrCreatePerson('Johan Gómez', { department: 'Chocó' });
+  assert.equal(p2.id, p1.id);
+  assert.equal(
+    mergeCheck.departmentMatch,
+    'match',
+    'el departamento del primer update sigue siendo la señal, aunque el más reciente no lo repita'
+  );
+  assert.equal(mergeCheck.blocked, false);
+});
+
 // El caso real del issue: dos ciudades a ~200 km, fusionadas por nombre solo.
 test('nombre >= 0.85 pero departamentos DISTINTOS: NO se fusiona — se crea una persona aparte', async () => {
   const store = await freshStore();

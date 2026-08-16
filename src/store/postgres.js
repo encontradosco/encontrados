@@ -291,6 +291,20 @@ async function createPostgresAdapter(connectionString) {
         [personId]
       );
     },
+    // #150, señalado en revisión del PR: mirar solo el update MÁS RECIENTE
+    // para el departamento se queda ciego si ese último update en particular
+    // no trae uno (por ejemplo un update de solo-estado sin repetir el dato).
+    // Esto busca el departamento no nulo más reciente entre TODOS los updates
+    // de la persona — el mismo patrón que ya usa matchContactBlock (routes/web.js)
+    // para no perder un contacto que sí quedó en un update anterior.
+    async latestDepartmentForPerson(personId) {
+      const row = await one(
+        `SELECT department FROM updates WHERE person_id = $1 AND department IS NOT NULL
+         ORDER BY created_at DESC, id DESC LIMIT 1`,
+        [personId]
+      );
+      return row ? row.department : null;
+    },
     // Everyone whose LATEST update is 'missing' — not everyone who was EVER
     // reported missing. Under the old "has ANY missing update" filter a person
     // later confirmed alive stayed on the list forever: their family sees them

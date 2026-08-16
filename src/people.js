@@ -58,8 +58,12 @@ function createStore(adapter) {
   // real que comparar, el comportamiento es el de siempre: se fusiona.
   async function evaluateMerge(candidate, { department, matcher, photoBytes }) {
     const score = candidate.score;
-    const candidateUpdate = await getLatestUpdate(candidate.id);
-    const candidateDept = (candidateUpdate && candidateUpdate.department) || null;
+    // El departamento no nulo MÁS RECIENTE entre todos los updates del
+    // candidato — no solo el del último update, que puede no traer uno
+    // (señalado en revisión del PR: un update de solo-estado no repite el
+    // dato de un reporte anterior, y mirar solo ese último dejaba pasar
+    // señal que sí existía).
+    const candidateDept = await latestDepartmentForPerson(candidate.id);
 
     let departmentMatch = 'unknown';
     if (department && candidateDept) {
@@ -177,6 +181,12 @@ function createStore(adapter) {
 
   async function getLatestUpdate(personId) {
     return isoRow(await adapter.latestUpdate(personId));
+  }
+
+  // Uso interno de evaluateMerge — no hace falta exportarlo, nadie más lo
+  // necesita hoy.
+  async function latestDepartmentForPerson(personId) {
+    return adapter.latestDepartmentForPerson(personId);
   }
 
   async function getRecentUpdates(limit = 20) {
