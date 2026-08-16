@@ -140,6 +140,24 @@ async function relayToOperators({ reason, channel, address, subject, text, perso
   return { ...result, relayed: true };
 }
 
+// Manda un correo al buzón de operación con el asunto y el cuerpo que arma
+// quien llama. Comparte la mecánica de `relayToOperators` (leer `avisoEmail()`
+// en vivo, degradar con un log claro si no está configurada, nunca lanzar)
+// pero sin su plantilla fija de "aviso retenido de coincidencia" — para los
+// llamadores que arman su propio texto porque lo que mandan no es ni un aviso
+// de coincidencia ni una actualización de estado: hoy son el aviso de un
+// rescatista (POST /rescate/aviso) y el respaldo de /ideas y /bug cuando
+// GitHub no responde. Antes cada uno reimplementaba el mismo "si hay buzón,
+// mandar; si no, loguear y degradar" con su propia forma.
+async function mailOperators(subject, body) {
+  const to = avisoEmail();
+  if (!to) {
+    console.error(`[notify:operadores] PERDIDO — AVISO_EMAIL sin configurar. asunto="${subject}"\n${body}`);
+    return { ok: false, error: 'AVISO_EMAIL no configurada' };
+  }
+  return sendEmail(to, subject, body);
+}
+
 // Returns { ok, status, error } and logs loudly — email silence is a bug we
 // must be able to diagnose from the Vercel logs alone.
 //
@@ -427,6 +445,7 @@ module.exports = {
   notifyMode,
   relayEnabled,
   relayToOperators,
+  mailOperators,
   avisoEmail,
   rescueConfirmTemplate,
   rescueSourceTemplate,
