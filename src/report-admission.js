@@ -189,10 +189,8 @@ function createReportAdmission({
       }
 
       // ---- 2. Find or create the person ----------------------------------
-      // Las señales van acá y no solo al update: son parte de la decisión de a
-      // quién pertenece este reporte, no un dato que se guarda después. Cuando
-      // contradicen a la persona que el nombre encontró, `blocked` dice por qué
-      // y el reporte estrena su propio registro en vez de fundirse con ella.
+      // Las señales entran acá porque deciden a quién pertenece el reporte, no
+      // solo qué se guarda de él.
       const { person, created, blocked } = await store.findOrCreatePerson(cleanName, { department, age });
 
       // Read the record's existing report photo BEFORE this report's own
@@ -228,6 +226,13 @@ function createReportAdmission({
       // before notifying, so alerts never reach the wrong subscribers and the
       // response never reports the wrong person. This is a system invariant,
       // not an API detail.
+      //
+      // Acá también gana el external_id sobre el veto de #150: si el que llama
+      // dice «esta es la misma ficha», esa afirmación de identidad pesa más que
+      // nuestro parecido de nombres, y respetarla es lo que evita que cada
+      // reenvío fabrique una fila nueva. El reporte vuelve a la persona de la
+      // que el veto lo separó, y `blocked` se vacía para no afirmar lo
+      // contrario.
       const owner =
         update.person_id === person.id
           ? person
@@ -299,9 +304,10 @@ function createReportAdmission({
       ok: true,
       person: owner,
       personCreated: created,
-      // null, o { reason, personId, score }: el registro con el que este
-      // reporte se habría fusionado por nombre, y la señal que lo impidió.
-      blocked: blocked || null,
+      // null, o { reason, personId, score }: con quién se habría fusionado y
+      // qué señal lo impidió. Vacío si `owner` terminó siendo esa misma
+      // persona, porque entonces el upsert por external_id deshizo el veto.
+      blocked: blocked && String(owner.id) !== String(blocked.personId) ? blocked : null,
       update,
       photos: storedPhotos,
       unreadablePhotos,

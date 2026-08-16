@@ -72,17 +72,12 @@ function createStore(adapter) {
 
   // Reuse an existing person when the name confidently matches; otherwise create.
   //
-  // `signals` son el departamento y la edad que declara el reporte que llega.
-  // Solo vetan la fusión POR PARECIDO (>= 0.85), que es la que #150 denuncia y
-  // la que su criterio de aceptación nombra. Un nombre normalizado idéntico
-  // sigue cayendo en la misma persona sin mirar nada más: es una señal mucho
-  // más fuerte que un parecido, y vetar ahí partiría el camino más común que
-  // existe —dos familiares reportando a la misma persona, uno diciendo dónde
-  // vivía y el otro dónde la vieron—.
+  // `signals` solo vetan la fusión por PARECIDO. Un nombre normalizado idéntico
+  // sigue cayendo en la misma persona: es una señal mucho más fuerte, y vetar
+  // ahí partiría a dos familiares reportando a la misma persona.
   //
-  // Cuando el veto entra, el reporte NO se pierde: se le abre su propio
-  // registro, que es la separación que la familia necesitaba. `blocked` sale en
-  // el retorno para que quede registrado con su razón.
+  // Ojo: con `externalId`, addUpdate puede devolver el reporte a la persona de
+  // la que este veto lo separó — ver el paso 4 de report-admission.
   async function findOrCreatePerson(fullName, signals = {}) {
     const norm = normalize(fullName);
     if (!norm) throw new Error('Name is required');

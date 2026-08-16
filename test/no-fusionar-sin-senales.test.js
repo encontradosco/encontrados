@@ -17,6 +17,7 @@ const { createApp } = require('../src/server');
 const { nullMatcher } = require('../src/faces');
 const { createStore } = require('../src/people');
 const { mergeBlockReason, AGE_MARGIN_YEARS } = require('../src/merge-guard');
+const { createReportAdmission } = require('../src/report-admission');
 
 async function freshStore() {
   return createStore(await createSqliteAdapter(':memory:'));
@@ -180,6 +181,29 @@ test('un registro que ya juntó dos departamentos deja de absorber reportes', as
   const nuevo = await reportar(store, 'Persona Prueba Nuno', { department: 'Quindío' });
   assert.equal(nuevo.created, true, 'aunque coincida con uno de los dos, el registro ya no es de fiar');
   assert.equal(nuevo.blocked.reason, 'department');
+  await store.close();
+});
+
+// El external_id le gana al veto, a propósito: si el que llama dice «esta es la
+// misma ficha», esa afirmación de identidad pesa más que nuestro parecido de
+// nombres, y respetarla es lo que evita que cada reenvío fabrique una fila
+// nueva. Queda escrito porque es lo único que hace que el veto NO se cumpla, y
+// un agente que lo descubra midiendo va a creer que encontró un bug.
+test('un external_id que ya existe le gana al veto, y el reporte no se duplica', async () => {
+  const store = await freshStore();
+  const { admitReport } = createReportAdmission({ store, matcher: nullMatcher });
+  const enviar = (name, department) =>
+    admitReport({ name, status: 'missing', source: 'aggregator', externalId: 'ficha-1', department });
+
+  const primero = await enviar('Persona Prueba Uno', 'Quindío');
+  const segundo = await enviar('Persona Prueba Nuno', 'Antioquia');
+
+  assert.equal(segundo.update.id, primero.update.id, 'el reenvío no puede duplicar la ficha');
+  assert.equal(String(segundo.person.id), String(primero.person.id), 'el external_id manda sobre el veto');
+  // Y entonces `blocked` no puede decir que separó a nadie: el veto se intentó,
+  // pero el upsert lo deshizo, y afirmar lo contrario sería un registro falso
+  // el día que el PR 3 escriba esto en el merge_log.
+  assert.equal(segundo.blocked, null);
   await store.close();
 });
 
