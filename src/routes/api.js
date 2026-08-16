@@ -160,6 +160,12 @@ function apiRoutes(store, matcher, petStore, petMatcher) {
         // http(s)-only rule, so it can't end up meaning one thing here and
         // another one on the next entry point that starts accepting a link.
         sourceUrl: req.body.source_url,
+        // Igual de crudos y por la misma razón: la puerta que canonicaliza el
+        // departamento vive en addUpdate. Se aceptan si llegan y no se exigen —
+        // el contrato de esta ruta no cambia, y el agregador no puede perder una
+        // ficha por un campo que su fuente no tiene.
+        department: req.body.department,
+        age: req.body.age,
         reporter,
         contact,
         externalId,
