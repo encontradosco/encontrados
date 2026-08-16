@@ -733,6 +733,28 @@ async function createPostgresAdapter(connectionString) {
         [petId]
       );
     },
+    // El listado público — espejo de missingPeople: toda mascota sin
+    // resolved_at, más reciente primero.
+    async lostPets(limit) {
+      return all('SELECT * FROM pets WHERE resolved_at IS NULL ORDER BY created_at DESC LIMIT $1', [limit]);
+    },
+    // Espejo de reunitedCount — el contador de buenas noticias.
+    async reunitedPetsCount() {
+      const r = await one('SELECT COUNT(*)::int AS n FROM pets WHERE resolved_at IS NOT NULL', []);
+      return r.n;
+    },
+    // Una foto por mascota para el listado — espejo de reportPhotosForPeople:
+    // la primera foto 'report' que además tenga miniatura gana, para no
+    // repetir en el listado el problema de una foto ilegible sin thumb.
+    async petPhotosForPets(petIds) {
+      if (!petIds.length) return [];
+      return all(
+        `SELECT id, pet_id, content_type, thumb_type FROM pet_photos
+         WHERE kind = 'report' AND pet_id = ANY($1)
+         ORDER BY pet_id, (thumb_type IS NULL), id`,
+        [petIds]
+      );
+    },
 
     async close() {
       await pool.end();

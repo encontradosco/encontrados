@@ -242,3 +242,62 @@ test('el sitio enlaza a mascotas desde la navegación', async (t) => {
   const html = await (await fetch(base)).text();
   assert.match(html, /href="\/mascotas"/);
 });
+
+// El listado de /mascotas es el espejo del de personas en '/' — mismo patrón
+// de miniatura diferida (nunca la foto completa de una), mismo contador de
+// "reencontradas" y mismo estado vacío.
+test('sin mascotas reportadas, /mascotas lo dice explícitamente', async (t) => {
+  const { server, base } = await startApp();
+  t.after(() => server.close());
+  const html = await (await fetch(`${base}/mascotas`)).text();
+  assert.match(html, /Todavía no hay mascotas reportadas como perdidas/);
+});
+
+test('/mascotas lista lo reportado, con miniatura diferida en vez de la foto completa', async (t) => {
+  const pm = await fakePetMatcher();
+  const { server, base } = await startApp();
+  t.after(() => {
+    server.close();
+    pm.stop();
+  });
+
+  const fd = new FormData();
+  fd.set('species', 'dog');
+  fd.set('pet_name', 'Toby');
+  fd.append('photos', new File([await photoBytes({ r: 9, g: 9, b: 9 })], 'toby.jpg', { type: 'image/jpeg' }));
+  fd.set('contact_phone', '300 111 2222');
+  await fetch(`${base}/mascotas/reporte`, { method: 'POST', body: fd, redirect: 'manual' });
+
+  const html = await (await fetch(`${base}/mascotas`)).text();
+  assert.match(html, /Toby/);
+  assert.match(html, /Perro/);
+  assert.match(html, /class="face pending" data-src="\/pet-photo\/1\/thumb"/);
+  assert.ok(!/<img[^>]*\ssrc="\/pet-photo\/1"/.test(html), 'el listado nunca debe cargar la foto completa');
+  assert.match(html, /href="\/mascotas\/encontre"[^>]*>👀 Creo que la vi/);
+});
+
+test('una mascota marcada como encontrada sale del listado y suma al contador de reencontradas', async (t) => {
+  const pm = await fakePetMatcher();
+  const { server, base } = await startApp();
+  t.after(() => {
+    server.close();
+    pm.stop();
+  });
+
+  const fd = new FormData();
+  fd.set('species', 'cat');
+  fd.append('photos', new File([await photoBytes({ r: 4, g: 4, b: 4 })], 'g.jpg', { type: 'image/jpeg' }));
+  fd.set('contact_email', 'duena@ejemplo.com');
+  const res = await fetch(`${base}/mascotas/reporte`, { method: 'POST', body: fd, redirect: 'manual' });
+  const location = res.headers.get('location').split('?')[0];
+
+  let html = await (await fetch(`${base}/mascotas`)).text();
+  assert.match(html, /Gato perdido/);
+  assert.ok(!html.includes('reencontrada'), 'todavía no hay ninguna reencontrada');
+
+  await fetch(`${base}${location}/encontrado`, { method: 'POST' });
+
+  html = await (await fetch(`${base}/mascotas`)).text();
+  assert.ok(!html.includes('Gato perdido'), 'una mascota ya encontrada no debe seguir en el listado de perdidas');
+  assert.match(html, /🎉 1 reencontrada/);
+});

@@ -706,6 +706,31 @@ async function createSqliteAdapter(dbPath) {
         )
         .all(petId);
     },
+    // El listado público — espejo de missingPeople: toda mascota sin
+    // resolved_at, más reciente primero.
+    async lostPets(limit) {
+      return db
+        .prepare('SELECT * FROM pets WHERE resolved_at IS NULL ORDER BY created_at DESC LIMIT ?')
+        .all(limit);
+    },
+    // Espejo de reunitedCount — el contador de buenas noticias.
+    async reunitedPetsCount() {
+      return db.prepare('SELECT COUNT(*) AS n FROM pets WHERE resolved_at IS NOT NULL').get().n;
+    },
+    // Una foto por mascota para el listado — espejo de reportPhotosForPeople:
+    // la primera foto 'report' que además tenga miniatura gana, para no
+    // repetir en el listado el problema de una foto ilegible sin thumb.
+    async petPhotosForPets(petIds) {
+      if (!petIds.length) return [];
+      const marks = petIds.map(() => '?').join(',');
+      return db
+        .prepare(
+          `SELECT id, pet_id, content_type, thumb_type FROM pet_photos
+           WHERE kind = 'report' AND pet_id IN (${marks})
+           ORDER BY pet_id, (thumb_type IS NULL), id`
+        )
+        .all(...petIds);
+    },
 
     async close() {
       db.close();

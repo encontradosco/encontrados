@@ -14,16 +14,30 @@ function parseEmbeddingRow(row) {
   return { ...row, embedding };
 }
 
+// Postgres devuelve created_at/resolved_at (TIMESTAMPTZ) ya como Date; SQLite
+// los devuelve como el texto ISO que escribió el propio adaptador. Mismo
+// problema que ya resuelve isoRow() en people.js, misma solución — sin esto,
+// <time datetime="..."> se llena con el toString() de un Date en vez de un
+// ISO real en producción (Postgres), y nunca se ve en dev (SQLite).
+function isoRow(row) {
+  if (!row) return row;
+  const out = { ...row };
+  for (const field of ['created_at', 'resolved_at']) {
+    if (out[field] instanceof Date) out[field] = out[field].toISOString().replace(/\.\d{3}Z$/, 'Z');
+  }
+  return out;
+}
+
 function createPetStore(adapter) {
   return {
     async addPet({ species, petName, description, contact }) {
-      return adapter.insertPet({ species, petName, description, contact });
+      return isoRow(await adapter.insertPet({ species, petName, description, contact }));
     },
     async getPet(id) {
-      return adapter.getPet(id);
+      return isoRow(await adapter.getPet(id));
     },
     async markPetResolved(id) {
-      return adapter.markPetResolved(id);
+      return isoRow(await adapter.markPetResolved(id));
     },
     async addPetPhoto(fields) {
       return adapter.insertPetPhoto(fields);
@@ -50,6 +64,23 @@ function createPetStore(adapter) {
     },
     async petPhotosForPet(petId) {
       return adapter.petPhotosForPet(petId);
+    },
+    async lostPets(limit = 50) {
+      return (await adapter.lostPets(limit)).map(isoRow);
+    },
+    async reunitedPetsCount() {
+      return adapter.reunitedPetsCount();
+    },
+    // Una foto por mascota, para el listado — espejo de reportPhotoByPerson
+    // en people.js: el adaptador ya ordena por (pet_id, sin-thumb, id), así
+    // que la primera fila de cada mascota es la que gana.
+    async petPhotosForPets(petIds) {
+      const rows = await adapter.petPhotosForPets(petIds);
+      const byPet = new Map();
+      for (const row of rows) {
+        if (!byPet.has(row.pet_id)) byPet.set(row.pet_id, row);
+      }
+      return byPet;
     }
   };
 }

@@ -1,6 +1,6 @@
 const express = require('express');
 const { upload } = require('../upload');
-const { esc, layout } = require('../html');
+const { esc, layout, timeTag } = require('../html');
 const { processPetPhoto } = require('../petmatch');
 
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
@@ -19,23 +19,70 @@ function composeContact({ phone, email }) {
   return [phone, email].map((v) => String(v || '').trim()).filter(Boolean).join(' · ');
 }
 
+// Espejo de facePlate() en src/html.js, pero sin la geometría facial: una
+// mascota no tiene bounding box ni landmarks que dibujar encima, así que acá
+// no hay overlay — el resto (el div "pending" con data-src, el botón de
+// "ver foto", el <noscript>) es exactamente lo mismo, y PHOTO_SCRIPT (ya
+// incluido en layout() en cada página) lo hidrata sin ningún cambio: ese
+// script solo mira `.face.pending[data-src]`, nunca de qué se trata la foto.
+function petFacePlate(photo, label) {
+  if (!photo || !photo.thumb_type) return '';
+  const alt = `Foto de ${label}`;
+  const src = `/pet-photo/${photo.id}/thumb`;
+  return `<div class="face pending" data-src="${src}" data-alt="${esc(alt)}">
+  <button type="button" class="face-load" aria-label="Ver la foto de ${esc(label)}" title="Ver foto">📷</button>
+  <noscript><img class="face-noscript" src="${src}" alt="${esc(alt)}" width="80" height="80"></noscript>
+</div>`;
+}
+
 function petRoutes(petStore, petMatcher) {
   const router = express.Router();
 
-  router.get('/mascotas', (req, res) => {
-    res.send(
-      layout(
-        'Mascotas perdidas',
-        `<h1 class="compact">Mascotas perdidas</h1>
+  // Espejo de GET '/' en src/routes/web.js: los dos botones de acción arriba,
+  // y debajo el listado de lo que sigue perdido — más reciente primero, y el
+  // contador de "reencontradas" al lado del título, igual que el de personas.
+  router.get(
+    '/mascotas',
+    wrap(async (req, res) => {
+      const [lost, reunited] = await Promise.all([petStore.lostPets(50), petStore.reunitedPetsCount()]);
+      const reunitedNote = reunited
+        ? ` · <span class="reunited-count">🎉 ${reunited} reencontrada${reunited === 1 ? '' : 's'}</span>`
+        : '';
+      const photos = await petStore.petPhotosForPets(lost.map((p) => p.id));
+      const list = lost.length
+        ? `<h2>Mascotas perdidas más recientes${reunitedNote}</h2>` +
+          lost
+            .map((p) => {
+              const label = p.pet_name || `${SPECIES_LABEL[p.species]} perdido`;
+              return `<article class="card pet">
+  <div class="pet-info">
+    <h3><a class="card-link" href="/mascota/${p.id}">${esc(label)}</a></h3>
+    <p class="meta">${esc(SPECIES_LABEL[p.species])} · reportada ${timeTag(p.created_at)}</p>
+    <a class="card-cta" href="/mascotas/encontre" aria-label="Creo que la vi: ${esc(label)} — compara una foto">👀 Creo que la vi</a>
+  </div>
+  ${petFacePlate(photos.get(p.id), label)}
+</article>`;
+            })
+            .join('')
+        : `<p class="subtle">Todavía no hay mascotas reportadas como perdidas.${
+            reunited ? ` 🎉 ${reunited} reencontrada${reunited === 1 ? '' : 's'}.` : ''
+          }</p>`;
+
+      res.send(
+        layout(
+          'Mascotas perdidas',
+          `<h1 class="compact">Mascotas perdidas</h1>
 <p class="subtle">Comparamos fotos de mascotas para ayudar a reunirlas con su familia.</p>
 <div class="stack">
   <a class="big-btn search" href="/mascotas/reporte">🐾 Perdí una mascota</a>
   <a class="big-btn secondary" href="/mascotas/encontre">👀 Encontré una mascota</a>
-</div>`,
-        { fullTitle: 'Mascotas perdidas — encontrados.co', path: '/mascotas' }
-      )
-    );
-  });
+</div>
+${list}`,
+          { fullTitle: 'Mascotas perdidas — encontrados.co', path: '/mascotas' }
+        )
+      );
+    })
+  );
 
   function reportForm() {
     return `<form class="stack compact" method="post" action="/mascotas/reporte" enctype="multipart/form-data" data-require-photos>
