@@ -172,6 +172,36 @@ test('either contact box on its own is enough, and neither is still an error', a
   assert.equal(neither.status, 400, 'sin ninguna forma de contactar no hay a quién avisar');
 });
 
+// #178: the form accepted any text in the phone box — letters, symbols,
+// whatever. Unlike /rescate's optional phone, a filled-in box here means the
+// value has to actually be usable.
+test('a contact phone that is not just digits gets rejected', async (t) => {
+  const { server, base } = await startApp();
+  t.after(() => server.close());
+
+  const withLetters = await report(base, { contact: '', contact_phone: 'abc123def45' });
+  assert.equal(withLetters.status, 400, 'letters mixed with digits are not a phone number');
+
+  const oneLetterMixedIn = await report(base, { contact: '', contact_phone: '300a1234567' });
+  assert.equal(
+    oneLetterMixedIn.status,
+    400,
+    'a single stray letter must not be silently stripped down to a valid digit count'
+  );
+
+  const tooShort = await report(base, { contact: '', contact_phone: '31044455' });
+  assert.equal(tooShort.status, 400, '8 digits are not enough');
+
+  const withSpaces = await report(base, { contact: '', contact_phone: '310 444 5566' });
+  assert.equal(withSpaces.status, 303, '10 digits with separator spaces still work');
+
+  const withCountryCode = await report(base, { contact: '', contact_phone: '573145556677' });
+  assert.equal(withCountryCode.status, 303, 'a country-code prefix also works, like /rescate');
+
+  const withPlusCountryCode = await report(base, { contact: '', contact_phone: '+573145556677' });
+  assert.equal(withPlusCountryCode.status, 303, 'a "+" before the country code also works');
+});
+
 test('every page ends with the two asks, contributors above the ColombiaTeBusca team', async (t) => {
   const { server, base } = await startApp();
   t.after(() => server.close());
