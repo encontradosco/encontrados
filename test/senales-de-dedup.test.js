@@ -341,7 +341,14 @@ test('un reporte que dice «No lo sé» entra, y sin departamento guardado', asy
 // entera — incluido `contact` en claro, y ahora las dos señales nuevas. Con
 // external_id la respuesta es además la fila que QUEDÓ, no la que se mandó.
 test('la respuesta de POST /api/updates no devuelve la fila cruda', async (t) => {
+  // Sin API_KEY la ruta queda pública, que es el escenario que esta prueba
+  // mide. Se restaura porque node --test corre todo el archivo en un proceso.
+  const apiKeyPrevia = process.env.API_KEY;
   delete process.env.API_KEY;
+  t.after(() => {
+    if (apiKeyPrevia === undefined) delete process.env.API_KEY;
+    else process.env.API_KEY = apiKeyPrevia;
+  });
   const app = await createApp(await createSqliteAdapter(':memory:'), nullMatcher);
   const server = await new Promise((r) => {
     const s = app.listen(0, () => r(s));
