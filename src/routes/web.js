@@ -250,9 +250,12 @@ function searchHitCard({ person, update, photo }) {
 </div>`;
   }
 
-  return `<article class="card person search-hit">
+  // Deliberately NOT `card person` + `card-link`: home cards stretch the name
+  // link over the whole card (#65). Search hits have multiple CTAs; a stretched
+  // overlay would steal those taps. Name is a normal link; actions are explicit.
+  return `<article class="card search-hit">
   <div class="person-info">
-    <h3><a class="card-link" href="${ficha}">${esc(person.full_name)}</a></h3>
+    <h3><a href="${ficha}">${esc(person.full_name)}</a></h3>
     ${meta.length ? `<p class="meta">${meta.join(' · ')}</p>` : ''}
     ${location}
     ${actions}

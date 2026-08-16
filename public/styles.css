@@ -170,6 +170,13 @@ h1.compact .subtle { font-family: var(--font-sans); font-weight: 400; font-size:
 .big-btn.search { background: var(--accent); color: #fff; }
 .big-btn.search:hover { background: var(--accent-dark); }
 .search-first { text-align: center; margin: 0.75rem 0 0; }
+/* /buscar results: same name+photo row as home cards, without the #65 stretched
+   name link — these hits carry two CTAs and must not steal taps. */
+.card.search-hit {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+}
 .search-hit .search-actions {
   display: grid;
   gap: 0.5rem;
@@ -262,12 +269,9 @@ h1.compact .subtle { font-family: var(--font-sans); font-weight: 400; font-size:
 .person-info p { margin: 0; }
 
 /* #65: the rescuer's action on the card itself, not at the end of the ficha.
-   Sits above the stretched link, as does the photo's "ver foto" button.
-   /buscar hits reuse this card: their .search-actions must sit above too, or
-   "dejar mi contacto" / "reportar" would navigate to the ficha instead. */
+   Sits above the stretched link, as does the photo's "ver foto" button. */
 .card.person .card-cta,
-.card.person .face,
-.card.person .search-actions {
+.card.person .face {
   position: relative;
   z-index: 1;
 }

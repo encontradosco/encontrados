@@ -31,15 +31,24 @@ async function seedPerson(base, { name, status, location, contact, reporter }) {
   return res.json();
 }
 
-test('/buscar: search-actions sit above the stretched card-link overlay', async (t) => {
-  // Regression for B1: without z-index on .search-actions, the home card's
-  // stretched .card-link::after steals taps meant for the hybrid CTAs.
-  const css = require('fs').readFileSync(require('path').join(__dirname, '../public/styles.css'), 'utf8');
-  assert.match(
-    css,
-    /\.card\.person\s+\.search-actions\s*\{[^}]*z-index:\s*1/s,
-    '.search-actions must be listed with the #65 overlay exceptions'
-  );
+test('/buscar: search hits do not use the home stretched card-link', async (t) => {
+  // I2: results must not use `card person` + `card-link`, or #65's overlay
+  // steals taps from the hybrid CTAs. Layout lives on `.card.search-hit` alone.
+  const { server, base } = await startApp();
+  t.after(() => server.close());
+
+  await seedPerson(base, {
+    name: 'Persona Prueba Card',
+    status: 'missing',
+    location: 'Barrio Prueba',
+    contact: '300 000 0001',
+    reporter: 'Familiar Prueba'
+  });
+  const html = await (await fetch(`${base}/buscar?q=Persona+Prueba+Card`)).text();
+  assert.match(html, /class="card search-hit"/);
+  assert.doesNotMatch(html, /class="card person search-hit"/);
+  assert.doesNotMatch(html, /class="card-link"/);
+  assert.match(html, /class="search-actions"/);
 });
 
 test('latestUpdateByPerson matches getLatestUpdate and skips aggregator-only safe', async (t) => {
