@@ -65,6 +65,19 @@ function parseMessage(text) {
   return { intent: 'unrecognized' };
 }
 
+// #156: cuatro ramas de handleInbound devuelven su respuesta sin mirar si
+// venía una foto adjunta, y la foto se pierde en silencio — quien la mandó
+// cree que la enviamos, y no queda ni indexada ni comparada contra nada.
+// Alcance de este fix (opción 1 del issue): decirlo. Procesar la foto en
+// alguna de estas ramas es una decisión de privacidad aparte (no hay
+// consentimiento explícito fuera del formulario web) y queda para otro PR.
+const PHOTO_NOT_PROCESSED_NOTE =
+  '📷 Recibí una foto, pero no la usé: no venía con un comando reconocido. Para que cuente, mándala de nuevo con el comando como leyenda, por ejemplo: BIEN <nombre>.';
+
+function withPhotoNote(reply, photo) {
+  return photo ? `${reply}\n\n${PHOTO_NOT_PROCESSED_NOTE}` : reply;
+}
+
 // Acuse fijo para un mensaje que no es un comando (#118). No repite la frase
 // de la persona (ecoarla sonaba a error suyo) y no promete cosas que este
 // cambio no hace: la bitácora y el escalamiento a una persona son #119.
@@ -161,24 +174,27 @@ async function handleInbound(store, { channel, from, text, photo, matcher = null
   const parsed = parseMessage(text);
 
   if (parsed.intent === 'unrecognized') {
-    return UNRECOGNIZED_REPLY;
+    return withPhotoNote(UNRECOGNIZED_REPLY, photo);
   }
 
   if (parsed.intent === 'help' || (parsed.intent !== 'help' && !parsed.name)) {
-    return HELP;
+    return withPhotoNote(HELP, photo);
   }
 
   if (parsed.intent === 'find') {
     const matches = await store.searchPeople(parsed.name, { limit: 3 });
     if (!matches.length) {
-      return [
-        `No encontré reportes sobre "${parsed.name}".`,
-        `Escribe SUSCRIBIR ${parsed.name} y te avisaré a este número cuando haya noticias.`
-      ].join('\n');
+      return withPhotoNote(
+        [
+          `No encontré reportes sobre "${parsed.name}".`,
+          `Escribe SUSCRIBIR ${parsed.name} y te avisaré a este número cuando haya noticias.`
+        ].join('\n'),
+        photo
+      );
     }
     const lines = await Promise.all(matches.map((m) => personSummary(store, m)));
     lines.push('', 'Para recibir avisos: SUSCRIBIR <nombre>');
-    return lines.join('\n');
+    return withPhotoNote(lines.join('\n'), photo);
   }
 
   if (parsed.intent === 'report') {
@@ -247,19 +263,25 @@ async function handleInbound(store, { channel, from, text, photo, matcher = null
   if (parsed.intent === 'unsubscribe') {
     if (normalize(parsed.name) === 'todo' || normalize(parsed.name) === 'all') {
       const n = await store.unsubscribeAll(channel, from);
-      return n
-        ? `Listo, cancelé tus ${n} suscripciones.`
-        : 'No tenías suscripciones activas.';
+      return withPhotoNote(
+        n ? `Listo, cancelé tus ${n} suscripciones.` : 'No tenías suscripciones activas.',
+        photo
+      );
     }
     const matches = await store.searchPeople(parsed.name, { limit: 1 });
-    if (!matches.length) return `No encontré a "${parsed.name}" entre tus suscripciones.`;
+    if (!matches.length) {
+      return withPhotoNote(`No encontré a "${parsed.name}" entre tus suscripciones.`, photo);
+    }
     const n = await store.unsubscribe(matches[0].id, channel, from);
-    return n
-      ? `Listo, ya no recibirás avisos sobre *${matches[0].full_name}*.`
-      : `No estabas suscrito(a) a ${matches[0].full_name}.`;
+    return withPhotoNote(
+      n
+        ? `Listo, ya no recibirás avisos sobre *${matches[0].full_name}*.`
+        : `No estabas suscrito(a) a ${matches[0].full_name}.`,
+      photo
+    );
   }
 
-  return HELP;
+  return withPhotoNote(HELP, photo);
 }
 
 module.exports = { handleInbound, parseMessage, rescueAnswer, HELP };
