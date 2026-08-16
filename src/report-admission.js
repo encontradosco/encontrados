@@ -32,6 +32,7 @@ const { STATUSES, SOURCES } = require('./people');
 const notifyModule = require('./notify');
 const duplicatesModule = require('./duplicates');
 const facematchModule = require('./facematch');
+const { cleanDepartment } = require('./departments');
 
 // El enlace a la fuente pública que respalda un reporte — hoy, la noticia que
 // dice que una persona apareció.
@@ -98,6 +99,7 @@ function createReportAdmission({
     status,
     message = null,
     location = null,
+    department = null,
     lat,
     lng,
     source,
@@ -122,6 +124,10 @@ function createReportAdmission({
     }
     const cleanSource = SOURCES.includes(source) ? source : 'api';
     const cleanSourceUrl = normalizeSourceUrl(sourceUrl);
+    // Un valor fuera de la lista fija (src/departments.js) se descarta a null
+    // en vez de guardarse como texto libre — silencioso a propósito, igual
+    // que cleanSource: un valor desconocido no puede tumbar el reporte.
+    const cleanDept = cleanDepartment(department);
     const usablePhotos = (photos || []).filter((p) => p && p.bytes && p.bytes.length);
 
     // ---- 2. Find or create the person ----------------------------------
@@ -142,6 +148,7 @@ function createReportAdmission({
       status,
       message,
       location,
+      department: cleanDept,
       lat,
       lng,
       source: cleanSource,

@@ -41,6 +41,7 @@ async function createSqliteAdapter(dbPath) {
       status TEXT NOT NULL CHECK (status IN ('safe','injured','missing','deceased','unknown')),
       message TEXT,
       location TEXT,
+      department TEXT,
       lat REAL,
       lng REAL,
       contact TEXT,
@@ -125,6 +126,13 @@ async function createSqliteAdapter(dbPath) {
   try {
     db.exec('ALTER TABLE updates ADD COLUMN source_url TEXT');
   } catch { /* already exists */ }
+  // Departamento del lugar donde se cree que está la persona — de una lista
+  // fija (src/departments.js), no texto libre. #150: es la señal que
+  // findOrCreatePerson usa para no fusionar por nombre solo cuando dos
+  // reportes apuntan a lugares muy distintos.
+  try {
+    db.exec('ALTER TABLE updates ADD COLUMN department TEXT');
+  } catch { /* already exists */ }
   // Detection geometry (bounding box + landmarks) for the public overlay, and
   // the face thumbnail the public listing loads instead of the full photo.
   for (const col of ['face_detail TEXT', 'thumb BLOB', 'thumb_type TEXT', 'thumb_large BLOB']) {
@@ -192,16 +200,17 @@ async function createSqliteAdapter(dbPath) {
     // externalId updates the existing row's status/message/location/lat/lng/
     // reporter/contact instead of inserting a duplicate. Without externalId,
     // behavior is unchanged.
-    async insertUpdate(personId, { status, message, location, lat, lng, source, sourceUrl, reporter, contact, externalId }) {
+    async insertUpdate(personId, { status, message, location, department, lat, lng, source, sourceUrl, reporter, contact, externalId }) {
       const extId = externalId || null;
       const info = db
         .prepare(
-          `INSERT INTO updates (person_id, status, message, location, lat, lng, source, source_url, reporter, contact, external_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO updates (person_id, status, message, location, department, lat, lng, source, source_url, reporter, contact, external_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT (external_id) WHERE external_id IS NOT NULL DO UPDATE SET
              status = excluded.status,
              message = excluded.message,
              location = excluded.location,
+             department = excluded.department,
              lat = excluded.lat,
              lng = excluded.lng,
              source_url = excluded.source_url,
@@ -213,6 +222,7 @@ async function createSqliteAdapter(dbPath) {
           status,
           message || null,
           location || null,
+          department || null,
           Number.isFinite(lat) ? lat : null,
           Number.isFinite(lng) ? lng : null,
           source,

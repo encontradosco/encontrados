@@ -62,6 +62,7 @@ function publicUpdate(u) {
     status: u.status,
     message: u.message,
     location: u.location,
+    department: u.department,
     lat: u.lat,
     lng: u.lng,
     source: u.source,

@@ -61,13 +61,14 @@ function createStore(adapter) {
     return { person: isoRow(person), created: true };
   }
 
-  async function addUpdate(personId, { status, message, location, lat, lng, source, sourceUrl, reporter, contact, externalId }) {
+  async function addUpdate(personId, { status, message, location, department, lat, lng, source, sourceUrl, reporter, contact, externalId }) {
     if (!STATUSES.includes(status)) throw new Error(`Invalid status: ${status}`);
     return isoRow(
       await adapter.insertUpdate(personId, {
         status,
         message,
         location,
+        department,
         lat,
         lng,
         source,

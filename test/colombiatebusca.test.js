@@ -51,7 +51,12 @@ test('el formulario de reporte ya no ofrece publicar en un registro de terceros'
   assert.doesNotMatch(html, /name="colombiatebusca"/);
   assert.doesNotMatch(html, /Reportar también en ColombiaTeBusca/i);
   // Las casillas que solo existían para llenar SU formulario se van con ella.
-  for (const field of ['reporter_name', 'department', 'municipality', 'place']) {
+  // `department` volvió con el #150 — no es la misma casilla: esta no le
+  // pertenece al formulario de Colombia Te Busca, es la señal fija (lista
+  // cerrada, no texto libre) que usa findOrCreatePerson para no fusionar dos
+  // reportes que apuntan a lugares muy distintos. La prueba de abajo confirma
+  // que sigue sin ser esa casilla.
+  for (const field of ['reporter_name', 'municipality', 'place']) {
     assert.doesNotMatch(html, new RegExp(`name="${field}"`), `sobra la casilla ${field}`);
   }
   assert.doesNotMatch(html, /ctb-fields/);
@@ -60,6 +65,36 @@ test('el formulario de reporte ya no ofrece publicar en un registro de terceros'
   const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'styles.css'), 'utf8');
   assert.doesNotMatch(css, /\.ctb-fields/);
   assert.doesNotMatch(css, /\.ctb-why/);
+});
+
+// #150: el <select> es de verdad — opciones fijas, y el valor elegido llega
+// a la fila guardada. La prueba de arriba ya confirmó que NO es la casilla
+// de Colombia Te Busca (sin ese texto, sin esas clases); esta confirma que
+// SÍ hace lo que promete.
+test('el departamento elegido en el formulario queda guardado en el reporte', async (t) => {
+  const { server, base, store } = await startApp();
+  t.after(() => server.close());
+
+  const html = await (await fetch(`${base}/report`)).text();
+  assert.match(html, /<select name="department" required>/);
+  assert.match(html, /<option value="Chocó">Chocó<\/option>/);
+
+  const res = await report(base, { department: 'Chocó' });
+  assert.equal(res.status, 303);
+  const personId = Number(res.headers.get('location').match(/^\/person\/(\d+)\?/)[1]);
+  const [update] = await store.getUpdates(personId);
+  assert.equal(update.department, 'Chocó');
+});
+
+test('un departamento que no está en la lista fija se guarda como null, sin tumbar el reporte', async (t) => {
+  const { server, base, store } = await startApp();
+  t.after(() => server.close());
+
+  const res = await report(base, { department: 'Narnia' });
+  assert.equal(res.status, 303);
+  const personId = Number(res.headers.get('location').match(/^\/person\/(\d+)\?/)[1]);
+  const [update] = await store.getUpdates(personId);
+  assert.equal(update.department, null);
 });
 
 // Retirar la casilla no basta: mientras el servidor siguiera atendiendo el

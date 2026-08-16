@@ -111,9 +111,13 @@ function apiRoutes(store, matcher) {
   );
 
   // POST /api/updates — report status by name (creates the person if new)
-  // { name, status, message?, location?, reporter?, source?, source_url?, external_id?,
+  // { name, status, message?, location?, department?, reporter?, source?, source_url?, external_id?,
   //   photo?: { base64, content_type } }
   // The photo is used ONLY for face matching; it is never displayed or shared.
+  // - department: one of the fixed values in src/departments.js; anything else
+  //   is dropped to null, same treatment as an unknown source. #150 uses it to
+  //   avoid auto-merging two reports that name the same person but point at
+  //   very different places.
   // - source: one of 'web'|'whatsapp'|'api'|'aggregator'; defaults to 'api' if
   //   omitted or not one of those values (e.g. an aggregator identifying itself).
   // - source_url: public link backing this report — the news story saying the
@@ -129,7 +133,7 @@ function apiRoutes(store, matcher) {
     '/updates',
     requireKey,
     wrap(async (req, res) => {
-      const { name, status, message, location, reporter, contact } = req.body || {};
+      const { name, status, message, location, department, reporter, contact } = req.body || {};
       if (!name || !String(name).trim()) return res.status(400).json({ error: 'Falta name' });
       if (!STATUSES.includes(status)) {
         return res.status(400).json({ error: `status debe ser uno de: ${STATUSES.join(', ')}` });
@@ -149,6 +153,11 @@ function apiRoutes(store, matcher) {
         status,
         message,
         location,
+        // Straight from the body, unvalidated on purpose — same reasoning as
+        // sourceUrl below: the service owns the fixed-list rule
+        // (src/departments.js), so a value outside it degrades to null there
+        // and only there.
+        department,
         lat: typeof req.body.lat === 'number' ? req.body.lat : parseFloat(req.body.lat),
         lng: typeof req.body.lng === 'number' ? req.body.lng : parseFloat(req.body.lng),
         source: req.body.source,
