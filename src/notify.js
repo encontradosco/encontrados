@@ -211,7 +211,11 @@ async function sendEmail(to, subject, text, { html } = {}) {
     return { ok: true, status: res.status };
   } catch (e) {
     console.error(`[notify:email] THREW to=${to}`, e);
-    return { ok: false, error: e.message };
+    // `fetch` normalmente rechaza con un Error de verdad, pero no es una
+    // garantía del lenguaje — un `e` sin `.message` (por ejemplo `undefined`)
+    // tumbaría este catch y con él cualquier aviso que dependa de esta
+    // función, justo en el camino que se supone que nunca lanza.
+    return { ok: false, error: e?.message || String(e) };
   }
 }
 
