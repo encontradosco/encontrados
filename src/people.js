@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const { normalize, phoneticKey, titleCaseName, matchScore } = require('./names');
 const { logMerge } = require('./logbook');
 const { canonicalDepartment } = require('./departments');
+const { mergeBlockReason } = require('./merge-guard');
 
 const STATUSES = ['safe', 'injured', 'missing', 'deceased', 'unknown'];
 // 'aggregator': updates pushed by an external data aggregator, distinct from
@@ -70,22 +71,46 @@ function createStore(adapter) {
   }
 
   // Reuse an existing person when the name confidently matches; otherwise create.
-  async function findOrCreatePerson(fullName) {
+  //
+  // `signals` son el departamento y la edad que declara el reporte que llega.
+  // Solo vetan la fusión POR PARECIDO (>= 0.85), que es la que #150 denuncia y
+  // la que su criterio de aceptación nombra. Un nombre normalizado idéntico
+  // sigue cayendo en la misma persona sin mirar nada más: es una señal mucho
+  // más fuerte que un parecido, y vetar ahí partiría el camino más común que
+  // existe —dos familiares reportando a la misma persona, uno diciendo dónde
+  // vivía y el otro dónde la vieron—.
+  //
+  // Cuando el veto entra, el reporte NO se pierde: se le abre su propio
+  // registro, que es la separación que la familia necesitaba. `blocked` sale en
+  // el retorno para que quede registrado con su razón.
+  async function findOrCreatePerson(fullName, signals = {}) {
     const norm = normalize(fullName);
     if (!norm) throw new Error('Name is required');
     const exact = await adapter.exactByNormalized(norm);
     if (exact) return { person: isoRow(exact), created: false };
+
+    let blocked = null;
     const [best] = await searchPeople(fullName, { limit: 1, minScore: 0.85 });
     if (best) {
-      // #150: solo la fusión difusa (por score) se registra — un match exacto
-      // sobre el mismo normalized_name no es una decisión discutible.
-      await logMerge(adapter, { personId: best.id, submittedName: fullName, score: best.score });
-      return { person: await getPerson(best.id), created: false };
+      const reason = mergeBlockReason(
+        { department: canonicalDepartment(signals.department), age: parseAge(signals.age) },
+        await getUpdates(best.id)
+      );
+      if (!reason) {
+        // Solo la fusión difusa (por score) se registra — un match exacto sobre
+        // el mismo normalized_name no es una decisión discutible. Y se registra
+        // la que OCURRE: una fusión vetada no es una fusión.
+        await logMerge(adapter, { personId: best.id, submittedName: fullName, score: best.score });
+        return { person: await getPerson(best.id), created: false };
+      }
+      blocked = { reason, personId: best.id, score: best.score };
     }
+
+
     // Only new people are re-cased: an existing row keeps whatever it has, so
     // a correction made by hand isn't undone by the next report.
     const person = await adapter.insertPerson(titleCaseName(fullName), norm, phoneticKey(fullName));
-    return { person: isoRow(person), created: true };
+    return { person: isoRow(person), created: true, blocked };
   }
 
   // `department` y `age` son las señales con las que #150 separa a dos personas

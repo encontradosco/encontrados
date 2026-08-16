@@ -189,7 +189,11 @@ function createReportAdmission({
       }
 
       // ---- 2. Find or create the person ----------------------------------
-      const { person, created } = await store.findOrCreatePerson(cleanName);
+      // Las señales van acá y no solo al update: son parte de la decisión de a
+      // quién pertenece este reporte, no un dato que se guarda después. Cuando
+      // contradicen a la persona que el nombre encontró, `blocked` dice por qué
+      // y el reporte estrena su propio registro en vez de fundirse con ella.
+      const { person, created, blocked } = await store.findOrCreatePerson(cleanName, { department, age });
 
       // Read the record's existing report photo BEFORE this report's own
       // photos are stored — afterwards there is no way to tell which face was
@@ -235,12 +239,12 @@ function createReportAdmission({
       // findOrCreatePerson inserted a fresh row for the drifted name.
       const mergedIntoExisting = !created || String(owner.id) !== String(person.id);
 
-      return { ok: true, person, created, priorPhoto, update, owner, mergedIntoExisting };
+      return { ok: true, person, created, blocked, priorPhoto, update, owner, mergedIntoExisting };
     };
 
     const admitted = externalId ? await store.withExternalIdLock(externalId, admit) : await admit();
     if (!admitted.ok) return admitted;
-    const { created, priorPhoto, update, owner, mergedIntoExisting } = admitted;
+    const { created, blocked, priorPhoto, update, owner, mergedIntoExisting } = admitted;
 
     // ---- 5. Index the report photos ------------------------------------
     // processPhoto never throws for a matcher/Rekognition failure — it stores
@@ -295,6 +299,9 @@ function createReportAdmission({
       ok: true,
       person: owner,
       personCreated: created,
+      // null, o { reason, personId, score }: el registro con el que este
+      // reporte se habría fusionado por nombre, y la señal que lo impidió.
+      blocked: blocked || null,
       update,
       photos: storedPhotos,
       unreadablePhotos,

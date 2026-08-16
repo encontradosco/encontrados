@@ -990,7 +990,7 @@ ${RESCUE_FOOTER}`
       <input name="location" id="location" list="location-options" autocomplete="off" placeholder="Ej. Barrio San José, Armenia" required>
       <datalist id="location-options"></datalist>
     </span></label>
-  <label class="field-label"><span>Departamento donde estaba o vivía *</span>
+  <label class="field-label"><span>Departamento donde vivía *</span>
     <select name="department" required>
       <option value="" disabled selected>Elige un departamento</option>
       ${DEPARTAMENTOS.map((d) => `<option value="${esc(d)}">${esc(d)}</option>`).join('')}
@@ -998,7 +998,7 @@ ${RESCUE_FOOTER}`
     </select></label>
   <label class="field-label"><span>Edad aproximada (opcional)</span>
     <input name="age" type="number" inputmode="numeric" min="0" max="120" placeholder="Ej. 34"></label>
-  <p class="subtle">Sirven para no confundirla con otra persona de nombre parecido. Si no estás seguro de la edad, déjala en blanco: un dato en blanco ayuda más que uno inventado.</p>
+  <p class="subtle">Sirven para no confundirla con otra persona de nombre parecido. Si no estás seguro, marca «No lo sé» o deja la edad en blanco: un dato en blanco ayuda más que uno inventado.</p>
   <label class="field-label"><span>Tu teléfono para que te contacten</span>
     <input name="contact_phone" inputmode="tel" autocomplete="tel" maxlength="120" value="${esc(remembered.phone)}" placeholder="Ej. 300 123 4567"></label>
   <label class="field-label"><span>Tu correo</span>
