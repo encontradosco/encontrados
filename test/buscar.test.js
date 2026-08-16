@@ -97,7 +97,7 @@ test('/buscar: finds missing and reunited people with hybrid CTAs', async (t) =>
   assert.match(safeHtml, /A SALVO/);
   assert.match(safeHtml, new RegExp(`href="/person/${safe.person_id}"`));
   assert.match(safeHtml, /Ver ficha/);
-  assert.match(safeHtml, /No es ella — reportar a otra persona/);
+  assert.match(safeHtml, /No es esta persona — reportar a otra/);
   assert.doesNotMatch(safeHtml, /300 333 4444/);
   assert.doesNotMatch(safeHtml, /573009998877/);
 });

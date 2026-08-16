@@ -233,7 +233,7 @@ function searchHitCard({ person, update, photo }) {
     // stays available but secondary so a wrong-name match does not trap anyone.
     actions = `<div class="search-actions">
   <a class="big-btn search" href="${ficha}">Ver ficha</a>
-  <a class="big-btn secondary" href="/report?name=${nameQ}">No es ella — reportar a otra persona</a>
+  <a class="big-btn secondary" href="/report?name=${nameQ}">No es esta persona — reportar a otra</a>
 </div>`;
   } else {
     // Still missing (or other non-safe status): prefer joining the existing
