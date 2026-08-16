@@ -615,6 +615,16 @@ async function backfillPhotoDerivatives(store, matcher, limit = 100) {
   // Una sola lectura para toda la corrida: el mismo valor que `derivativeAction`
   // y el loop de abajo usan varias veces, en vez de que cada uso vuelva a leer
   // el getter perezoso (#89).
+  //
+  // Ventana angosta que esto introduce, señalada en revisión: si el matcher
+  // pasa de apagado a encendido A MITAD de esta corrida —otra request en la
+  // misma instancia lo despierta con su propio ensureReady()— la versión
+  // anterior (que releía `matcher.enabled` en cada vuelta) lo notaba y
+  // arrancaba a indexar lo que quedaba en ESTA corrida; con `ready` cacheado
+  // acá, esas fotos quedan pendientes hasta la SIGUIENTE corrida del barrido.
+  // No se pierde nada —siguen en `photosMissingDerivatives`—, solo se demora.
+  // Cachear sigue siendo lo correcto (evita leer el getter suelto varias
+  // veces por vuelta); el matiz es que ya no es cero diferencia observable.
   const ready = await matcherReady(matcher);
   const pending = await store.photosMissingDerivatives(limit);
   let thumbs = 0;
