@@ -246,6 +246,28 @@ async function createSqliteAdapter(dbPath) {
         )
         .get(personId);
     },
+    // Same rule as latestUpdate, one row per person — for /buscar (and any
+    // listing that would otherwise N+1 getLatestUpdate).
+    async latestUpdatesForPeople(personIds) {
+      if (!personIds.length) return [];
+      const marks = personIds.map(() => '?').join(',');
+      return db
+        .prepare(
+          `WITH ranked AS (
+             SELECT u.*,
+                    ROW_NUMBER() OVER (
+                      PARTITION BY u.person_id ORDER BY u.created_at DESC, u.id DESC
+                    ) AS rn
+             FROM updates u
+             WHERE u.person_id IN (${marks})
+               AND NOT (u.source = 'aggregator' AND u.status = 'safe')
+           )
+           SELECT id, person_id, status, message, location, lat, lng, source, source_url,
+                  reporter, contact, external_id, created_at
+           FROM ranked WHERE rn = 1`
+        )
+        .all(...personIds);
+    },
     // Everyone currently reported missing, most recent report first.
     // Everyone whose LATEST update is 'missing' — not everyone who was EVER
     // reported missing. Under the old "has ANY missing update" filter a person

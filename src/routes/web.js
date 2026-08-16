@@ -1097,11 +1097,16 @@ ${RESCUE_FOOTER}`
   <a class="big-btn search" href="/report?name=${encodeURIComponent(q)}">📢 Reportarla ahora</a>
 </div>`;
         } else {
-          const photos = await store.reportPhotoByPerson(matches.map((p) => p.id));
-          const cards = await Promise.all(
-            matches.map(async (p) => {
-              const update = await store.getLatestUpdate(p.id);
-              return searchHitCard({ person: p, update, photo: photos.get(p.id) || null });
+          const ids = matches.map((p) => p.id);
+          const [photos, updates] = await Promise.all([
+            store.reportPhotoByPerson(ids),
+            store.latestUpdateByPerson(ids)
+          ]);
+          const cards = matches.map((p) =>
+            searchHitCard({
+              person: p,
+              update: updates.get(p.id) || null,
+              photo: photos.get(p.id) || null
             })
           );
           resultsHtml = `<h2>Posibles coincidencias</h2>

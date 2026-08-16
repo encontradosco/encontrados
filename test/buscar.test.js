@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const { createSqliteAdapter } = require('../src/store/sqlite');
+const { createStore } = require('../src/people');
 const { createApp } = require('../src/server');
 const { nullMatcher } = require('../src/faces');
 
@@ -39,6 +40,22 @@ test('/buscar: search-actions sit above the stretched card-link overlay', async 
     /\.card\.person\s+\.search-actions\s*\{[^}]*z-index:\s*1/s,
     '.search-actions must be listed with the #65 overlay exceptions'
   );
+});
+
+test('latestUpdateByPerson matches getLatestUpdate and skips aggregator-only safe', async (t) => {
+  const store = createStore(await createSqliteAdapter(':memory:'));
+  const { person: a } = await store.findOrCreatePerson('Persona Prueba Batch A');
+  const { person: b } = await store.findOrCreatePerson('Persona Prueba Batch B');
+  await store.addUpdate(a.id, { status: 'missing', source: 'web', location: 'Lugar A' });
+  await store.addUpdate(b.id, { status: 'missing', source: 'web', location: 'Lugar B' });
+  await store.addUpdate(b.id, { status: 'safe', source: 'aggregator', message: 'Localizada' });
+
+  const batch = await store.latestUpdateByPerson([a.id, b.id]);
+  assert.equal(batch.get(a.id).status, 'missing');
+  assert.equal(batch.get(a.id).location, 'Lugar A');
+  assert.equal(batch.get(b.id).status, 'missing', 'aggregator safe no gana como latest');
+  assert.equal(batch.get(b.id).status, (await store.getLatestUpdate(b.id)).status);
+  assert.equal(batch.size, 2);
 });
 
 test('/buscar: empty form and optional entry points', async (t) => {

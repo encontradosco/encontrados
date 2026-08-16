@@ -117,6 +117,17 @@ function createStore(adapter) {
     return isoRow(await adapter.latestUpdate(personId));
   }
 
+  // Latest public-facing update per person (aggregator-only 'safe' excluded),
+  // as a Map — same shape as reportPhotoByPerson, for listings like /buscar.
+  async function latestUpdateByPerson(personIds) {
+    const rows = await adapter.latestUpdatesForPeople(personIds);
+    const byPerson = new Map();
+    for (const row of rows) {
+      byPerson.set(row.person_id, isoRow(row));
+    }
+    return byPerson;
+  }
+
   async function getRecentUpdates(limit = 20) {
     return (await adapter.recentUpdates(limit)).map(isoRow);
   }
@@ -348,6 +359,7 @@ function createStore(adapter) {
     addUpdate,
     getUpdates,
     getLatestUpdate,
+    latestUpdateByPerson,
     getRecentUpdates,
     getMissingPeople,
     getReunitedCount,
