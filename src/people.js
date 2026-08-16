@@ -56,6 +56,13 @@ function createStore(adapter) {
   // Rekognition lo paga exactamente el caso raro y de más riesgo — a punto de
   // fusionar dos personas —, no cada reporte que llega. Sin ninguna señal
   // real que comparar, el comportamiento es el de siempre: se fusiona.
+  //
+  // PENDIENTE — edad, la segunda señal que propone el issue, queda afuera:
+  // src/sources/colombiatebusca.js ya la parsea (parseAge) pero ese módulo no
+  // está conectado a nada en este repo hoy, solo lo usa su propio test.
+  // Construir un guardrail alrededor de un dato que no fluye por ningún lado
+  // todavía sería alcance especulativo — retomar esto cuando esa integración
+  // exista de verdad.
   async function evaluateMerge(candidate, { department, matcher, photoBytes }) {
     const score = candidate.score;
     // El departamento no nulo MÁS RECIENTE entre todos los updates del
@@ -104,6 +111,15 @@ function createStore(adapter) {
   async function findOrCreatePerson(fullName, { department = null, matcher = null, photoBytes = null } = {}) {
     const norm = normalize(fullName);
     if (!norm) throw new Error('Name is required');
+    // PENDIENTE, señalado en revisión: el guardrail de #150 solo corre acá
+    // abajo, sobre el candidato FUZZY (score >= 0.85) — un nombre EXACTO
+    // (normalizado idéntico) sigue fusionando sin pasar por evaluateMerge,
+    // igual que antes de #150. Es el comportamiento previo a este PR, no algo
+    // que este PR introdujo, y extenderlo acá es una decisión aparte y más
+    // grande: dos personas reales con el mismo nombre exacto son más raras
+    // que variantes ortográficas, pero también es el camino que toma el
+    // reporte de seguimiento de una familia sobre su propio caso — aplicar el
+    // guardrail acá arriesga bloquear justamente eso.
     const exact = await adapter.exactByNormalized(norm);
     if (exact) return { person: isoRow(exact), created: false, mergeCheck: null };
     const [best] = await searchPeople(fullName, { limit: 1, minScore: 0.85 });
