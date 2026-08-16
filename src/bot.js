@@ -71,8 +71,12 @@ function parseMessage(text) {
 // Alcance de este fix (opción 1 del issue): decirlo. Procesar la foto en
 // alguna de estas ramas es una decisión de privacidad aparte (no hay
 // consentimiento explícito fuera del formulario web) y queda para otro PR.
+// El texto no puede decir "no venía con un comando reconocido": en las ramas
+// find y unsubscribe SÍ hay un comando válido (BUSCAR, BAJA) — lo que falta
+// es que sea uno de los dos que procesan fotos. Decir lo contrario manda a
+// reenviar la misma foto con el mismo BUSCAR, que tampoco la va a usar.
 const PHOTO_NOT_PROCESSED_NOTE =
-  '📷 Recibí una foto, pero no la usé: no venía con un comando reconocido. Para que cuente, mándala de nuevo con el comando como leyenda, por ejemplo: BIEN <nombre>.';
+  '📷 Recibí una foto, pero este mensaje no la usa. Para que cuente, mándala de nuevo con BIEN <nombre> o SUSCRIBIR <nombre> como leyenda.';
 
 function withPhotoNote(reply, photo) {
   return photo ? `${reply}\n\n${PHOTO_NOT_PROCESSED_NOTE}` : reply;

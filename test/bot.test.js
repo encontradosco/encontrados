@@ -242,7 +242,7 @@ test('una foto en un mensaje no reconocido no se indexa y se avisa (#156)', asyn
     matcher
   });
   assert.deepEqual(espia, { indexFace: false, detectFace: false, searchByImage: false });
-  assert.match(r, /Recibí una foto, pero no la usé/);
+  assert.match(r, /Recibí una foto, pero este mensaje no la usa/);
 });
 
 test('una foto con AYUDA (o mensaje vacío) no se indexa y se avisa (#156)', async () => {
@@ -257,7 +257,7 @@ test('una foto con AYUDA (o mensaje vacío) no se indexa y se avisa (#156)', asy
   });
   assert.deepEqual(espia, { indexFace: false, detectFace: false, searchByImage: false });
   assert.match(r, /Comandos/);
-  assert.match(r, /Recibí una foto, pero no la usé/);
+  assert.match(r, /Recibí una foto, pero este mensaje no la usa/);
 });
 
 test('una foto con BUSCAR sin resultados no se indexa y se avisa (#156)', async () => {
@@ -272,7 +272,7 @@ test('una foto con BUSCAR sin resultados no se indexa y se avisa (#156)', async 
   });
   assert.deepEqual(espia, { indexFace: false, detectFace: false, searchByImage: false });
   assert.match(r, /No encontré reportes/);
-  assert.match(r, /Recibí una foto, pero no la usé/);
+  assert.match(r, /Recibí una foto, pero este mensaje no la usa/);
 });
 
 test('una foto con BAJA no se indexa y se avisa (#156)', async () => {
@@ -290,7 +290,7 @@ test('una foto con BAJA no se indexa y se avisa (#156)', async () => {
   });
   assert.deepEqual(espia, { indexFace: false, detectFace: false, searchByImage: false });
   assert.match(r, /ya no recibirás avisos/);
-  assert.match(r, /Recibí una foto, pero no la usé/);
+  assert.match(r, /Recibí una foto, pero este mensaje no la usa/);
 });
 
 // Control: report y subscribe SÍ procesan la foto (ya lo hacían antes de
@@ -316,5 +316,5 @@ test('una foto con BIEN sí se indexa y no lleva el aviso de #156', async () => 
     matcher
   });
   assert.equal(espia.indexFace, true, 'un reporte con foto sí debe indexar la cara');
-  assert.doesNotMatch(r, /Recibí una foto, pero no la usé/);
+  assert.doesNotMatch(r, /Recibí una foto, pero este mensaje no la usa/);
 });
