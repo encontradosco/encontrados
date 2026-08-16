@@ -109,6 +109,27 @@ async function createSqliteAdapter(dbPath) {
     );
     CREATE INDEX IF NOT EXISTS idx_contact_log_person ON contact_log(person_id);
     CREATE INDEX IF NOT EXISTS idx_contact_log_created ON contact_log(created_at);
+
+    -- Bitácora de fusiones automáticas por nombre (#150, PR 2 — SOLO esquema
+    -- acá; el write vive en people.js/findOrCreatePerson). Mismas reglas que
+    -- las dos de arriba: sin PII, solo IDs/enums/números, ON DELETE CASCADE
+    -- sobre people(id). person_id es el CANDIDATO evaluado (con quien se
+    -- comparó), no necesariamente quien terminó dueño del update — por eso
+    -- update_id es nullable: cuando la fusión se bloquea, el update nuevo
+    -- termina en una persona DISTINTA, y esta fila igual queda como registro
+    -- de que la comparación ocurrió y qué decidió.
+    CREATE TABLE IF NOT EXISTS merge_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+      update_id INTEGER REFERENCES updates(id) ON DELETE CASCADE,
+      score REAL NOT NULL,
+      department_match TEXT NOT NULL CHECK (department_match IN ('match','mismatch','unknown')),
+      face_match TEXT NOT NULL CHECK (face_match IN ('match','mismatch','unknown')),
+      blocked INTEGER NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_merge_log_person ON merge_log(person_id);
+    CREATE INDEX IF NOT EXISTS idx_merge_log_created ON merge_log(created_at);
   `);
 
   // Older dev databases: add the GPS columns if missing.
@@ -518,6 +539,21 @@ async function createSqliteAdapter(dbPath) {
       db.prepare(
         'INSERT INTO contact_log (person_id, update_id, channel, result) VALUES (?, ?, ?, ?)'
       ).run(personId, updateId ?? null, channel, result);
+    },
+    async insertMergeLog({ personId, updateId, score, departmentMatch, faceMatch, blocked }) {
+      db.prepare(
+        'INSERT INTO merge_log (person_id, update_id, score, department_match, face_match, blocked) VALUES (?, ?, ?, ?, ?, ?)'
+      ).run(personId, updateId ?? null, score, departmentMatch, faceMatch, blocked ? 1 : 0);
+    },
+    // Cuántas fusiones se evaluaron y cuántas de esas se bloquearon — mismo
+    // `since` opcional que matchLogCounts.
+    async mergeLogCounts({ since } = {}) {
+      const where = since ? 'WHERE created_at >= ?' : '';
+      const params = since ? [since] : [];
+      const total = db.prepare(`SELECT COUNT(*) AS n FROM merge_log ${where}`).get(...params).n;
+      const blockedWhere = since ? 'WHERE created_at >= ? AND blocked = 1' : 'WHERE blocked = 1';
+      const blocked = db.prepare(`SELECT COUNT(*) AS n FROM merge_log ${blockedWhere}`).get(...params).n;
+      return { total, blocked };
     },
     // Cuenta total y por superficie. `since` (ISO) filtra a lo escrito desde
     // ahí — se usa para la línea de "cambio desde el reporte anterior" del

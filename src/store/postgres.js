@@ -112,6 +112,27 @@ async function createPostgresAdapter(connectionString) {
     );
     CREATE INDEX IF NOT EXISTS idx_contact_log_person ON contact_log(person_id);
     CREATE INDEX IF NOT EXISTS idx_contact_log_created ON contact_log(created_at);
+
+    -- Bitácora de fusiones automáticas por nombre (#150, PR 2 — SOLO esquema
+    -- acá; el write vive en people.js/findOrCreatePerson). Mismas reglas que
+    -- las dos de arriba: sin PII, solo IDs/enums/números, ON DELETE CASCADE
+    -- sobre people(id). person_id es el CANDIDATO evaluado (con quien se
+    -- comparó), no necesariamente quien terminó dueño del update — por eso
+    -- update_id es nullable: cuando la fusión se bloquea, el update nuevo
+    -- termina en una persona DISTINTA, y esta fila igual queda como registro
+    -- de que la comparación ocurrió y qué decidió.
+    CREATE TABLE IF NOT EXISTS merge_log (
+      id SERIAL PRIMARY KEY,
+      person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+      update_id INTEGER REFERENCES updates(id) ON DELETE CASCADE,
+      score DOUBLE PRECISION NOT NULL,
+      department_match TEXT NOT NULL CHECK (department_match IN ('match','mismatch','unknown')),
+      face_match TEXT NOT NULL CHECK (face_match IN ('match','mismatch','unknown')),
+      blocked BOOLEAN NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_merge_log_person ON merge_log(person_id);
+    CREATE INDEX IF NOT EXISTS idx_merge_log_created ON merge_log(created_at);
   `);
   if (hasTrgm) {
     await pool.query(`
@@ -524,6 +545,22 @@ async function createPostgresAdapter(connectionString) {
         'INSERT INTO contact_log (person_id, update_id, channel, result) VALUES ($1, $2, $3, $4)',
         [personId, updateId ?? null, channel, result]
       );
+    },
+    async insertMergeLog({ personId, updateId, score, departmentMatch, faceMatch, blocked }) {
+      await pool.query(
+        'INSERT INTO merge_log (person_id, update_id, score, department_match, face_match, blocked) VALUES ($1, $2, $3, $4, $5, $6)',
+        [personId, updateId ?? null, score, departmentMatch, faceMatch, !!blocked]
+      );
+    },
+    // Cuántas fusiones se evaluaron y cuántas de esas se bloquearon — mismo
+    // `since` opcional que matchLogCounts.
+    async mergeLogCounts({ since } = {}) {
+      const clause = since ? 'WHERE created_at >= $1' : '';
+      const params = since ? [since] : [];
+      const total = (await one(`SELECT COUNT(*)::int AS n FROM merge_log ${clause}`, params)).n;
+      const blockedClause = since ? 'WHERE created_at >= $1 AND blocked = true' : 'WHERE blocked = true';
+      const blocked = (await one(`SELECT COUNT(*)::int AS n FROM merge_log ${blockedClause}`, params)).n;
+      return { total, blocked };
     },
     // Cuenta total y por superficie. `since` (ISO) filtra a lo escrito desde
     // ahí — se usa para la línea de "cambio desde el reporte anterior" del
