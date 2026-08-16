@@ -93,10 +93,8 @@ function createReportAdmission({
   // "link to the news" field it passes `sourceUrl` and inherits the rule.
   //
   // department / age: las señales con las que #150 decide NO fusionar a dos
-  // personas distintas cuyos nombres se parecen. Se aceptan por las tres
-  // puertas y no se exigen por ninguna: hoy solo el formulario web tiene dónde
-  // pedirlas, el agregador no controla sus fuentes y la gramática de WhatsApp
-  // no tiene token para ellas. Un reporte sin las dos entra igual — un reporte
+  // personas distintas cuyos nombres se parecen. Las tres puertas las aceptan y
+  // ninguna las exige — un reporte sin ellas entra igual, porque un reporte
   // descartado es el peor resultado posible de esta app.
   //
   // No se normalizan acá, a diferencia de sourceUrl: la puerta es addUpdate en

@@ -435,7 +435,7 @@ async function createSqliteAdapter(dbPath) {
           contact || null,
           extId,
           department || null,
-          Number.isFinite(age) ? age : null
+          age ?? null
         );
       // lastInsertRowid isn't reliable on the DO UPDATE path (no new row is
       // inserted), so look up by external_id (guaranteed unique) when we have one.

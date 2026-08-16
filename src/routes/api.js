@@ -160,10 +160,6 @@ function apiRoutes(store, matcher, petStore, petMatcher) {
         // http(s)-only rule, so it can't end up meaning one thing here and
         // another one on the next entry point that starts accepting a link.
         sourceUrl: req.body.source_url,
-        // Igual de crudos y por la misma razón: la puerta que canonicaliza el
-        // departamento vive en addUpdate. Se aceptan si llegan y no se exigen —
-        // el contrato de esta ruta no cambia, y el agregador no puede perder una
-        // ficha por un campo que su fuente no tiene.
         department: req.body.department,
         age: req.body.age,
         reporter,
@@ -197,7 +193,19 @@ function apiRoutes(store, matcher, petStore, petMatcher) {
       res.status(201).json({
         person_id: result.person.id,
         person_created: result.personCreated,
-        update: result.update,
+        // La fila cruda traía `contact` en claro y ahora traería también el
+        // departamento y la edad. `publicUpdate` es la única puerta y no tiene
+        // excepción para "el que llama acaba de mandar ese dato": esta ruta es
+        // pública cuando API_KEY no está configurada, y la respuesta de un
+        // upsert por external_id devuelve la fila que quedó, no la que llegó.
+        //
+        // `external_id` y `source_url` se devuelven aparte porque son del que
+        // llama y los necesita para conciliar su lado — no son datos de nadie.
+        update: {
+          ...publicUpdate(result.update),
+          external_id: result.update.external_id,
+          source_url: result.update.source_url
+        },
         photo_stored: !!photo,
         // What the caller needs to reconcile on their side. `person_created:
         // false` already meant "appended to an existing record"; this spells

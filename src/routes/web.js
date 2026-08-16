@@ -1065,13 +1065,10 @@ ${LOCATION_SCRIPT}`,
       // La columna sigue viva y la siguen llenando el API y los agregadores,
       // así que las fichas que ya lo traen se siguen viendo igual.
       //
-      // `department` y `age` viajan crudos: la puerta que canonicaliza el
-      // departamento y descarta una edad increíble es `addUpdate`, que es el
-      // único camino a la tabla. Acá NO se valida ninguno de los dos — el
-      // `required` del <select> es un empujón del navegador para que nadie lo
-      // salte por descuido, y convertirlo en una validación de servidor sería
-      // botar el reporte de una familia por un dato que apenas desempata
-      // nombres parecidos.
+      // El `required` del <select> de departamento es un empujón del navegador,
+      // no una regla: acá NO se valida, porque botarle el reporte a una familia
+      // por un dato que apenas desempata nombres parecidos sería peor que el
+      // empate.
       const result = await admission.admitReport({
         name,
         status: 'missing',

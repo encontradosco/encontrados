@@ -140,6 +140,72 @@ test('un departamento fuera de la lista y una edad absurda no rechazan el report
   await store.close();
 });
 
+// `Number(true)` es 1 y `Number([7])` es 7. Sin este filtro, un JSON con
+// `"age": true` guardaría una edad declarada de un año — una señal inventada,
+// que es peor que ninguna: en #150 va a decidir si dos personas se separan.
+test('un age que no es número ni texto entra como no declarado', async () => {
+  const store = await freshStore();
+  const { person } = await store.findOrCreatePerson('Persona Prueba Seis');
+  for (const raro of [true, false, [7], { age: 7 }, () => 7]) {
+    const update = await store.addUpdate(person.id, {
+      status: 'missing',
+      location: 'Armenia',
+      source: 'web',
+      age: raro
+    });
+    assert.equal(update.age, null, `${typeof raro} no puede volverse una edad`);
+  }
+  // Y lo que sí es una edad sigue pasando, por los dos tipos que la API manda.
+  assert.equal((await store.addUpdate(person.id, { status: 'missing', source: 'web', age: 34 })).age, 34);
+  assert.equal((await store.addUpdate(person.id, { status: 'missing', source: 'web', age: '34' })).age, 34);
+  // Cero es una edad real —un bebé— y no puede confundirse con "no declarada".
+  assert.equal((await store.addUpdate(person.id, { status: 'missing', source: 'web', age: 0 })).age, 0);
+  await store.close();
+});
+
+// El agregador reenvía su instantánea con el mismo external_id, y el upsert
+// pisa las dos columnas con lo que traiga el reenvío. Esto fija esa semántica
+// a propósito: si el reenvío omite el departamento, la señal vuelve a "no
+// declarado". Es lo mismo que ya hacen `contact` y `reporter`, y falla hacia
+// no separar — que es el comportamiento de hoy, no una separación equivocada.
+test('un reenvío con el mismo external_id pisa el departamento y la edad', async () => {
+  const store = await freshStore();
+  const { person } = await store.findOrCreatePerson('Persona Prueba Siete');
+
+  const primero = await store.addUpdate(person.id, {
+    status: 'missing',
+    location: 'Armenia',
+    source: 'aggregator',
+    externalId: 'ficha-1',
+    department: 'Quindío',
+    age: 34
+  });
+  assert.equal(primero.department, 'Quindío');
+
+  const corregido = await store.addUpdate(person.id, {
+    status: 'missing',
+    location: 'Armenia',
+    source: 'aggregator',
+    externalId: 'ficha-1',
+    department: 'Antioquia',
+    age: 36
+  });
+  assert.equal(corregido.id, primero.id, 'el reenvío no puede duplicar la fila');
+  assert.equal(corregido.department, 'Antioquia', 'un reenvío corrige el dato');
+  assert.equal(corregido.age, 36);
+
+  const sinSeñales = await store.addUpdate(person.id, {
+    status: 'safe',
+    location: 'Armenia',
+    source: 'aggregator',
+    externalId: 'ficha-1'
+  });
+  assert.equal(sinSeñales.id, primero.id);
+  assert.equal(sinSeñales.department, null, 'un reenvío sin el dato lo deja en no declarado');
+  assert.equal(sinSeñales.age, null);
+  await store.close();
+});
+
 test('un reporte sin ninguna de las dos señales sigue entrando', async () => {
   const store = await freshStore();
   const { person } = await store.findOrCreatePerson('Persona Prueba Tres');
@@ -179,9 +245,17 @@ test('SQLite: una base creada antes de #150 gana las dos columnas al arrancar', 
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('Postgres: el arranque agrega las dos columnas', async () => {
+// Las dos sentencias hacen falta y no se sustituyen: el CREATE TABLE es el
+// contrato que tiene que quedar idéntico al de SQLite —una base nueva de
+// Postgres se lee ahí, no en la lista de ALTERs— y el ALTER es el que le da las
+// columnas a la base que ya existe.
+test('Postgres: el arranque declara las dos columnas y también las agrega', async () => {
   const { statements } = await bootstrapStatements();
   const joined = statements.join('\n');
+  const create = joined.match(/CREATE TABLE IF NOT EXISTS updates \(([\s\S]*?)\);/i);
+  assert.ok(create, 'falta el CREATE TABLE de updates');
+  assert.match(create[1], /department TEXT/i);
+  assert.match(create[1], /age INTEGER/i);
   assert.match(joined, /ALTER TABLE updates ADD COLUMN IF NOT EXISTS department TEXT/i);
   assert.match(joined, /ALTER TABLE updates ADD COLUMN IF NOT EXISTS age INTEGER/i);
 });
@@ -260,6 +334,51 @@ test('un reporte que dice «No lo sé» entra, y sin departamento guardado', asy
   const [update] = await app.locals.store.getUpdates(personId);
   assert.equal(update.department, null, '«No lo sé» se guarda como no declarado');
   assert.equal(update.age, 34, 'la edad sí se guarda');
+});
+
+// POST /api/updates devolvía la fila cruda. Sin API_KEY configurada la ruta es
+// pública, así que cualquiera podía escribir un update y leer de vuelta la fila
+// entera — incluido `contact` en claro, y ahora las dos señales nuevas. Con
+// external_id la respuesta es además la fila que QUEDÓ, no la que se mandó.
+test('la respuesta de POST /api/updates no devuelve la fila cruda', async (t) => {
+  delete process.env.API_KEY;
+  const app = await createApp(await createSqliteAdapter(':memory:'), nullMatcher);
+  const server = await new Promise((r) => {
+    const s = app.listen(0, () => r(s));
+  });
+  t.after(() => server.close());
+  const base = `http://127.0.0.1:${server.address().port}`;
+
+  const res = await fetch(`${base}/api/updates`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: 'Persona Prueba Ocho',
+      status: 'missing',
+      location: 'Armenia',
+      source: 'aggregator',
+      external_id: 'ficha-9',
+      source_url: 'https://ejemplo.test/noticia',
+      reporter: 'Persona Prueba Nueve',
+      contact: 'contacto@ejemplo.test',
+      department: 'Quindío',
+      age: 34
+    })
+  });
+  assert.equal(res.status, 201);
+  const { update } = await res.json();
+
+  assert.equal(update.department, undefined, 'el departamento es una señal interna');
+  assert.equal(update.age, undefined, 'la edad es una señal interna');
+  assert.equal(update.contact, undefined, 'el contacto no sale nunca');
+  assert.equal(update.reporter, undefined, 'quien reporta sale enmascarado, no crudo');
+  assert.doesNotMatch(JSON.stringify(update), /contacto@ejemplo\.test/);
+
+  // Lo que el que llama sí necesita para conciliar su lado sigue estando.
+  assert.equal(update.external_id, 'ficha-9');
+  assert.equal(update.source_url, 'https://ejemplo.test/noticia');
+  assert.equal(update.status, 'missing');
+  assert.ok(update.id);
 });
 
 test('ninguna de las dos señales sale por una respuesta pública', async () => {

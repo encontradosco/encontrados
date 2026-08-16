@@ -93,6 +93,8 @@ async function createPostgresAdapter(connectionString) {
       source TEXT NOT NULL CHECK (source IN ('web','whatsapp','api','aggregator','rescate')),
       reporter TEXT,
       external_id TEXT,
+      department TEXT,
+      age INTEGER,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
     CREATE INDEX IF NOT EXISTS idx_updates_person ON updates(person_id, created_at DESC);
@@ -364,10 +366,7 @@ async function createPostgresAdapter(connectionString) {
   // De dónde salió la afirmación: el enlace a la noticia que confirma que una
   // persona apareció. Un `safe` con enlace carga su propia prueba.
   await pool.query('ALTER TABLE updates ADD COLUMN IF NOT EXISTS source_url TEXT');
-  // Señales declaradas por quien reporta, para no fusionar dos personas
-  // distintas que comparten un nombre parecido (#150). Mismo razonamiento que
-  // en SQLite: van en el update, no en la tabla people, y NULL significa "no
-  // declarado" — nunca veta una fusión.
+  // Señales para no fusionar dos personas distintas de nombre parecido (#150).
   await pool.query('ALTER TABLE updates ADD COLUMN IF NOT EXISTS department TEXT');
   await pool.query('ALTER TABLE updates ADD COLUMN IF NOT EXISTS age INTEGER');
   // Detection geometry (bounding box + landmarks) for the public overlay, and
@@ -550,7 +549,7 @@ async function createPostgresAdapter(connectionString) {
           contact || null,
           externalId || null,
           department || null,
-          Number.isFinite(age) ? age : null
+          age ?? null
         ]
       );
     },
