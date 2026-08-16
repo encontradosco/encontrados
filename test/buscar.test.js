@@ -119,6 +119,48 @@ test('/buscar: finds missing and reunited people with hybrid CTAs', async (t) =>
   assert.doesNotMatch(safeHtml, /573009998877/);
 });
 
+test('/buscar: deceased and injured put the ficha first', async (t) => {
+  const { server, base } = await startApp();
+  t.after(() => server.close());
+
+  const deceased = await seedPerson(base, {
+    name: 'Persona Prueba Fallecida',
+    status: 'deceased',
+    location: 'Lugar Prueba',
+    contact: '300 555 6666',
+    reporter: 'Familiar Prueba Dos'
+  });
+  const injured = await seedPerson(base, {
+    name: 'Persona Prueba Herida',
+    status: 'injured',
+    location: 'Hospital Prueba Dos',
+    contact: '300 777 8888',
+    reporter: 'Familiar Prueba Tres'
+  });
+
+  const deceasedHtml = await (await fetch(`${base}/buscar?q=Persona+Prueba+Fallecida`)).text();
+  assert.match(deceasedHtml, /FALLECIDO/);
+  assert.match(deceasedHtml, new RegExp(`href="/person/${deceased.person_id}"`));
+  assert.match(deceasedHtml, /Ver ficha/);
+  assert.match(deceasedHtml, /No es esta persona — reportar a otra/);
+  assert.doesNotMatch(
+    deceasedHtml,
+    /Yo la estoy buscando — dejar mi contacto/,
+    'fallecida: no invitar a dejar contacto como si siguiera desaparecida'
+  );
+  assert.doesNotMatch(deceasedHtml, /300 555 6666/);
+
+  const injuredHtml = await (await fetch(`${base}/buscar?q=Persona+Prueba+Herida`)).text();
+  assert.match(injuredHtml, /HERIDO/);
+  assert.match(injuredHtml, /Ver ficha/);
+  assert.match(
+    injuredHtml,
+    new RegExp(`/report\\?name=${encodeURIComponent('Persona Prueba Herida')}&desde=${injured.person_id}`)
+  );
+  assert.match(injuredHtml, /Yo la estoy buscando — dejar mi contacto/);
+  assert.doesNotMatch(injuredHtml, /300 777 8888/);
+});
+
 test('/buscar: no matches still offers reporting', async (t) => {
   const { server, base } = await startApp();
   t.after(() => server.close());

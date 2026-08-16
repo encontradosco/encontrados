@@ -222,22 +222,28 @@ function searchHitCard({ person, update, photo }) {
   const nameQ = encodeURIComponent(person.full_name);
   const ficha = `/person/${person.id}`;
   const leaveContact = `/report?name=${nameQ}&desde=${person.id}`;
+  const reportOther = `/report?name=${nameQ}`;
   const meta = [];
   if (status) meta.push(statusBadge(status));
   if (pub && pub.created_at) meta.push(timeTag(pub.created_at));
   const location = pub && pub.location ? `<p class="meta">📍 ${esc(pub.location)}</p>` : '';
 
+  // Ficha first when the latest status is not "still missing": reunited, injured,
+  // or deceased. Offering "dejar mi contacto" as the primary CTA on a fallecida
+  // match is the wrong ask after a fuzzy name hit.
   let actions;
-  if (status === 'safe') {
-    // Reunited: the ficha is the main destination; creating another report
-    // stays available but secondary so a wrong-name match does not trap anyone.
+  if (status === 'safe' || status === 'deceased') {
     actions = `<div class="search-actions">
   <a class="big-btn search" href="${ficha}">Ver ficha</a>
-  <a class="big-btn secondary" href="/report?name=${nameQ}">No es esta persona — reportar a otra</a>
+  <a class="big-btn secondary" href="${reportOther}">No es esta persona — reportar a otra</a>
+</div>`;
+  } else if (status === 'injured') {
+    actions = `<div class="search-actions">
+  <a class="big-btn search" href="${ficha}">Ver ficha</a>
+  <a class="big-btn secondary" href="${leaveContact}">🙋 Yo la estoy buscando — dejar mi contacto</a>
 </div>`;
   } else {
-    // Still missing (or other non-safe status): prefer joining the existing
-    // report with contact; the ficha stays one tap away.
+    // missing, unknown, or no update yet: prefer joining the existing report.
     actions = `<div class="search-actions">
   <a class="big-btn search" href="${leaveContact}">🙋 Yo la estoy buscando — dejar mi contacto</a>
   <a class="big-btn secondary" href="${ficha}">Ver ficha</a>
