@@ -82,9 +82,10 @@ test('home lists missing people and offers both actions', async (t) => {
   t.after(() => server.close());
 
   const html = await (await fetch(base)).text();
-  assert.match(html, /tengo a alguien conmigo — mira quién lo busca/i);
+  assert.match(html, /Rescaté a alguien/);
+  assert.match(html, /Estoy buscando a alguien/);
   assert.match(html, /href="\/rescate"/);
-  assert.match(html, /📢 Reporta a la persona que buscas/);
+  assert.match(html, /href="\/report"/);
   // The sources line lives small under the listing, present even when empty.
   assert.match(html, /Fuentes de información de desaparecidos/);
 
@@ -107,6 +108,24 @@ test('home lists missing people and offers both actions', async (t) => {
   // No false "coming soon" promises: media and official channels don't expose a
   // scrapable photo registry, so they must not be listed as sources.
   assert.doesNotMatch(home, /Próximamente/);
+});
+
+// El home ofrece dos caminos y solo dos: el rescatista que encontró a alguien
+// (→ /rescate) y quien está buscando (→ /report). Cada uno con su espacio de
+// imagen reservado para que se distingan de un vistazo.
+test('home ofrece dos caminos claros, cada uno con su espacio de imagen', async (t) => {
+  const { server, base } = await startApp();
+  t.after(() => server.close());
+
+  const home = await (await fetch(base)).text();
+  assert.match(home, /<a class="path rescuer" href="\/rescate">/);
+  assert.match(home, /<a class="path family" href="\/report">/);
+  assert.match(home, /Rescaté a alguien/);
+  assert.match(home, /Estoy buscando a alguien/);
+  // Dos espacios de imagen, uno por camino, cada uno con su imagen.
+  assert.equal(home.match(/class="path-art"/g).length, 2);
+  assert.match(home, /<img src="\/img\/rescate\.jpg"/);
+  assert.match(home, /<img src="\/img\/busqueda\.jpg"/);
 });
 
 // A second party reporting the same person is never rejected: the report is
