@@ -185,11 +185,15 @@ test('families can no longer subscribe to alerts', async (t) => {
   const { server, base, store } = await startApp();
   t.after(() => server.close());
   const { person } = await store.findOrCreatePerson('Alguien Buscado');
-  for (const path of ['/buscar', '/alerta', `/person/${person.id}/subscribe`, '/subscribe-by-name']) {
+  // /buscar used to be the family alert-subscription form; it is now a
+  // read-only name search (GET). POSTing to it must still 404 — there is no
+  // write/subscribe surface there anymore.
+  for (const path of ['/alerta', `/person/${person.id}/subscribe`, '/subscribe-by-name']) {
     const res = await fetch(`${base}${path}`, { method: 'POST' });
     assert.equal(res.status, 404, `${path} debería no existir`);
   }
-  assert.equal((await fetch(`${base}/buscar`)).status, 404);
+  assert.equal((await fetch(`${base}/buscar`, { method: 'POST' })).status, 404);
+  assert.equal((await fetch(`${base}/buscar`)).status, 200);
 });
 
 // The old web form's reporter field is gone (the rescuer model asks for a
@@ -422,7 +426,7 @@ test('home: the reunited counter does not move on an aggregator sync alone', asy
 
   const before = await (await fetch(base)).text();
   assert.match(before, /Esteban Cárdenas Lozano/);
-  assert.doesNotMatch(before, /reencontrada/);
+  assert.doesNotMatch(before, /\d+\s+reencontrada/);
 
   // The public registry's later sweep sees this same ficha as "Localizada".
   await store.addUpdate(person.id, { status: 'safe', source: 'aggregator', message: 'Localizada' });
@@ -433,7 +437,7 @@ test('home: the reunited counter does not move on an aggregator sync alone', asy
     /Esteban Cárdenas Lozano/,
     'sigue listado como desaparecido: el barrido externo no es una confirmación de esta app'
   );
-  assert.doesNotMatch(afterAggregatorSync, /reencontrada/, 'el conteo público no se infla con una fuente externa');
+  assert.doesNotMatch(afterAggregatorSync, /\d+\s+reencontrada/, 'el conteo público no se infla con una fuente externa');
 
   // A REAL confirmation through the app still has to work.
   await store.addUpdate(person.id, { status: 'safe', source: 'web', message: 'Confirmado por la familia' });

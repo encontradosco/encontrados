@@ -9,7 +9,7 @@ const {
   backfillPhotoDerivatives,
   MAX_QUERY_PHOTOS
 } = require('../facematch');
-const { esc, layout, updateCard, timeTag, facePlate, LOCATION_SCRIPT } = require('../html');
+const { esc, layout, updateCard, timeTag, facePlate, statusBadge, LOCATION_SCRIPT } = require('../html');
 const { isReadyToShow } = require('../report-photo');
 const gh = require('../github');
 const { logContact, resultFromSend } = require('../logbook');
@@ -212,6 +212,48 @@ const REPORT_EXIT_BLOCK = `<div class="notice">
 // última cosa que se ve. La salida a reportar vive en REPORT_EXIT_BLOCK, detrás
 // de su pregunta, y solo en las pantallas donde de verdad hay un punto muerto.
 const RESCUE_FOOTER = `<p><a class="big-btn report" href="/rescate">🔍 Consultar otra persona</a></p>`;
+
+// One hit on /buscar. Only public fields: name, status, location, timestamps,
+// report photo. Never contact or raw reporter — those stay behind the person
+// page / rescuer match path.
+function searchHitCard({ person, update, photo }) {
+  const status = update ? update.status : null;
+  const nameQ = encodeURIComponent(person.full_name);
+  const ficha = `/person/${person.id}`;
+  const leaveContact = `/report?name=${nameQ}&desde=${person.id}`;
+  const meta = [];
+  if (status) meta.push(statusBadge(status));
+  if (update && update.created_at) meta.push(timeTag(update.created_at));
+  const location =
+    update && update.location ? `<p class="meta">📍 ${esc(update.location)}</p>` : '';
+
+  let actions;
+  if (status === 'safe') {
+    // Reunited: the ficha is the main destination; creating another report
+    // stays available but secondary so a wrong-name match does not trap anyone.
+    actions = `<div class="search-actions">
+  <a class="big-btn search" href="${ficha}">Ver ficha</a>
+  <a class="big-btn secondary" href="/report?name=${nameQ}">No es ella — reportar a otra persona</a>
+</div>`;
+  } else {
+    // Still missing (or other non-safe status): prefer joining the existing
+    // report with contact; the ficha stays one tap away.
+    actions = `<div class="search-actions">
+  <a class="big-btn search" href="${leaveContact}">🙋 Yo la estoy buscando — dejar mi contacto</a>
+  <a class="big-btn secondary" href="${ficha}">Ver ficha</a>
+</div>`;
+  }
+
+  return `<article class="card person search-hit">
+  <div class="person-info">
+    <h3><a class="card-link" href="${ficha}">${esc(person.full_name)}</a></h3>
+    ${meta.length ? `<p class="meta">${meta.join(' · ')}</p>` : ''}
+    ${location}
+    ${actions}
+  </div>
+  ${facePlate(photo, person.full_name)}
+</article>`;
+}
 
 // What the rescuer can DO with a match depends on what the report carries.
 // Reports typed into the app bring the family's contact; the fichas imported
@@ -578,6 +620,10 @@ function webRoutes(store, matcher) {
     <span class="btn-title">📢 Reporta a la persona que buscas</span>
     <span class="btn-sub">Deja su foto y tu teléfono: quien la encuentre te llama directo</span>
   </a>
+  <!-- Búsqueda previa opcional: no alarga el camino crítico. Quien ya sabe que
+       tiene que reportar sigue yendo directo a /report; quien cree que ya está
+       en el sistema puede mirar antes (.cursor/plans/Buscador_Antes_De_Reportar_Plan.md). -->
+  <p class="subtle search-first"><a href="/buscar">¿Ya la reportaron? Búscala primero</a></p>
 </section>
 ${list}
 `,
@@ -1034,6 +1080,62 @@ ${RESCUE_FOOTER}`
     })
   );
 
+  // ------------------------------------------------- search before reporting
+  // Optional step before /report: fuzzy name search against people already in
+  // the system (missing or reunited). Advisory only — never blocks reporting.
+  // Decision: Option A + hybrid CTAs (see .cursor/plans/Buscador_Antes_De_Reportar_Plan.md).
+  router.get(
+    '/buscar',
+    wrap(async (req, res) => {
+      const q = String(req.query.q || '').trim();
+      let resultsHtml = '';
+      if (q) {
+        const matches = await store.searchPeople(q, { limit: 10 });
+        if (!matches.length) {
+          resultsHtml = `<div class="notice">
+  <p>No encontramos a nadie con un nombre parecido a <strong>${esc(q)}</strong>.</p>
+  <a class="big-btn search" href="/report?name=${encodeURIComponent(q)}">📢 Reportarla ahora</a>
+</div>`;
+        } else {
+          const photos = await store.reportPhotoByPerson(matches.map((p) => p.id));
+          const cards = await Promise.all(
+            matches.map(async (p) => {
+              const update = await store.getLatestUpdate(p.id);
+              return searchHitCard({ person: p, update, photo: photos.get(p.id) || null });
+            })
+          );
+          resultsHtml = `<h2>Posibles coincidencias</h2>
+${cards.join('')}
+<p class="subtle">¿Ninguna es la persona que buscas?</p>
+<a class="big-btn secondary" href="/report?name=${encodeURIComponent(q)}">📢 Reportar de todas formas</a>`;
+        }
+      }
+
+      res.send(
+        layout(
+          'Buscar persona',
+          `
+<h1 class="compact">¿Ya está reportada o reencontrada?</h1>
+<p class="subtle">Busca por nombre antes de crear un reporte nuevo. Si ya está en el sistema, puedes sumarte a ese registro. Si no aparece, reportarla sigue siendo el siguiente paso — esta búsqueda nunca bloquea un reporte.</p>
+<form class="stack compact" method="get" action="/buscar">
+  <label class="field-label"><span>Nombre de la persona</span>
+    <input name="q" required value="${esc(q)}" placeholder="Ej. María Fernanda López" autocomplete="off"${q ? '' : ' autofocus'}></label>
+  <button type="submit">Buscar</button>
+</form>
+${resultsHtml}
+<p class="subtle"><a href="/report">Ir directo a reportar</a></p>
+`,
+          {
+            fullTitle: 'Buscar si ya está reportada — encontrados.co',
+            description:
+              'Busca por nombre si la persona que buscas ya fue reportada o marcada como reencontrada, antes de crear un reporte nuevo.',
+            path: '/buscar'
+          }
+        )
+      );
+    })
+  );
+
   // ------------------------------------------------- report a missing person
   router.get('/report', (req, res) => {
     const remembered = rememberedContact(req);
@@ -1043,6 +1145,7 @@ ${RESCUE_FOOTER}`
         `
 <h1 class="compact">Reporta una persona desaparecida</h1>
 <p class="subtle">Cuando un rescatista tenga a esta persona, verá tus datos de contacto y se comunicará contigo directamente. Quien te avisa es esa persona: encontrados.co no te llama ni te escribe por este reporte.</p>
+<p class="notice">¿Crees que ya la reportaron? <a href="/buscar">Búscala primero</a> — si ya está, puedes dejar tu contacto en ese reporte en vez de crear uno nuevo.</p>
 <form class="stack compact" method="post" action="/report" enctype="multipart/form-data" data-resize-photos data-require-photos>
   <label class="file-label"><span>📷 Fotos de la persona * (1 a 3 — así la reconocen los rescatistas)</span>
     <input type="file" name="photos" accept="image/*" multiple required></label>
