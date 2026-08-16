@@ -65,8 +65,11 @@ Independiente de la opción de UX:
 
 **Decisión tomada (2026-08-16):** Option **A opcional** + camino **3 (híbrido)**.
 Pantalla `/buscar`, enlaces desde home y `/report` sin alargar el camino crítico.
-Ante `safe` → ficha primero; ante buscada → sumarse al reporte existente; siempre
-queda “reportar de todas formas”.
+CTAs por último estado público (ver `searchHitCard` / `test/buscar.test.js`):
+- `safe` o `deceased` → ficha primero; secundaria «No es esta persona — reportar a otra»
+- `injured` → ficha primero; secundaria «dejar mi contacto»
+- `missing` / `unknown` → «dejar mi contacto» primero; ficha secundaria
+- siempre, a nivel de página, queda «reportar de todas formas»
 
 **Quién decide cambios posteriores:** mantenedor humano — @ni500 o @torrenegra.
 
