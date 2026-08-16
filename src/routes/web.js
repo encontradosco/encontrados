@@ -10,6 +10,7 @@ const {
   MAX_QUERY_PHOTOS
 } = require('../facematch');
 const { esc, layout, updateCard, timeTag, facePlate, statusBadge, LOCATION_SCRIPT } = require('../html');
+const { publicUpdate } = require('../privacy');
 const { isReadyToShow } = require('../report-photo');
 const gh = require('../github');
 const { logContact, resultFromSend } = require('../logbook');
@@ -213,19 +214,18 @@ const REPORT_EXIT_BLOCK = `<div class="notice">
 // de su pregunta, y solo en las pantallas donde de verdad hay un punto muerto.
 const RESCUE_FOOTER = `<p><a class="big-btn report" href="/rescate">🔍 Consultar otra persona</a></p>`;
 
-// One hit on /buscar. Only public fields: name, status, location, timestamps,
-// report photo. Never contact or raw reporter — those stay behind the person
-// page / rescuer match path.
+// One hit on /buscar. Only the public projection of the latest update —
+// publicUpdate() is the same door the API uses; never paint a raw updates row.
 function searchHitCard({ person, update, photo }) {
-  const status = update ? update.status : null;
+  const pub = publicUpdate(update);
+  const status = pub ? pub.status : null;
   const nameQ = encodeURIComponent(person.full_name);
   const ficha = `/person/${person.id}`;
   const leaveContact = `/report?name=${nameQ}&desde=${person.id}`;
   const meta = [];
   if (status) meta.push(statusBadge(status));
-  if (update && update.created_at) meta.push(timeTag(update.created_at));
-  const location =
-    update && update.location ? `<p class="meta">📍 ${esc(update.location)}</p>` : '';
+  if (pub && pub.created_at) meta.push(timeTag(pub.created_at));
+  const location = pub && pub.location ? `<p class="meta">📍 ${esc(pub.location)}</p>` : '';
 
   let actions;
   if (status === 'safe') {
