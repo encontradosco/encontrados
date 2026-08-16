@@ -30,6 +30,17 @@ async function seedPerson(base, { name, status, location, contact, reporter }) {
   return res.json();
 }
 
+test('/buscar: search-actions sit above the stretched card-link overlay', async (t) => {
+  // Regression for B1: without z-index on .search-actions, the home card's
+  // stretched .card-link::after steals taps meant for the hybrid CTAs.
+  const css = require('fs').readFileSync(require('path').join(__dirname, '../public/styles.css'), 'utf8');
+  assert.match(
+    css,
+    /\.card\.person\s+\.search-actions\s*\{[^}]*z-index:\s*1/s,
+    '.search-actions must be listed with the #65 overlay exceptions'
+  );
+});
+
 test('/buscar: empty form and optional entry points', async (t) => {
   const { server, base } = await startApp();
   t.after(() => server.close());

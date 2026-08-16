@@ -262,9 +262,12 @@ h1.compact .subtle { font-family: var(--font-sans); font-weight: 400; font-size:
 .person-info p { margin: 0; }
 
 /* #65: the rescuer's action on the card itself, not at the end of the ficha.
-   Sits above the stretched link, as does the photo's "ver foto" button. */
+   Sits above the stretched link, as does the photo's "ver foto" button.
+   /buscar hits reuse this card: their .search-actions must sit above too, or
+   "dejar mi contacto" / "reportar" would navigate to the ficha instead. */
 .card.person .card-cta,
-.card.person .face {
+.card.person .face,
+.card.person .search-actions {
   position: relative;
   z-index: 1;
 }
