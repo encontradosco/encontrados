@@ -1,7 +1,8 @@
-// Proveedor de embeddings de mascotas. Producción: el servicio propio en
-// pet-matcher/ (ver ese folder). Sin PET_MATCH_API_URL, el matching de
-// mascotas queda apagado — mismo contrato de degradación que src/faces.js
-// tiene para Rekognition: nunca lanza, nunca tumba un reporte.
+// Proveedor de embeddings de mascotas. Producción: el servicio propio
+// pet-matcher (repo separado, no vive en este monorepo). Sin
+// PET_MATCH_API_URL, el matching de mascotas queda apagado — mismo
+// contrato de degradación que src/faces.js tiene para Rekognition: nunca
+// lanza, nunca tumba un reporte.
 function createPetMatcher(timeoutMs = 15000) {
   const apiUrl = process.env.PET_MATCH_API_URL;
   if (!apiUrl) {
@@ -17,8 +18,9 @@ function createPetMatcher(timeoutMs = 15000) {
     enabled: true,
     // Nunca la URL acá: /api/diag es público y sin llave, y aunque el
     // servicio exige un secreto compartido (PET_MATCH_SHARED_SECRET, ver
-    // pet-matcher/app.py) anunciar su dirección exacta sigue siendo
-    // publicarle el blanco a quien quiera pegarle sin que nadie se lo pida.
+    // require_shared_secret() en app.py del repo de pet-matcher) anunciar
+    // su dirección exacta sigue siendo publicarle el blanco a quien quiera
+    // pegarle sin que nadie se lo pida.
     status: 'activo',
     async embed(bytes, contentType) {
       try {

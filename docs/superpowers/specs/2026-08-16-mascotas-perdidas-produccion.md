@@ -10,12 +10,9 @@ en `main`.
 
 ## Estado actual
 
-- Rama local `mascotas-perdidas`, 18 commits sobre el `main` en que se basó,
-  ~4.300 líneas en 28 archivos. **No se ha hecho push ni abierto PR** — sigue
-  todo local, por instrucción explícita.
-- `npm test`: 425/425 en verde. `pet-matcher` (Python): 3/3 en verde con un
-  embedding falso — el modelo real no se prueba en CI, a propósito (ver
-  `pet-matcher/README.md`).
+- Rama local `mascotas-perdidas`, sobre el `main` en que se basó. **No se ha
+  hecho push ni abierto PR** — sigue todo local, por instrucción explícita.
+- `npm test`: 427/427 en verde.
 - Ya pasó: revisión por tarea (10 tareas + 2 rondas de arreglo) y una revisión
   final de toda la rama, que encontró y ya corrigió 1 hallazgo Critical y 7
   Important (todos mecánicos: privacidad de fotos, cobertura de Postgres,
@@ -23,6 +20,12 @@ en `main`.
 - Ya se agregó en esta sesión, más allá del plan original: la página de
   listado público (`/mascotas`, espejo del listado de personas en `/`) —
   faltaba y ya está construida y probada.
+- **El servicio Python ya no vive en este repo.** Se movió a
+  [`github.com/yesid-lopez/pet-matcher`](https://github.com/yesid-lopez/pet-matcher)
+  (privado, cuenta personal) porque necesita un host propio que mantenga el
+  proceso vivo — algo que este monorepo, serverless en Vercel, no puede
+  ofrecer. La carpeta `pet-matcher/` que existía acá se borró; cualquier
+  referencia a esa ruta en este documento es historia, no el estado actual.
 
 ---
 
@@ -31,10 +34,12 @@ en `main`.
 Nada de esto lo puede decidir un agente — son cambios de comportamiento de
 usuario, esquema o privacidad. Cada uno con la evidencia que ya se juntó:
 
-### 1.1 Elegir el modelo de embeddings
+### 1.1 Elegir el modelo de embeddings — ✅ resuelta
 
-El modelo que quedó integrado en el plan original (`CLIP-ViT-base`) resultó
-ser, con datos reales, **el peor de 5 candidatos evaluados**:
+**Decisión tomada: DINOv2-small.** Es lo que corre hoy en el servicio
+desplegado. El modelo que quedó integrado en el plan original
+(`CLIP-ViT-base`) resultó ser, con datos reales, **el peor de 5 candidatos
+evaluados**:
 
 | Modelo | AUC promedio (perros+gatos, 160 mascotas reales) |
 |---|---|
@@ -54,10 +59,11 @@ CPU, sin GPU):
 - **Zer0int-CLIP-L** — el más preciso, a costa de ~3× más memoria (1.46 GB) y
   ~7× más lento por foto (197 ms) que el actual.
 
-Cambiar el modelo es mecánico (cambiar `MODEL_NAME` y el método de extracción
-del embedding en `pet-matcher/model.py`) pero **cambia directamente qué tan
-seguido se le muestra el contacto de una familia a un desconocido** — de ahí
-que sea una decisión de regla 3, no un detalle de implementación.
+Cambiar el modelo fue mecánico (`MODEL_NAME` y el método de extracción del
+embedding en `model.py`, en el repo de pet-matcher) pero **cambia
+directamente qué tan seguido se le muestra el contacto de una familia a un
+desconocido** — de ahí que fuera una decisión de regla 3, no un detalle de
+implementación.
 
 ### 1.2 Calibrar `PET_MATCH_THRESHOLD`
 
@@ -87,16 +93,21 @@ una foto que sí se publica. Ley 1581 + regla 3, directo — hace falta decidir
 el mecanismo de borrado y actualizar la política pública antes de que esto sea
 público.
 
-### 1.4 El flujo de "encontré" promete algo que hoy no puede cumplir
+### 1.4 El flujo de "encontré" promete algo que hoy no puede cumplir — parcialmente resuelta
 
 El link de navegación a `/mascotas` ya está visible para cualquier visitante
 del sitio. La página de reporte dice explícitamente: *"Cuando alguien que
 encontró una mascota parecida la compare, verá tu contacto y podrá
-avisarte."* Pero mientras `pet-matcher` no esté desplegado en ningún lado
-(`PET_MATCH_API_URL` sin configurar en producción), `/mascotas/encontre`
-responde siempre "no está disponible" — la promesa no se cumple. Decidir si
-se oculta el enlace/la funcionalidad hasta tener el servicio desplegado, o si
-se despliega primero y se habilita después.
+avisarte."*
+
+`pet-matcher` ya está desplegado (Fly.io, cuenta personal, ver 2.1) y
+probado de punta a punta contra una copia local de encontrados.co. Pero
+**la promesa sigue sin cumplirse en la producción real**, porque
+`PET_MATCH_API_URL`/`PET_MATCH_SHARED_SECRET` todavía no están puestas en
+Vercel (2.2) — eso sigue pendiente, y sigue siendo una decisión de una
+persona, no algo que se configura solo. Hasta que se pongan, `main` en
+producción se comporta igual que antes: `/mascotas/encontre` responde
+"no está disponible".
 
 ### 1.5 "Marcar como encontrada" no pide ninguna confirmación
 
@@ -134,38 +145,47 @@ lado de personas tampoco tiene esa página, así que esto es consistente con
 
 ## 2. Infraestructura nueva a desplegar
 
-### 2.1 `pet-matcher/` necesita un host propio
+### 2.1 `pet-matcher` necesita un host propio — ✅ desplegado, con una decisión de dinero pendiente
 
-No es serverless-compatible tal cual (el modelo se carga una vez al arrancar
-y se queda en memoria) — necesita un proceso que se mantenga vivo: Fly.io,
-Render o Railway son los candidatos ya evaluados en el diseño original.
+Desplegado en Fly.io (`pet-matcher.fly.dev`, cuenta personal, región `gru`),
+con FastAPI en vez del Flask del diseño original, y probado de punta a punta
+contra una copia local de encontrados.co (reporte → "encontré" → coincidencia
+real, con autenticación de por medio).
 
-- **Tier de memoria**, según el modelo elegido (1.1): ~512 MB–1 GB para
-  DINOv2-small, ~2 GB para Zer0int-CLIP-L.
-- **Cachear los pesos del modelo entre reinicios** — si el contenedor se
-  reconstruye desde cero en cada despliegue, se re-descarga de HuggingFace
-  cada vez (84 MB–1.6 GB según el modelo). Hornear los pesos en la imagen de
-  Docker, o montarlos en un volumen persistente.
-- **Autenticación** — hoy no tiene ninguna (decisión explícita, documentada en
-  `pet-matcher/README.md`). **No exponerlo a internet sin agregar un secreto
-  compartido primero**, mismo patrón que `WHATSAPP_RELAY_SECRET`. Esto incluye
-  un cambio pequeño en `src/petfaces.js` (el cliente Node) para mandar el
-  header con el secreto.
-- **Concurrencia** — el servidor de desarrollo de Flask atiende una petición a
-  la vez. Para producción hace falta `gunicorn` con varios workers, y **cada
-  worker carga su propia copia del modelo en memoria** — la memoria total se
-  multiplica por la cantidad de workers, hay que decidir cuántos según el
-  tráfico esperado.
+- **Memoria**: `shared-cpu-1x`, 1 GB — suficiente para DINOv2-small (~373 MB
+  en uso real).
+- **Autenticación**: ✅ resuelta. `PET_MATCH_SHARED_SECRET`, mismo patrón que
+  `WHATSAPP_RELAY_SECRET` — header `x-pet-matcher-secret`, comparación con
+  `hmac.compare_digest`, falla cerrado (503) si el servidor no tiene la
+  variable puesta. `src/petfaces.js` ya lo manda.
+- **Pendiente, y es una decisión de plata, no técnica**: la cuenta está en el
+  trial gratuito de Fly, que mata la máquina a los 5 minutos de encendida
+  **sin importar si hay tráfico**, y la vuelve a prender sola con la
+  siguiente petición (~35-45s de arranque en frío, porque el modelo se
+  descarga de HuggingFace en cada arranque — no está horneado en la imagen).
+  Para una familia buscando a su mascota en una emergencia, esa espera en el
+  primer uso del día puede no ser aceptable. Agregar una tarjeta a Fly cuesta
+  ~US$5.92/mes si la máquina queda siempre prendida, menos si se deja el
+  `auto_stop_machines` ya configurado y solo se paga por el tráfico real.
+- **Sin resolver, menor**: los pesos del modelo no están horneados en la
+  imagen Docker — cada arranque en frío depende de que HuggingFace esté
+  disponible. Y la imagen pesa 2.2 GB porque `torch` trajo soporte CUDA que
+  Fly no usa (no hay GPU en `shared-cpu-1x`) — cambiar a la build CPU-only
+  aligeraría el build/deploy, no afecta el funcionamiento.
+- **Concurrencia**: un solo worker de `uvicorn` a propósito (cada worker
+  cargaría su propia copia del modelo) — suficiente para el tráfico esperado
+  de esta fase.
 
 ### 2.2 Variables de entorno nuevas en Vercel
 
 | Variable | Valor |
 |---|---|
-| `PET_MATCH_API_URL` | La URL del `pet-matcher` ya desplegado (2.1). Sin ella, el matching de mascotas queda apagado — las fotos se guardan igual. |
+| `PET_MATCH_API_URL` | `https://pet-matcher.fly.dev` |
+| `PET_MATCH_SHARED_SECRET` | El mismo secreto que ya está puesto en Fly (`flyctl secrets set` ya corrido). Sin ella, `pet-matcher` responde 503 a todo. |
 | `PET_MATCH_THRESHOLD` | El número que salga de la decisión 1.2. Por ahora usa el default del código (`80`), sin calibrar. |
 
-Si se agrega autenticación al servicio (2.1), hace falta una tercera variable
-para el secreto compartido — no existe todavía en el código.
+**Ninguna de las tres está puesta en Vercel todavía** — es tocar producción,
+así que queda para que una persona lo haga desde el dashboard.
 
 ---
 
@@ -176,9 +196,11 @@ archivos) es demasiado grande para un solo PR bajo la convención de este
 repo ("un PR = una preocupación"). División sugerida, cada una revisable por
 separado:
 
-1. **Esquema + servicio Python**, sin ninguna ruta web todavía: las tres
-   tablas nuevas en los dos adaptadores, `pet-matcher/`, `src/pets.js`,
-   `src/petfaces.js`, `src/petmatch.js`. No cambia nada que un usuario vea.
+1. **Esquema + cliente del servicio Python**, sin ninguna ruta web todavía:
+   las tres tablas nuevas en los dos adaptadores, `src/pets.js`,
+   `src/petfaces.js`, `src/petmatch.js` (el servicio Python en sí ya no es
+   parte de este repo — vive en `pet-matcher`, repo separado). No cambia nada
+   que un usuario vea.
 2. **Las páginas web**: `src/routes/pets.js`, el nav, el listado. Este PR sí
    cae en regla 3 (comportamiento de usuario) — se declara y espera a una
    persona.
@@ -192,14 +214,15 @@ abrirlo — no desde este branch acumulado.
 
 ## 4. Checklist antes de desplegar
 
-- [ ] Decisión 1.1 (modelo) tomada y aplicada en `pet-matcher/model.py`.
+- [x] Decisión 1.1 (modelo) tomada: DINOv2-small, aplicada en el repo de `pet-matcher`.
 - [ ] Decisión 1.2 (umbral) tomada y aplicada en `PET_MATCH_THRESHOLD`.
 - [ ] Decisión 1.3 (borrado) resuelta: endpoint + texto de `/privacidad`.
-- [ ] Decisión 1.4 (promesa sin servicio desplegado) resuelta.
+- [ ] Decisión 1.4 (variables de Vercel puestas — el servicio ya está desplegado, falta conectarlo a producción).
 - [ ] Decisión 1.5 (confirmación al marcar encontrada) resuelta o descartada explícitamente.
 - [ ] Decisión 1.6 (¿solo-búsqueda?) conversada, aunque la respuesta sea "no, seguimos como está".
-- [ ] `pet-matcher` desplegado, con autenticación (2.1), en un host que mantenga el proceso vivo.
+- [x] `pet-matcher` desplegado, con autenticación (2.1) — Fly.io, trial gratuito.
+- [ ] Decidir si el trial de Fly (mata la máquina a los 5 min, cold start ~35-45s) es aceptable para producción, o hace falta agregar tarjeta (~US$5.92/mes).
 - [ ] Variables de entorno (2.2) configuradas en Vercel.
 - [ ] Rama partida en PRs chicos (sección 3), cada uno con su propia revisión.
-- [ ] Smoke test contra el `pet-matcher` real ya desplegado (no `localhost`) — confirmar que el timeout de 15s en `src/petfaces.js` alcanza con latencia de red real, no solo en loopback.
-- [ ] `npm test` y `pytest` en verde en la rama final de cada PR.
+- [x] Smoke test contra el `pet-matcher` real ya desplegado (no `localhost`) — reporte → "encontré" → coincidencia real, con auth. Timeout de 15s en `src/petfaces.js` no se ha probado bajo latencia de red degradada, solo con el servicio sano.
+- [x] `npm test` en verde (427/427). `pytest` en verde (7/7) en el repo de `pet-matcher`.

@@ -155,10 +155,11 @@ async function fakeVercelOAuth() {
   };
 }
 
-// Stand-in del servicio Python (pet-matcher/), para que las pruebas de rutas
-// ejerciten POST /embed de verdad sin necesitar Python instalado. Por
-// omisión responde un vector fijo; respondWith() lo cambia cuando una prueba
-// necesita un vector específico (para forzar o evitar una coincidencia).
+// Stand-in del servicio Python pet-matcher (repo separado), para que las
+// pruebas de rutas ejerciten POST /embed de verdad sin necesitar Python
+// instalado. Por omisión responde un vector fijo; respondWith() lo cambia
+// cuando una prueba necesita un vector específico (para forzar o evitar
+// una coincidencia).
 async function fakePetMatcher() {
   const received = [];
   let vector = [1, 0, 0];

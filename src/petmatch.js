@@ -1,6 +1,7 @@
 // Orquestación de mascotas — espejo de src/facematch.js, pero comparando
 // embeddings en JS en vez de usar la colección administrada de Rekognition:
-// pet-matcher/ (ver ese folder) solo calcula vectores, no compara nada.
+// el servicio pet-matcher (repo separado, no vive en este monorepo — ver
+// PET_MATCH_API_URL en agent.md) solo calcula vectores, no compara nada.
 //
 // Dos tipos de foto, igual que con personas:
 //   'report' — mascota reportada como perdida. Se guarda y se publica.
