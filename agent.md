@@ -386,6 +386,7 @@ presencia y huella, nunca el valor).
 | `PUBLIC_STATS` | `GET /admin/stats` sigue **detrás de sesión** (el default). Solo el valor exacto `1` la abre sin sesión — ventana temporal mientras el auth de Vercel termina de configurarse (#116, PR 6). Cerrarla es borrar la variable, no un PR. El drill-down por ID (`/api/admin/*`) nunca lee esta variable. |
 | `PET_MATCH_API_URL` | Matching de mascotas apagado; las fotos se guardan igual. Ver `pet-matcher/README.md`. |
 | `PET_MATCH_THRESHOLD` | `80`. Sin calibrar todavía con fotos reales — ver el documento de diseño. |
+| `PET_MATCH_SHARED_SECRET` | No se manda el header `x-pet-matcher-secret` en `/embed`; si `PET_MATCH_API_URL` sí está puesta, el servicio de mascotas responde 503 (falla cerrado del lado de `pet-matcher`) y el matching queda igual de apagado que sin `PET_MATCH_API_URL`. Mismo patrón que `WHATSAPP_RELAY_SECRET`: se genera con `openssl rand -hex 32` y tiene que ser idéntica en los dos lados. |
 
 `SENDGRID_API_BASE`, `GITHUB_API_BASE`, `WHATSAPP_API_BASE`,
 `VERCEL_OAUTH_API_BASE` y `VERCEL_OAUTH_AUTHORIZE_URL` existen solo para que
