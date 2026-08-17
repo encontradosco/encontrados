@@ -32,16 +32,22 @@ function cosineSimilarity(a, b) {
 }
 
 // Compara contra el lado OPUESTO (report ⟷ query), filtrando por especie —
-// nunca cruza perro con gato. petPhotosForMatching ya excluye del lado de
-// 'report' cualquier foto de una mascota marcada como resuelta (resolved_at) —
-// mostrar como "posible avistamiento" a una mascota que ya se encontró no
-// ayuda a nadie y confunde. Devuelve [{ id, pet_id, similarity }] ordenado de
-// mayor a menor similitud, solo por encima del umbral, y nunca más de
-// MAX_PET_MATCHES filas.
-async function matchPetPhoto(petStore, { kind, species, embedding }) {
+// nunca cruza perro con gato — y por MODELO: dos embeddings de modelos
+// distintos viven en espacios vectoriales distintos, así que una similitud
+// coseno entre ellos no significa nada, aunque el número salga "razonable".
+// Si el modelo cambia alguna vez, las fotos viejas simplemente dejan de
+// compararse contra las nuevas hasta que se reindexen — mejor eso que una
+// coincidencia (o un descarte) sin sentido. petPhotosForMatching ya excluye
+// del lado de 'report' cualquier foto de una mascota marcada como resuelta
+// (resolved_at) — mostrar como "posible avistamiento" a una mascota que ya se
+// encontró no ayuda a nadie y confunde. Devuelve [{ id, pet_id, similarity }]
+// ordenado de mayor a menor similitud, solo por encima del umbral, y nunca
+// más de MAX_PET_MATCHES filas.
+async function matchPetPhoto(petStore, { kind, species, embedding, model }) {
   const oppositeKind = kind === 'report' ? 'query' : 'report';
   const candidates = await petStore.petPhotosForMatching(oppositeKind, species);
   return candidates
+    .filter((c) => c.embedding_model === model)
     .map((c) => ({ ...c, similarity: cosineSimilarity(embedding, c.embedding) * 100 }))
     .filter((c) => c.similarity >= PET_MATCH_THRESHOLD)
     .sort((a, b) => b.similarity - a.similarity)
@@ -67,7 +73,14 @@ async function processPetPhoto(petStore, petMatcher, { petId, kind, species, sub
   if (!usable) {
     console.warn(`[petmatch] foto ${photo.id} ilegible (${contentType}) — guardada sin comparar`);
     photo.unreadable = true;
-    if (kind === 'query') await petStore.clearPetPhotoContent(photo.id);
+    // Incondicional, no solo para 'query': lo que se guardó arriba es el
+    // content_type que declaró quien subió el archivo, sin verificar — es
+    // precisamente lo que toMatchable() ya rechazó. Servirlo tal cual en
+    // GET /pet-photo/:id (que solo revisa que haya bytes, nunca el tipo)
+    // abriría un XSS almacenado en este origen con un archivo declarado
+    // como imagen pero servido como text/html. Sin contenido, esa ruta ya
+    // devuelve 404 antes de llegar al res.set(Content-Type).
+    await petStore.clearPetPhotoContent(photo.id);
     return { photo, matches: [] };
   }
   const content = usable.bytes;
@@ -99,7 +112,7 @@ async function processPetPhoto(petStore, petMatcher, { petId, kind, species, sub
   let matches = [];
   try {
     await petStore.setPetPhotoEmbedding(photo.id, result.embedding, result.model);
-    matches = await matchPetPhoto(petStore, { kind, species, embedding: result.embedding });
+    matches = await matchPetPhoto(petStore, { kind, species, embedding: result.embedding, model: result.model });
   } catch (e) {
     console.error(`[petmatch] error guardando o comparando el embedding de la foto ${photo.id}:`, e.message);
   }
@@ -138,7 +151,6 @@ async function backfillUnindexedPetPhotos(petStore, petMatcher, limit = 100) {
       const result = await petMatcher.embed(bytes, photo.content_type);
       if (result) {
         await petStore.setPetPhotoEmbedding(photo.id, result.embedding, result.model);
-        if (photo.kind === 'query') await petStore.clearPetPhotoContent(photo.id);
         processed++;
       } else {
         failed++;
@@ -146,6 +158,12 @@ async function backfillUnindexedPetPhotos(petStore, petMatcher, limit = 100) {
     } catch (e) {
       console.error(`[petmatch:backfill] foto ${photo.id} falló:`, e.message);
       failed++;
+    } finally {
+      // Incondicional al resultado — que embed() haya fallado o lanzado no es
+      // motivo para dejar los bytes de una foto 'query' un reintento más:
+      // mismo principio que el borrado de processPetPhoto arriba, fuera de
+      // cualquier try/catch de comparación.
+      if (photo.kind === 'query') await petStore.clearPetPhotoContent(photo.id);
     }
   }
   return { ok: true, pending: pending.length, processed, failed };

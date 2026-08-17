@@ -47,12 +47,17 @@ function createPetMatcher(timeoutMs = 15000) {
         // cualquiera que responda 200 con JSON, no debe colarse como éxito:
         // sin esto, body.embedding/body.model llegan `undefined` y la fila
         // queda con basura en vez de fallar limpio (mismo defecto que un
-        // embedding nunca se borra si nadie lo nota).
-        if (!Array.isArray(body.embedding)) {
+        // embedding nunca se borra si nadie lo nota). Array.isArray() solo no
+        // basta — [] o ['x'] también son arrays, y calzarían silenciosamente
+        // en cosineSimilarity() sin producir nunca ninguna coincidencia real.
+        const model = typeof body.model === 'string' ? body.model.trim() : '';
+        const validEmbedding =
+          Array.isArray(body.embedding) && body.embedding.length > 0 && body.embedding.every(Number.isFinite);
+        if (!validEmbedding || !model) {
           console.error('[petfaces] /embed respondió 200 sin un embedding válido');
           return null;
         }
-        return { embedding: body.embedding, model: body.model };
+        return { embedding: body.embedding, model };
       } catch (e) {
         console.error('[petfaces] no se pudo llamar al servicio de mascotas:', e.message);
         return null;

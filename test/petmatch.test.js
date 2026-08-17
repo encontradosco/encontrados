@@ -312,6 +312,39 @@ test('una mascota ya marcada como encontrada no vuelve a aparecer en nuevas coin
   assert.equal(matches.length, 0, 'una mascota ya resuelta no debe salir como posible coincidencia');
 });
 
+// Cicatriz: matchPetPhoto comparaba cualquier par de embeddings con similitud
+// coseno sin mirar qué modelo los generó. Dos modelos distintos viven en
+// espacios vectoriales distintos — un número "alto" de similitud entre ellos
+// no significa nada, y antes SÍ producía una coincidencia si los vectores
+// (de mentira, en la prueba) resultaban parecidos por casualidad.
+test('dos fotos con vectores idénticos NO coinciden si vienen de modelos distintos', async () => {
+  const { petStore } = await setup();
+  const { processPetPhoto } = require('../src/petmatch');
+  const perdido = await photoBytes('modelo-viejo');
+  const buscando = await photoBytes('modelo-nuevo');
+
+  function matcherFor(model) {
+    return {
+      enabled: true,
+      status: 'fake',
+      async embed() {
+        return { embedding: VECTOR_A, model };
+      }
+    };
+  }
+
+  const pet = await petStore.addPet({ species: 'dog', petName: null, description: null, contact: '300 111 2222' });
+  await processPetPhoto(petStore, matcherFor('modelo-viejo'), {
+    petId: pet.id, kind: 'report', species: 'dog', bytes: perdido, contentType: 'image/jpeg'
+  });
+
+  const { matches } = await processPetPhoto(petStore, matcherFor('modelo-nuevo'), {
+    kind: 'query', species: 'dog', bytes: buscando, contentType: 'image/jpeg'
+  });
+
+  assert.equal(matches.length, 0, 'vectores idénticos de modelos distintos no deben coincidir');
+});
+
 test('nunca más de MAX_PET_MATCHES coincidencias, y siempre ordenadas de mayor a menor similitud', async () => {
   const { petStore } = await setup();
   const { processPetPhoto, MAX_PET_MATCHES } = require('../src/petmatch');
@@ -406,5 +439,41 @@ test('backfillUnindexedPetPhotos borra bytes de una foto "encontré" después de
     stored.content.length,
     0,
     'los bytes de una foto "encontré" se borran después de backfill'
+  );
+});
+
+// Cicatriz: backfillUnindexedPetPhotos solo borraba los bytes de una foto
+// 'query' dentro de la rama de éxito — si embed() fallaba o el servicio
+// devolvía null, los bytes se quedaban en la base hasta el siguiente
+// reintento (y para siempre si nunca vuelve a tener éxito). Rompía la misma
+// garantía de privacidad que el resto de la suite ya prueba para el camino
+// principal.
+test('backfillUnindexedPetPhotos borra los bytes de una foto "encontré" aunque embed() vuelva a fallar', async () => {
+  const { petStore } = await setup();
+  const { backfillUnindexedPetPhotos } = require('../src/petmatch');
+  const encontrado = await photoBytes('encontre-que-sigue-fallando');
+
+  const fotoSinProcesar = await petStore.addPetPhoto({
+    kind: 'query',
+    species: 'dog',
+    content: encontrado,
+    contentType: 'image/jpeg'
+  });
+
+  const failingMatcher = {
+    enabled: true,
+    status: 'fake',
+    async embed() {
+      return null;
+    }
+  };
+  const result = await backfillUnindexedPetPhotos(petStore, failingMatcher, 100);
+  assert.equal(result.failed, 1);
+
+  const stored = await petStore.getPetPhoto(fotoSinProcesar.id);
+  assert.equal(
+    stored.content.length,
+    0,
+    'los bytes de una foto "encontré" deben borrarse aunque el backfill no haya logrado generar un embedding'
   );
 });

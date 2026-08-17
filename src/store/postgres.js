@@ -708,7 +708,7 @@ async function createPostgresAdapter(connectionString) {
     // marcó como encontrada no ayuda a nadie.
     async petPhotosForMatching(kind, species) {
       return all(
-        `SELECT pet_photos.id, pet_photos.pet_id, pet_photos.embedding
+        `SELECT pet_photos.id, pet_photos.pet_id, pet_photos.embedding, pet_photos.embedding_model
          FROM pet_photos
          LEFT JOIN pets ON pets.id = pet_photos.pet_id
          WHERE pet_photos.kind = $1 AND pet_photos.species = $2 AND pet_photos.embedding IS NOT NULL

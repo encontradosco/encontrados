@@ -680,7 +680,7 @@ async function createSqliteAdapter(dbPath) {
     async petPhotosForMatching(kind, species) {
       return db
         .prepare(
-          `SELECT pet_photos.id, pet_photos.pet_id, pet_photos.embedding
+          `SELECT pet_photos.id, pet_photos.pet_id, pet_photos.embedding, pet_photos.embedding_model
            FROM pet_photos
            LEFT JOIN pets ON pets.id = pet_photos.pet_id
            WHERE pet_photos.kind = ? AND pet_photos.species = ? AND pet_photos.embedding IS NOT NULL

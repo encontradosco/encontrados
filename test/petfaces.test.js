@@ -60,6 +60,44 @@ test('un 200 sin un embedding válido (servicio mal configurado) devuelve null, 
   delete process.env.PET_MATCH_API_URL;
 });
 
+// Cicatriz: Array.isArray() solo aceptaba [] y ['x'] como "válidos" — un
+// array vacío o de strings nunca produce ninguna coincidencia real, pero
+// tampoco fallaba limpio: quedaba guardado como si fuera un embedding
+// utilizable.
+for (const [nombre, embedding] of [
+  ['un array vacío', []],
+  ['un array con elementos no numéricos', ['x', 'y']],
+  ['un array con NaN/Infinity', [1, NaN, Infinity]]
+]) {
+  test(`un embedding inválido (${nombre}) devuelve null, no basura`, async () => {
+    const { server, base } = await fakePetMatcherServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ embedding, model: 'modelo-fake' }));
+    });
+    process.env.PET_MATCH_API_URL = base;
+    const { createPetMatcher } = require('../src/petfaces');
+    const matcher = createPetMatcher();
+    const result = await matcher.embed(Buffer.from('foto'), 'image/jpeg');
+    assert.equal(result, null);
+    server.close();
+    delete process.env.PET_MATCH_API_URL;
+  });
+}
+
+test('un embedding válido sin nombre de modelo (o vacío) devuelve null, no basura', async () => {
+  const { server, base } = await fakePetMatcherServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ embedding: [0.1, 0.2], model: '' }));
+  });
+  process.env.PET_MATCH_API_URL = base;
+  const { createPetMatcher } = require('../src/petfaces');
+  const matcher = createPetMatcher();
+  const result = await matcher.embed(Buffer.from('foto'), 'image/jpeg');
+  assert.equal(result, null);
+  server.close();
+  delete process.env.PET_MATCH_API_URL;
+});
+
 test('si el servicio responde con error, embed() devuelve null sin lanzar', async () => {
   const { server, base } = await fakePetMatcherServer((req, res) => {
     res.writeHead(500).end('boom');

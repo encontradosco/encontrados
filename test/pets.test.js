@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const sharp = require('sharp');
 const { createSqliteAdapter } = require('../src/store/sqlite');
+const { createPetStore } = require('../src/pets');
 const { createApp } = require('../src/server');
 const { nullMatcher } = require('../src/faces');
 const { fakePetMatcher } = require('./helpers');
@@ -23,11 +24,13 @@ async function startApp() {
   // real — si quien corre `npm test` tiene credenciales de AWS en su .env
   // local, esta suite (que no habla de caras) terminaría llamando a
   // Rekognition de verdad. Mismo patrón que ya usa el resto de la suite.
-  const app = await createApp(await createSqliteAdapter(':memory:'), nullMatcher);
+  const adapter = await createSqliteAdapter(':memory:');
+  const petStore = createPetStore(adapter);
+  const app = await createApp(adapter, nullMatcher);
   const server = await new Promise((resolve) => {
     const s = app.listen(0, () => resolve(s));
   });
-  return { server, base: `http://127.0.0.1:${server.address().port}` };
+  return { server, base: `http://127.0.0.1:${server.address().port}`, petStore };
 }
 
 test('reportar una mascota perdida la publica, y "encontré" con la misma foto muestra el contacto', async (t) => {
@@ -164,6 +167,41 @@ test('una foto ilegible entre varias no rompe el reporte, y la ficha lo dice sin
   assert.match(html, /no pudimos leer/i);
   const imgTags = html.match(/<img src="\/pet-photo\//g) || [];
   assert.equal(imgTags.length, 1, 'solo la foto legible debe tener un <img>, no una rota para la ilegible');
+});
+
+// Cicatriz: una foto de reporte "ilegible" guardaba antes los bytes y el
+// content_type que declaró quien la subió, sin verificar — y GET
+// /pet-photo/:id los servía tal cual, sin mirar el tipo. Alguien podía
+// declarar 'text/html' en una foto que en realidad es HTML/JS y conseguir
+// que este origen lo ejecutara. processPetPhoto ahora borra el contenido de
+// CUALQUIER foto ilegible, no solo las de 'query' — sin bytes, la ruta
+// devuelve 404 antes de llegar a fijar el Content-Type.
+test('una foto de reporte declarada como imagen pero con contenido HTML no queda servible', async (t) => {
+  const pm = await fakePetMatcher();
+  const { server, base, petStore } = await startApp();
+  t.after(() => {
+    server.close();
+    pm.stop();
+  });
+
+  const fd = new FormData();
+  fd.set('species', 'dog');
+  fd.set('contact_phone', '300 888 9999');
+  fd.append(
+    'photos',
+    new File([Buffer.from('<script>document.title="hackeado"</script>')], 'foto.jpg', { type: 'text/html' })
+  );
+  const res = await fetch(`${base}/mascotas/reporte`, { method: 'POST', body: fd, redirect: 'manual' });
+  const location = res.headers.get('location');
+  assert.match(location, /fotos_ilegibles=1/);
+
+  const petId = Number(location.match(/\/mascota\/(\d+)/)[1]);
+  const [{ id: photoId }] = await petStore.petPhotosForPet(petId);
+  const photo = await petStore.getPetPhoto(photoId);
+  assert.equal(photo.content.length, 0, 'el content_type declarado no debe conservar bytes servibles');
+
+  const photoRes = await fetch(`${base}/pet-photo/${photoId}`);
+  assert.equal(photoRes.status, 404, 'sin bytes, la ruta debe devolver 404 antes de fijar el Content-Type declarado');
 });
 
 test('marcar una mascota como encontrada lo refleja en su ficha', async (t) => {
