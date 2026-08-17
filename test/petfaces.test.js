@@ -80,6 +80,41 @@ test('si el servicio no responde (nadie escuchando), embed() devuelve null sin l
   delete process.env.PET_MATCH_API_URL;
 });
 
+test('con PET_MATCH_SHARED_SECRET puesto, embed() manda el secreto en el header', async () => {
+  let recibido;
+  const { server, base } = await fakePetMatcherServer((req, res) => {
+    recibido = req.headers['x-pet-matcher-secret'];
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ embedding: [0.1, 0.2], model: 'modelo-fake' }));
+  });
+  process.env.PET_MATCH_API_URL = base;
+  process.env.PET_MATCH_SHARED_SECRET = 'secreto-de-prueba';
+  const { createPetMatcher } = require('../src/petfaces');
+  const matcher = createPetMatcher();
+  await matcher.embed(Buffer.from('foto'), 'image/jpeg');
+  assert.equal(recibido, 'secreto-de-prueba');
+  server.close();
+  delete process.env.PET_MATCH_API_URL;
+  delete process.env.PET_MATCH_SHARED_SECRET;
+});
+
+test('sin PET_MATCH_SHARED_SECRET, embed() no manda el header (mismo comportamiento de siempre)', async () => {
+  let recibido = 'sin-tocar';
+  const { server, base } = await fakePetMatcherServer((req, res) => {
+    recibido = req.headers['x-pet-matcher-secret'];
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ embedding: [0.1, 0.2], model: 'modelo-fake' }));
+  });
+  process.env.PET_MATCH_API_URL = base;
+  delete process.env.PET_MATCH_SHARED_SECRET;
+  const { createPetMatcher } = require('../src/petfaces');
+  const matcher = createPetMatcher();
+  await matcher.embed(Buffer.from('foto'), 'image/jpeg');
+  assert.equal(recibido, undefined);
+  server.close();
+  delete process.env.PET_MATCH_API_URL;
+});
+
 test('si el servicio acepta la conexión pero no responde, embed() devuelve null sin colgarse', async () => {
   const { server, base } = await fakePetMatcherServer((req, res) => {
     // No responder — simula un servicio colgado o sobrecargado
