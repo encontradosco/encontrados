@@ -437,6 +437,20 @@ async function createPostgresAdapter(connectionString) {
     async clearPhotoContent(photoId) {
       await pool.query('UPDATE photos SET content = $1 WHERE id = $2', [Buffer.alloc(0), photoId]);
     },
+    // La misma foto exacta ya indexada para esta persona: su face_id, para
+    // reusarlo en vez de sumar una firma nueva por la misma cara (#160 — un
+    // reporte re-empujado con la misma foto multiplicaba firmas). face_id
+    // IS NOT NULL ya excluye a la fila que se está procesando ahora mismo,
+    // que todavía no tiene el suyo escrito.
+    async photoFaceIdForContent(personId, kind, content) {
+      const row = await one(
+        `SELECT face_id FROM photos
+         WHERE person_id = $1 AND kind = $2 AND face_id IS NOT NULL AND content = $3
+         LIMIT 1`,
+        [personId, kind, content]
+      );
+      return row ? row.face_id : null;
+    },
     async photosByFaceIds(faceIds) {
       if (!faceIds.length) return [];
       return all(

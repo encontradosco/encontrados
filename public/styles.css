@@ -572,9 +572,9 @@ pre {
 .alert-panel form { margin: 0; }
 #location-field { display: block; }
 
-/* "Report this on Colombia Te Busca too" — the last thing above the submit
-   button on /report. Big tap target: it is ticked with a thumb, one-handed,
-   by someone who is not having a good day. */
+/* "Solo consultar ahora" en /rescate — hoy la única casilla de este estilo.
+   Blanco de toque grande: se marca con el pulgar, con una mano, por alguien
+   que no está teniendo un buen día. */
 .share-check {
   display: flex;
   align-items: center;
@@ -598,22 +598,6 @@ pre {
   box-shadow: 0 0 0 2px rgba(43, 108, 176, 0.15);
 }
 .share-note { font-size: 0.78rem; margin: -0.2rem 0 0; }
-
-/* Las casillas que solo pide el registro de terceros. Ocultas hasta que se
-   marca la casilla: el formulario no crece para quien no va a usarlas. Es CSS
-   puro, sin JavaScript — si el navegador no entiende `:has()` se quedan
-   ocultas y queda el formulario de siempre, que se envía igual porque todas
-   son opcionales. */
-.ctb-fields { display: none; }
-.share-check:has(input:checked) ~ .ctb-fields {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  border-left: 3px solid var(--accent);
-  padding: 0.15rem 0 0.15rem 0.75rem;
-  margin-top: 0.15rem;
-}
-.ctb-why { margin: 0; }
 .contact-note { font-size: 0.78rem; margin: -0.2rem 0 0; }
 
 /* Honeypot on the ideas/bug forms. Not `display:none` — some bots skip fields
