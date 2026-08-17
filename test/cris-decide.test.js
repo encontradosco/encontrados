@@ -100,6 +100,29 @@ test('no se autoriza a sí mismo: si él puso la etiqueta, se abstiene', () => {
   assert.match(d.reason, /orden de merge/i);
 });
 
+test('EXCEPCIÓN DELIBERADA: un mantenedor puede despachar lo rutinario solo', () => {
+  // El autor y el etiquetador pueden ser la misma persona. Es la excepción más
+  // consecuente del módulo y está acá para que quitarla sea una decisión y no
+  // un descuido: si alguien agrega `labeler === author` a la condición, esta
+  // prueba se cae y le cuenta por qué existía.
+  //
+  // Lo que la hace aceptable no está en esta línea sino alrededor: solo aplica
+  // a rutas rutinarias (las restringidas excluyen al agente), exige el gate
+  // objetivo verde, y exige que alguien haya declarado que nada cambia para
+  // quien usa la app. Ver el bloque «Quién puede dar la orden» en el módulo y
+  // la sección correspondiente del CONTRIBUTING.
+  const d = decide(pr({ author: 'ni500', labeler: 'ni500' }));
+  assert.equal(d.decision, 'approve_and_merge');
+});
+
+test('la excepción NO se extiende a las rutas restringidas', () => {
+  // Mismo caso de arriba —autor y etiquetador son la misma persona— pero
+  // tocando privacidad. Acá el agente no es owner, así que su firma no sirve y
+  // sigue haciendo falta otra persona.
+  const d = decide(pr({ author: 'ni500', labeler: 'ni500', files: ['src/privacy.js'] }));
+  assert.notEqual(d.decision, 'approve_and_merge');
+});
+
 test('una etiqueta puesta por alguien que no es code owner no autoriza nada', () => {
   const d = decide(pr({ labeler: 'alguien-de-paso' }));
   assert.equal(d.decision, 'abstain');

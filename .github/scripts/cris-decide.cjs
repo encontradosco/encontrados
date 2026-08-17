@@ -427,6 +427,39 @@ function decide(input) {
 
   // ── Quién puede dar la orden ──
   //
+  // ⚠️ EXCEPCIÓN DELIBERADA, y la más importante de este archivo: el
+  // etiquetador PUEDE ser el autor.
+  //
+  // La consecuencia hay que decirla sin adornos, porque es real: un mantenedor
+  // que posee todas las rutas tocadas puede abrir su propio PR, ponerle las dos
+  // etiquetas, y esto lo mergea a producción sin que ninguna otra persona lo
+  // lea. GitHub bloquea la autoaprobación directa; esta ruta la esquiva.
+  //
+  // Está así a propósito, y el motivo es que en este proyecto la etiqueta ES la
+  // revisión humana. El flujo que esto habilita no es "un humano se aprueba
+  // solo": es que el agente escribe, un mantenedor humano lee el diff y lo
+  // autoriza poniendo la etiqueta, y el agente firma. Exigir un etiquetador
+  // distinto del autor devolvería lo rutinario a esperar a un tercero
+  // disponible, que es exactamente el cuello de botella que este archivo viene
+  // a quitar en un proyecto de emergencia.
+  //
+  // Lo que sostiene la excepción, y sin lo cual NO sería aceptable:
+  //   • solo alcanza para lo rutinario — las rutas restringidas del CODEOWNERS
+  //     (esquema, biometría, privacidad, `web.js`, autenticación, `.github/`)
+  //     excluyen al agente, así que ahí su firma no sirve y sigue haciendo falta
+  //     una persona distinta;
+  //   • el gate objetivo tiene que estar verde en ese commit;
+  //   • y alguien tuvo que declarar el hecho de que nada cambia para quien usa
+  //     la app.
+  //
+  // Está escrita también en `CONTRIBUTING.md`, donde la gente que contribuye
+  // puede verla, porque una excepción que solo vive en un comentario de código
+  // no es una regla del proyecto: es un secreto.
+  //
+  // Si alguien "arregla" esto agregando `labeler === author` a la condición de
+  // abajo, la prueba «un mantenedor puede despachar lo rutinario solo» se cae —
+  // y esa prueba está para que el cambio sea una decisión y no un descuido.
+  //
   // La etiqueta AUTORIZA; no fabrica cobertura. Quien etiqueta no cuenta como
   // aprobador de nada. Dos fuerzas según lo que esté en juego:
   //   • para MERGEAR, quien etiqueta debe ser owner de las rutas tocadas — la

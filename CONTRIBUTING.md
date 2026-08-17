@@ -144,10 +144,19 @@ que sea lo más pequeño que puede ser para lograrlo. Vas a recibir preguntas �
 son sobre el código, no sobre ti.
 
 `main` está protegida: todo entra por PR, con los tests en verde y la aprobación
-de uno de los cuatro. **Nadie aprueba su propio PR** — GitHub no lo permite, y
-está bien que no lo permita: todo cambio lo mira alguien distinto de quien lo
-escribió, incluido el de un mantenedor. Esa es la mitad que sostiene la de
-abajo.
+de uno de los cuatro. **Nadie aprueba su propio PR** — GitHub no lo permite.
+
+Hay una excepción y preferimos escribirla a que la descubras: **un mantenedor
+puede despachar solo un cambio rutinario**. Abre el PR, lo autoriza con la
+etiqueta, y el agente firma (ver más abajo). En ese caso quien lee el diff y
+quien lo escribe pueden ser la misma persona.
+
+La aceptamos porque esto es un proyecto de emergencia y lo rutinario no debería
+esperar a que coincidan dos husos horarios — pero **solo se sostiene por lo que
+la rodea**: no aplica en las rutas restringidas (esquema, biometría, privacidad,
+autenticación, `.github/`), donde la firma del agente no sirve y sigue haciendo
+falta otra persona; no aplica a nada que caiga en las tres categorías de abajo;
+y no aplica a los PRs que llegan desde un fork, que mira siempre una persona.
 
 ### Qué entra con una revisión y qué espera a una persona
 
