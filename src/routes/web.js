@@ -1041,6 +1041,7 @@ ${LOCATION_SCRIPT}`,
       // casillas: con cualquiera de las dos el reporte pasa, igual que antes.
       const contact = composeContact({ phone, email, contact: req.body.contact });
       const files = (req.files || []).slice(0, MAX_QUERY_PHOTOS);
+      const desdeFicha = String(req.body.desde_ficha || '').trim();
       if (!name || !name.trim() || !location || !location.trim() || !contact || !files.length) {
         return res
           .status(400)
@@ -1078,6 +1079,12 @@ ${LOCATION_SCRIPT}`,
         contact,
         department: req.body.department,
         age: req.body.age,
+        // «Yo la estoy buscando» sale de la ficha de alguien, con su nombre ya
+        // puesto: quien llegó por ahí ya afirmó de quién es este reporte. El
+        // veto de #150 adivina identidad y esto la declara, así que contra esa
+        // ficha no veta — si no, el botón le abriría un registro aparte a quien
+        // acaba de decir que es la misma persona.
+        assertedPersonId: desdeFicha || null,
         photos: files.map((f) => ({ bytes: f.buffer, contentType: f.mimetype })),
         skipAddresses: [phone, email.toLowerCase()].filter(Boolean),
         checkDuplicates: true,
@@ -1121,7 +1128,6 @@ ${LOCATION_SCRIPT}`,
       // — la alarma de nombre duplicado sería falsa el 100% de las veces. Solo
       // se apaga esa: los `candidates` por ROSTRO son información nueva y real
       // (un reporte con otro nombre y la misma cara), y siguen saliendo.
-      const desdeFicha = String(req.body.desde_ficha || '').trim();
       const sameNameIsExpected = !created && desdeFicha && desdeFicha === String(person.id);
       const sameName = !created && !sameNameIsExpected;
       if (candidates.length || sameName) {

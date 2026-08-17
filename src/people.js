@@ -82,6 +82,10 @@ function createStore(adapter) {
   // sigue cayendo en la misma persona: es una señal mucho más fuerte, y vetar
   // ahí partiría a dos familiares reportando a la misma persona.
   //
+  // `assertedPersonId` es una persona que dijo, con un clic, que este reporte
+  // es de ESA ficha. Contra ella no hay veto: nuestras señales existen para
+  // adivinar la identidad, y acá alguien ya la afirmó.
+  //
   // Ojo: con `externalId`, addUpdate puede devolver el reporte a la persona de
   // la que este veto lo separó — ver el paso 4 de report-admission.
   async function findOrCreatePerson(fullName, signals = {}) {
@@ -99,9 +103,11 @@ function createStore(adapter) {
       department: canonicalDepartment(signals.department),
       age: parseAge(signals.age)
     };
+    const asserted = signals.assertedPersonId;
     let blocked = null;
     for (const candidate of await searchPeople(fullName, { limit: MERGE_CANDIDATES, minScore: 0.85 })) {
-      const reason = mergeBlockReason(incoming, await getUpdates(candidate.id));
+      const exempt = asserted != null && String(candidate.id) === String(asserted);
+      const reason = exempt ? null : mergeBlockReason(incoming, await getUpdates(candidate.id));
       if (!reason) {
         // Solo la fusión difusa (por score) se registra — un match exacto sobre
         // el mismo normalized_name no es una decisión discutible. Y se registra
@@ -111,7 +117,6 @@ function createStore(adapter) {
       }
       if (!blocked) blocked = { reason, personId: candidate.id, score: candidate.score };
     }
-
 
     // Only new people are re-cased: an existing row keeps whatever it has, so
     // a correction made by hand isn't undone by the next report.

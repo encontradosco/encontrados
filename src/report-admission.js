@@ -120,6 +120,7 @@ function createReportAdmission({
     externalId,
     department = null,
     age = null,
+    assertedPersonId = null,
     photos = [],
     skipAddresses = [],
     checkDuplicates = false,
@@ -191,7 +192,11 @@ function createReportAdmission({
       // ---- 2. Find or create the person ----------------------------------
       // Las señales entran acá porque deciden a quién pertenece el reporte, no
       // solo qué se guarda de él.
-      const { person, created, blocked } = await store.findOrCreatePerson(cleanName, { department, age });
+      const { person, created, blocked } = await store.findOrCreatePerson(cleanName, {
+        department,
+        age,
+        assertedPersonId
+      });
 
       // Read the record's existing report photo BEFORE this report's own
       // photos are stored — afterwards there is no way to tell which face was
@@ -249,7 +254,28 @@ function createReportAdmission({
 
     const admitted = externalId ? await store.withExternalIdLock(externalId, admit) : await admit();
     if (!admitted.ok) return admitted;
-    const { created, blocked, priorPhoto, update, owner, mergedIntoExisting } = admitted;
+    const { person, created, blocked, priorPhoto, update, owner, mergedIntoExisting } = admitted;
+
+    // Y si el update se fue a otro dueño, la fila que acabamos de insertar se
+    // quedó sin nada. Una persona sin updates no es un registro a medias: es un
+    // pase libre. `mergeBlockReason` no puede vetar contra un historial vacío,
+    // así que el próximo nombre parecido —de cualquier departamento y cualquier
+    // edad— cae ahí sin que nada lo detenga, y #150 se reabre por el costado.
+    //
+    // Va después del write y antes de las cortesías, con la misma regla que
+    // ellas: si falla, se pierde la limpieza, nunca el reporte. Y va FUERA del
+    // lock: esta fila no tiene updates, así que no tiene llave externa que
+    // nadie pueda estar suprimiendo, y `deletePerson` pide su propia conexión
+    // del `lockPool` de dos — pedirla sin soltar la nuestra es justo el
+    // agotamiento que ese pool aparte existe para evitar.
+    const orphaned = created && String(owner.id) !== String(person.id);
+    if (orphaned) {
+      try {
+        if (!(await store.getUpdates(person.id)).length) await store.deletePerson(person.id);
+      } catch (e) {
+        console.error('[report-admission] no se pudo borrar la persona huérfana:', e && e.message);
+      }
+    }
 
     // ---- 5. Index the report photos ------------------------------------
     // processPhoto never throws for a matcher/Rekognition failure — it stores
@@ -303,7 +329,11 @@ function createReportAdmission({
     return {
       ok: true,
       person: owner,
-      personCreated: created,
+      // Se lee de dónde quedó el reporte, no de si insertamos una fila: cuando
+      // esa fila terminó huérfana y borrada, decir `true` le prometería al que
+      // llama una persona nueva que ya no existe — y contradiría a
+      // `mergedIntoExisting`, que en ese caso es `true` también.
+      personCreated: created && !orphaned,
       // null, o { reason, personId, score }: con quién se habría fusionado y
       // qué señal lo impidió. Vacío si `owner` terminó siendo esa misma
       // persona, porque entonces el upsert por external_id deshizo el veto.

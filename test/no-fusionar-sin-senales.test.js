@@ -204,6 +204,88 @@ test('un registro que ya juntó dos departamentos deja de absorber reportes', as
 // nombres, y respetarla es lo que evita que cada reenvío fabrique una fila
 // nueva. Queda escrito porque es lo único que hace que el veto NO se cumpla, y
 // un agente que lo descubra midiendo va a creer que encontró un bug.
+// El botón «Yo la estoy buscando» sale de la ficha de alguien y trae su nombre
+// puesto: quien llegó por ahí ya afirmó de quién es este reporte. El veto está
+// para adivinar identidad, y acá no hay nada que adivinar — separar a quien
+// acaba de decir «es la misma persona» es peor que no tener el botón.
+test('el botón «Yo la estoy buscando» le gana al veto', async (t) => {
+  const app = await createApp(await createSqliteAdapter(':memory:'), nullMatcher);
+  const server = await new Promise((r) => {
+    const s = app.listen(0, () => r(s));
+  });
+  t.after(() => server.close());
+  const base = `http://127.0.0.1:${server.address().port}`;
+
+  const enviar = async (name, department, desdeFicha) => {
+    const fd = new FormData();
+    fd.set('name', name);
+    fd.set('location', 'Un lugar de prueba');
+    fd.set('contact_phone', '300 123 4567');
+    fd.set('department', department);
+    if (desdeFicha) fd.set('desde_ficha', String(desdeFicha));
+    fd.append('photos', new File([await photoBytes()], 'f.jpg', { type: 'image/jpeg' }));
+    const res = await fetch(`${base}/report`, { method: 'POST', body: fd, redirect: 'manual' });
+    assert.equal(res.status, 303);
+    return Number(res.headers.get('location').match(/^\/person\/(\d+)\?/)[1]);
+  };
+
+  const ficha = await enviar('Persona Prueba Uno', 'Quindío');
+  const porElBoton = await enviar('Persona Prueba Uno Dos', 'Antioquia', ficha);
+  assert.equal(porElBoton, ficha, 'el reporte tiene que sumarse a la ficha de la que salió');
+
+  // Y el veto sigue vivo para todo lo demás: la exención es de esa ficha, no
+  // una llave que apague la regla.
+  const sinBoton = await enviar('Persona Prueba Nuno', 'Antioquia');
+  assert.notEqual(sinBoton, ficha, 'sin el botón, dos departamentos siguen siendo dos registros');
+});
+
+// Cuando el upsert por external_id devuelve el update a su dueño original, la
+// persona que el veto acababa de insertar se queda sin nada. Una persona sin
+// updates no es un registro a medias: es un pase libre, porque el veto no puede
+// contradecir a un historial vacío. Sin esta limpieza, el próximo nombre
+// parecido —de cualquier departamento y cualquier edad— cae ahí, y #150 se
+// reabre por el costado, justo en el camino del agregador.
+test('el veto no deja una persona huérfana que después sirva de pase libre', async () => {
+  const store = await freshStore();
+  const { admitReport } = createReportAdmission({ store, matcher: nullMatcher });
+
+  const primero = await admitReport({
+    name: 'Persona Prueba Uno',
+    status: 'missing',
+    source: 'aggregator',
+    externalId: 'ficha-1',
+    department: 'Quindío'
+  });
+  const reenvio = await admitReport({
+    name: 'Persona Prueba Nuno',
+    status: 'missing',
+    source: 'aggregator',
+    externalId: 'ficha-1',
+    department: 'Antioquia'
+  });
+
+  assert.equal(String(reenvio.person.id), String(primero.person.id));
+  // El contrato que lee quien llama no puede decir las dos cosas a la vez.
+  assert.equal(reenvio.personCreated, false, 'la persona que se insertó ya no existe');
+  assert.equal(reenvio.mergedIntoExisting, true);
+
+  const gente = await store.getMissingPeople(50);
+  assert.equal(gente.length, 1, 'no puede quedar una persona sin un solo reporte');
+
+  // La prueba de fuego: un reporte sin ninguna relación con el primero. Si la
+  // huérfana siguiera ahí, caería en ella sin que nada lo vetara.
+  const ajeno = await admitReport({
+    name: 'Persona Prueba Nuno',
+    status: 'missing',
+    source: 'web',
+    department: 'Bolívar',
+    age: 70
+  });
+  assert.notEqual(String(ajeno.person.id), String(primero.person.id));
+  assert.equal(ajeno.personCreated, true, 'tiene que estrenar su propio registro');
+  await store.close();
+});
+
 test('un external_id que ya existe le gana al veto, y el reporte no se duplica', async () => {
   const store = await freshStore();
   const { admitReport } = createReportAdmission({ store, matcher: nullMatcher });
