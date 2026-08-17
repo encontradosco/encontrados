@@ -147,9 +147,12 @@ son sobre el código, no sobre ti.
 de uno de los cuatro. **Nadie aprueba su propio PR** — GitHub no lo permite.
 
 Hay una excepción y preferimos escribirla a que la descubras: **un mantenedor
-puede despachar solo un cambio rutinario**. Abre el PR, lo autoriza con la
-etiqueta, y el agente firma (ver más abajo). En ese caso quien lee el diff y
-quien lo escribe pueden ser la misma persona.
+puede despachar solo un cambio rutinario**. Abre el PR y lo autoriza poniendo
+**dos** etiquetas —`ready-to-merge`, que es la orden, y `efecto-usuario:ninguno`,
+que afirma que nada cambia para quien usa la app—, y entonces el agente firma
+(ver más abajo). Las dos las pone un code owner humano; el agente no puede
+ponérselas a sí mismo. En ese caso quien lee el diff y quien lo escribe pueden
+ser la misma persona.
 
 La aceptamos porque esto es un proyecto de emergencia y lo rutinario no debería
 esperar a que coincidan dos husos horarios — pero **solo se sostiene por lo que

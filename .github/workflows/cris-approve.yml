@@ -16,18 +16,34 @@
 #
 # ── Modelo de confianza, que en un repo público importa el doble ──
 #
-# 1. El trigger es `pull_request`, NO `pull_request_target`. Consecuencia
-#    deliberada: un PR desde un fork corre SIN secretos, así que
-#    `CRIS_APPROVE_PAT` no existe ahí y el agente no puede firmarlo aunque
-#    quiera. Las contribuciones de la comunidad las mira una persona. Si algún
-#    día alguien cambia esto a `pull_request_target` "para que funcione con
-#    forks", habrá abierto la puerta a que un PR cualquiera se lleve el token.
+# 1. El trigger es `pull_request_target`, y eso va contra el consejo habitual.
+#    Vale explicar por qué, porque leído rápido parece el error clásico.
+#
+#    Con `pull_request`, el archivo de workflow que CORRE es el del commit de
+#    merge del PR — o sea, el de la rama del PR. Un PR puede entonces
+#    reescribir su propio aprobador: quitarle el chequeo de CODEOWNERS,
+#    cambiar quién es el agente, o apuntar el `require` a un archivo suyo. Y
+#    en un PR de la misma rama los secretos SÍ están disponibles, así que ese
+#    workflow modificado correría con el token. La restricción de `.github/`
+#    en CODEOWNERS no ayuda: protege el MERGE, no la corrida.
+#
+#    `pull_request_target` toma el workflow de la rama por defecto, siempre.
+#    Un PR no puede alterar lo que corre. Eso es justo lo que un workflow que
+#    carga un PAT necesita.
+#
+#    El peligro conocido de `pull_request_target` es otro: correr con secretos
+#    sobre código de un fork. Acá está cerrado por dos vías, y hacen falta las
+#    dos: el job se salta si el PR viene de un fork (ver la condición abajo),
+#    y este workflow NO EJECUTA CÓDIGO DEL PR en ningún momento — no hace
+#    checkout de su rama, no instala sus dependencias, no corre sus scripts.
+#
+#    Si algún día alguien agrega acá un `npm ci`, un `npm test`, o un checkout
+#    de `head.sha`, esa combinación sí sería explotable. No lo hagas: para eso
+#    está `ci.yml`, que corre con `pull_request` y sin secretos.
 #
 # 2. El módulo de decisión y el CODEOWNERS se leen de la RAMA BASE, nunca del
-#    PR. Es lo que impide que un PR reescriba su propio aprobador. El
-#    `sparse-checkout` trae solo `.github/scripts`, y `persist-credentials:
-#    false` no deja el token de git en el runner. Este workflow no ejecuta ni
-#    una línea de código del PR.
+#    PR. El `sparse-checkout` trae solo `.github/scripts`, y
+#    `persist-credentials: false` no deja el token de git en el runner.
 #
 # 3. Quien pone la etiqueta tiene que ser code owner, y no puede ser el propio
 #    agente. La etiqueta es una orden humana; si el agente pudiera ponérsela,
@@ -36,7 +52,7 @@
 name: Aprobación de Cris
 
 on:
-  pull_request:
+  pull_request_target:
     types: [labeled]
 
 permissions:
@@ -50,15 +66,16 @@ env:
 jobs:
   approve:
     name: Cris revisa y decide
-    # Dos condiciones, y la segunda no es redundante.
+    # Dos condiciones, y la segunda es LOAD-BEARING para la seguridad.
     #
-    # Un PR desde un fork recibe un `GITHUB_TOKEN` de SOLO LECTURA, así que
-    # `createComment` y `removeLabel` devuelven 403 y el job muere en rojo sin
-    # dejar ni una palabra en el PR — el peor desenlace posible: parece que
-    # algo falló, y quien contribuyó no tiene forma de saber qué. Como el
-    # agente tampoco puede firmar ahí (los secretos no existen en un fork), no
-    # hay nada que ganar corriendo: se corta antes y esos PRs los mira una
-    # persona, que es lo que ya prometía el CONTRIBUTING.
+    # Con `pull_request_target` los secretos SÍ están disponibles en un PR de
+    # fork. Esta condición es lo que impide que este job corra sobre uno de
+    # ellos — es la mitad del cierre que describe la nota 1 de arriba (la otra
+    # mitad es no ejecutar nunca código del PR). No la quites.
+    #
+    # Y no se pierde nada al saltarlos: el agente no aprueba PRs de la
+    # comunidad de todos modos, los mira una persona, que es lo que el
+    # CONTRIBUTING ya promete.
     if: >-
       github.event.label.name == 'ready-to-merge' &&
       github.event.pull_request.head.repo.full_name == github.repository
@@ -269,13 +286,24 @@ jobs:
           github-token: ${{ github.token }}
           script: |
             const { owner, repo } = context.repo;
+            const numero = context.payload.pull_request.number;
+            // La etiqueta se QUITA, y no es cosmética: aplicar una etiqueta que
+            // ya está puesta no genera un evento `labeled` nuevo. Si se quedara
+            // pegada, "vuelve a ponerla" sería un consejo imposible de seguir y
+            // el PR quedaría atascado después de configurar el secreto.
+            try {
+              await github.rest.issues.removeLabel({ owner, repo, issue_number: numero, name: 'ready-to-merge' });
+            } catch (e) {
+              core.warning(`No pude quitar la etiqueta: ${e.message}`);
+            }
             const motivo =
               'Decidí que puedo aprobar, pero **no hay firma**: falta el secreto `CRIS_APPROVE_PAT`. ' +
               'Sin él no puedo dejar una reseña con mi cuenta, y una aprobación del `GITHUB_TOKEN` ' +
               'vendría de `github-actions[bot]`, que no está en CODEOWNERS y no satisface nada. ' +
-              'Configúralo en Settings → Secrets y vuelve a poner la etiqueta.';
+              'Configúralo en Settings → Secrets y vuelve a poner `ready-to-merge` (la quité para que ' +
+              'volver a ponerla dispare de nuevo el flujo).';
             await github.rest.issues.createComment({
-              owner, repo, issue_number: context.payload.pull_request.number,
+              owner, repo, issue_number: numero,
               body: `### No pude firmar\n\n${motivo}`,
             });
             core.setFailed('Falta CRIS_APPROVE_PAT.');
