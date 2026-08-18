@@ -42,6 +42,7 @@ test('a report submitted with the GPS fallback location text is accepted, not di
   const fd = new FormData();
   fd.set('name', 'Ana Lucía Bermúdez');
   fd.set('location', 'Ubicación GPS compartida (4.609700, -74.081700)');
+  fd.set('department', 'Antioquia');
   fd.set('lat', '4.6097');
   fd.set('lng', '-74.0817');
   fd.set('contact', '300 111 2222');

@@ -104,6 +104,7 @@ async function reportar(base, { name, contact, face }) {
   const fd = new FormData();
   fd.set('name', name);
   fd.set('location', 'Barrio San José');
+  fd.set('department', 'Antioquia');
   fd.set('contact', contact);
   fd.append('photos', new File([await photoBytes(face)], 'f.jpg', { type: 'image/jpeg' }));
   return fetch(`${base}/report`, { method: 'POST', body: fd, redirect: 'manual' });

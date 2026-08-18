@@ -200,6 +200,16 @@ async function createSqliteAdapter(dbPath) {
     // externalId updates the existing row's status/message/location/lat/lng/
     // reporter/contact instead of inserting a duplicate. Without externalId,
     // behavior is unchanged.
+    //
+    // `department` es la ÚNICA excepción a "un re-push que perdió un dato
+    // BORRA el que la fila ya tenía" (ver la nota de toUpdate en
+    // src/sources/colombiatebusca.js). Señalado en revisión del PR de #150:
+    // ese comportamiento es aceptable para un campo informativo como
+    // location, pero department alimenta el guardrail de fusión — perderlo en
+    // un reintento debilitaría en silencio la protección contra el incidente
+    // que #150 existe para evitar. COALESCE conserva el valor existente
+    // cuando el nuevo push no trae uno; solo lo pisa cuando SÍ trae un valor
+    // distinto.
     async insertUpdate(personId, { status, message, location, department, lat, lng, source, sourceUrl, reporter, contact, externalId }) {
       const extId = externalId || null;
       const info = db
@@ -210,7 +220,7 @@ async function createSqliteAdapter(dbPath) {
              status = excluded.status,
              message = excluded.message,
              location = excluded.location,
-             department = excluded.department,
+             department = COALESCE(excluded.department, department),
              lat = excluded.lat,
              lng = excluded.lng,
              source_url = excluded.source_url,

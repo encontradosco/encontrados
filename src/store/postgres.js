@@ -222,6 +222,16 @@ async function createPostgresAdapter(connectionString) {
     // new one (the aggregator re-sending its latest snapshot doesn't duplicate
     // the person's history). Without externalId, behavior is unchanged: a
     // plain insert every time.
+    //
+    // `department` es la ÚNICA excepción a "un re-push que perdió un dato
+    // BORRA el que la fila ya tenía" (ver la nota de toUpdate en
+    // src/sources/colombiatebusca.js). Señalado en revisión del PR de #150:
+    // ese comportamiento es aceptable para un campo informativo como
+    // location, pero department alimenta el guardrail de fusión — perderlo en
+    // un reintento debilitaría en silencio la protección contra el incidente
+    // que #150 existe para evitar. COALESCE conserva el valor existente
+    // cuando el nuevo push no trae uno; solo lo pisa cuando SÍ trae un valor
+    // distinto.
     async insertUpdate(personId, { status, message, location, department, lat, lng, source, sourceUrl, reporter, contact, externalId }) {
       return one(
         `INSERT INTO updates (person_id, status, message, location, department, lat, lng, source, source_url, reporter, contact, external_id)
@@ -230,7 +240,7 @@ async function createPostgresAdapter(connectionString) {
            status = EXCLUDED.status,
            message = EXCLUDED.message,
            location = EXCLUDED.location,
-           department = EXCLUDED.department,
+           department = COALESCE(EXCLUDED.department, updates.department),
            lat = EXCLUDED.lat,
            lng = EXCLUDED.lng,
            source_url = EXCLUDED.source_url,

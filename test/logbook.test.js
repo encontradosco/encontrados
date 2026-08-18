@@ -57,6 +57,7 @@ async function reportMissing(base, { name, contact, face }) {
   const fd = new FormData();
   fd.set('name', name);
   fd.set('location', 'Barrio San José');
+  fd.set('department', 'Antioquia');
   fd.set('contact', contact);
   fd.append('photos', new File([await photoBytes(face)], 'f.jpg', { type: 'image/jpeg' }));
   return fetch(`${base}/report`, { method: 'POST', body: fd, redirect: 'manual' });
@@ -237,6 +238,7 @@ test('un reporte por el formulario no deja ningún envío en la bitácora', asyn
   const fd = new FormData();
   fd.set('name', 'Gabriela Prueba Sin Relevo');
   fd.set('location', 'Barrio San José');
+  fd.set('department', 'Antioquia');
   fd.set('contact_phone', '300 333 4444');
   fd.append('photos', new File([await photoBytes('gabriela')], 'g.jpg', { type: 'image/jpeg' }));
   const res = await fetch(`${base}/report`, { method: 'POST', body: fd, redirect: 'manual' });
