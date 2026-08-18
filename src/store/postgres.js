@@ -8,10 +8,33 @@ const { Pool } = require('pg');
 const AGGREGATOR_SAFE_EXCLUSION = `WHERE NOT (u.source = 'aggregator' AND u.status = 'safe')`;
 
 async function createPostgresAdapter(connectionString) {
+  const sslConfig = /localhost|127\.0\.0\.1/.test(connectionString)
+    ? undefined
+    : { rejectUnauthorized: false };
+
   const pool = new Pool({
     connectionString,
     max: 3, // serverless: keep pools tiny
-    ssl: /localhost|127\.0\.0\.1/.test(connectionString) ? undefined : { rejectUnauthorized: false }
+    ssl: sslConfig
+  });
+
+  // Pool APARTE, chico, solo para sostener un pg_advisory_lock mientras corre
+  // `fn` en withExternalIdLock (#192) — NUNCA `pool`. `fn` corre los métodos
+  // normales del store, que a su vez hacen `pool.query(...)` en conexiones del
+  // pool de arriba; si la conexión que sostiene el lock viniera de esa MISMA
+  // fuente, bastaban tres admisiones concurrentes de llaves distintas (o tres
+  // esperas del mismo advisory lock) para dejar las tres conexiones de
+  // `pool` ocupadas sosteniendo/esperando el lock, sin ninguna libre para que
+  // `fn` corriera su propio isExternalIdSuppressed/findOrCreatePerson/
+  // insertUpdate — un deadlock del pool entero, no solo de esta llave
+  // (hallazgo de QA). Un pool separado hace que sostener el lock JAMÁS le
+  // quite una conexión a lo que `fn` necesita: la única cola posible es la de
+  // este pool chico esperando a que otra sección crítica termine — más
+  // lento bajo mucha concurrencia, nunca trabado para siempre.
+  const lockPool = new Pool({
+    connectionString,
+    max: 2, // igual de chico; ver el porqué arriba
+    ssl: sslConfig
   });
 
   let hasTrgm = false;
@@ -632,13 +655,19 @@ async function createPostgresAdapter(connectionString) {
     // upsert) — se pide una conexión dedicada solo para sostener el lock
     // mientras `fn` corre, y se libera siempre, lance `fn` o no.
     //
+    // La conexión dedicada sale de `lockPool`, NUNCA de `pool` — ver el
+    // comentario largo donde se crea `lockPool`, arriba: si saliera de la
+    // misma fuente que `fn` necesita para sus propias queries, alcanzaban tres
+    // admisiones concurrentes para agotar el pool entero y dejarlas a las tres
+    // esperando una conexión que ninguna puede soltar (hallazgo de QA).
+    //
     // `hashtext()` da un entero de 32 bits: dos external_id distintos PUEDEN
     // compartir la llave del lock (colisión de hash). Eso cuesta, en el peor
     // caso, una espera de más entre llaves que no tenían nada que ver entre
     // sí — nunca dos secciones críticas de la MISMA llave corriendo a la vez,
     // que es la única garantía que hace falta.
     async withExternalIdLock(externalId, fn) {
-      const client = await pool.connect();
+      const client = await lockPool.connect();
       try {
         await client.query('SELECT pg_advisory_lock(hashtext($1))', [externalId]);
         return await fn();
@@ -903,6 +932,7 @@ async function createPostgresAdapter(connectionString) {
 
     async close() {
       await pool.end();
+      await lockPool.end();
     }
   };
 }
