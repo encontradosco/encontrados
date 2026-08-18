@@ -288,6 +288,7 @@ function layout(title, body, meta = {}) {
 <header>
   <a class="brand" href="/">❤️‍🩹 encontrados.co</a>
   <nav>
+    <a href="/mascotas">🐾 Mascotas</a>
     <a href="/rescate">Soy rescatista</a>
     <a href="/report" class="cta">Reporta desaparecido</a>
   </nav>

@@ -384,6 +384,9 @@ presencia y huella, nunca el valor).
 | `ADMIN_SESSION_SECRET` | Mismo 503 que arriba — firma la cookie de sesión propia de `/admin` (nada que ver con el client secret de Vercel). Rotarla cierra todas las sesiones activas de golpe. |
 | `ADMIN_EMAILS` | `/admin` queda **cerrada para todos**, incluso para quien complete un login real y válido en Vercel — otra que falla cerrado, no abierto. Correos separados por coma, nunca hardcodeados (repo público). |
 | `PUBLIC_STATS` | `GET /admin/stats` sigue **detrás de sesión** (el default). Solo el valor exacto `1` la abre sin sesión — ventana temporal mientras el auth de Vercel termina de configurarse (#116, PR 6). Cerrarla es borrar la variable, no un PR. El drill-down por ID (`/api/admin/*`) nunca lee esta variable. |
+| `PET_MATCH_API_URL` | Matching de mascotas apagado; las fotos se guardan igual. El servicio (pet-matcher) vive en un repo separado, no en este monorepo — [`github.com/encontradosco/pet-matcher`](https://github.com/encontradosco/pet-matcher) (privado). Ya desplegado en Fly.io (`pet-matcher.fly.dev`, org `encontrados`, cuenta de pago — siempre prendido, sin el límite de 5 minutos del trial). En Vercel, esta variable todavía no está puesta. |
+| `PET_MATCH_THRESHOLD` | `80`. Sin calibrar todavía con fotos reales — ver el documento de diseño. |
+| `PET_MATCH_SHARED_SECRET` | No se manda el header `x-pet-matcher-secret` en `/embed`; si `PET_MATCH_API_URL` sí está puesta, el servicio de mascotas responde 503 (falla cerrado del lado de pet-matcher) y el matching queda igual de apagado que sin `PET_MATCH_API_URL`. Mismo patrón que `WHATSAPP_RELAY_SECRET`: se genera con `openssl rand -hex 32` y tiene que ser idéntica en los dos lados. |
 
 `SENDGRID_API_BASE`, `GITHUB_API_BASE`, `WHATSAPP_API_BASE`,
 `VERCEL_OAUTH_API_BASE` y `VERCEL_OAUTH_AUTHORIZE_URL` existen solo para que
