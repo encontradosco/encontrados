@@ -301,6 +301,15 @@ function createStore(adapter) {
     return adapter.isExternalIdSuppressed(externalId);
   }
 
+  // Serializa, por external_id, el chequeo-y-escritura de una admisión contra
+  // la ventana en la que `deletePerson({ atSubjectRequest: true })` suprime esa
+  // misma llave (#192). Pass-through directo: cada adaptador implementa el
+  // lock con lo que tiene — advisory lock de sesión en Postgres, mutex en
+  // memoria en SQLite — pero el contrato es el mismo para quien lo llama.
+  async function withExternalIdLock(externalId, fn) {
+    return adapter.withExternalIdLock(externalId, fn);
+  }
+
   // Bitácora de coincidencias y envíos (#116, PR 4). Pass-through directo:
   // src/logbook.js ya se encarga de que un fallo acá nunca suba.
   async function insertMatchLog(fields) {
@@ -390,6 +399,7 @@ function createStore(adapter) {
     faceIdsForPerson,
     deletePerson,
     isExternalIdSuppressed,
+    withExternalIdLock,
     insertMatchLog,
     insertContactLog,
     matchLogCounts,

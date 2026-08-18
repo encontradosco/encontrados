@@ -59,6 +59,12 @@ function fakeStore({
     async getPerson(id) {
       events.push({ op: 'getPerson', id });
       return peopleById.get(id) || null;
+    },
+    // El doble no modela concurrencia real (no hay nada con quien competir en
+    // estas pruebas): pasa directo, transparente para el orden de `events`
+    // que las pruebas de arriba ya verifican.
+    async withExternalIdLock(externalId, fn) {
+      return fn();
     }
   };
 }

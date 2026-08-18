@@ -559,8 +559,37 @@ async function createPostgresAdapter(connectionString) {
     // (ver faceIdsForPerson arriba): la cascada se lleva las filas de `updates`
     // y con ellas la única copia de la llave.
     async deletePerson(id, { atSubjectRequest = false } = {}) {
+      // Instantánea de qué llaves podría suprimir este borrado — solo para
+      // saber CUÁLES pedir con pg_advisory_lock antes de escribir; no es
+      // garantía de que sigan siendo las mismas para cuando la transacción de
+      // abajo corra. Una llave que aparezca después de esta foto no tiene lock
+      // que la proteja todavía, pero el `SELECT DISTINCT` de la transacción la
+      // vuelve a leer y la suprime igual. Lo que eso no cierra —más angosto
+      // que la condición de carrera de #192, que es la que este lock existe
+      // para cerrar— es una admisión que en ese mismo instante le agrega a
+      // ESTA MISMA persona una llave que nadie pidió suprimir todavía.
+      const snapshot = atSubjectRequest
+        ? (
+            await pool.query(
+              'SELECT DISTINCT external_id FROM updates WHERE person_id = $1 AND external_id IS NOT NULL',
+              [id]
+            )
+          ).rows.map((r) => r.external_id).sort()
+        : [];
+
       const client = await pool.connect();
       try {
+        // El MISMO lock que sostiene la admisión entre su chequeo y su
+        // escritura (#192, `withExternalIdLock` abajo) — si el borrado no lo
+        // pide antes de escribir, un re-envío que ya pasó el chequeo puede
+        // quedar en el aire mientras este borrado suprime y se va, y terminar
+        // escribiendo igual: la ficha revive. Van todos en la MISMA conexión
+        // que la transacción de abajo (no una por llave): el pool acá es de
+        // 3 conexiones nomás (serverless), y una persona con varias llaves no
+        // debería poder agotarlo.
+        for (const externalId of snapshot) {
+          await client.query('SELECT pg_advisory_lock(hashtext($1))', [externalId]);
+        }
         await client.query('BEGIN');
         let suppressed = 0;
         if (atSubjectRequest) {
@@ -581,6 +610,7 @@ async function createPostgresAdapter(connectionString) {
         await client.query('ROLLBACK').catch(() => {});
         throw e;
       } finally {
+        if (snapshot.length) await client.query('SELECT pg_advisory_unlock_all()').catch(() => {});
         client.release();
       }
     },
@@ -592,6 +622,30 @@ async function createPostgresAdapter(connectionString) {
         externalId
       ]);
       return !!r;
+    },
+    // Lock de sesión por external_id: serializa el chequeo-y-escritura de una
+    // admisión (src/report-admission.js) contra la ventana en la que
+    // `deletePerson({ atSubjectRequest: true })` suprime esa misma llave
+    // (#192, condición de carrera señalada por coderabbitai). Es a nivel de
+    // SESIÓN, no de transacción, porque adentro de `fn` el llamador corre
+    // varias queries no transaccionales (el chequeo, el find-or-create, el
+    // upsert) — se pide una conexión dedicada solo para sostener el lock
+    // mientras `fn` corre, y se libera siempre, lance `fn` o no.
+    //
+    // `hashtext()` da un entero de 32 bits: dos external_id distintos PUEDEN
+    // compartir la llave del lock (colisión de hash). Eso cuesta, en el peor
+    // caso, una espera de más entre llaves que no tenían nada que ver entre
+    // sí — nunca dos secciones críticas de la MISMA llave corriendo a la vez,
+    // que es la única garantía que hace falta.
+    async withExternalIdLock(externalId, fn) {
+      const client = await pool.connect();
+      try {
+        await client.query('SELECT pg_advisory_lock(hashtext($1))', [externalId]);
+        return await fn();
+      } finally {
+        await client.query('SELECT pg_advisory_unlock(hashtext($1))', [externalId]).catch(() => {});
+        client.release();
+      }
     },
     async counts() {
       const r = await one(`SELECT

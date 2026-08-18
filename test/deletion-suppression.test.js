@@ -197,6 +197,102 @@ test('la purga de registros de prueba NO suprime la llave', async (t) => {
   assert.equal(revuelve.status, 201, 'la ficha de prueba puede volver a entrar');
 });
 
+// La condición de carrera que señaló coderabbitai en el PR #192: el chequeo de
+// admisión (isExternalIdSuppressed) y la escritura del DELETE no compartían
+// ninguna frontera. Un re-envío que ya había leído "no suprimida" podía quedar
+// en el aire — por cualquiera de los `await` que ya había entre el chequeo y
+// el upsert— mientras un DELETE concurrente suprimía esa misma llave y se
+// llevaba la fila; cuando el re-envío seguía, escribía igual y la ficha
+// revivía sin log ni error. Las dos pruebas de abajo prueban el arreglo:
+// `withExternalIdLock` en los dos adaptadores.
+test('un DELETE no puede intercalarse con una admisión en curso para la MISMA llave', async (t) => {
+  const matcher = countingMatcher();
+  const { server, base, store } = await startApp(matcher);
+  t.after(() => {
+    server.close();
+    env.API_KEY = '';
+  });
+  env.API_KEY = KEY;
+
+  const creada = await (await conLlave(base)).json();
+
+  // Simula el tramo de admisión que ahora corre bajo lock (el chequeo y la
+  // escritura, src/report-admission.js) sosteniendo el MISMO lock que ese
+  // tramo pediría para esta llave — como si una admisión ya hubiera leído
+  // "no suprimida" y estuviera a mitad de camino hacia su escritura.
+  let liberarAdmision;
+  const sigueAdentro = new Promise((resolve) => {
+    liberarAdmision = resolve;
+  });
+  const admisionEnCurso = store.withExternalIdLock(FICHA, async () => {
+    await sigueAdentro;
+    return 'listo';
+  });
+
+  let borradoListo = false;
+  const borrado = del(base, creada.person_id).then((r) => {
+    borradoListo = true;
+    return r;
+  });
+
+  // Nada de temporizador para forzar el orden: esta espera solo le da chance
+  // al resto del sistema de terminar lo que pueda. El DELETE no tiene cómo
+  // completar antes de que se llame liberarAdmision() — eso es lo que se
+  // afirma, no una carrera contra el reloj.
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(
+    borradoListo,
+    false,
+    'el DELETE no debería completar mientras la admisión sigue dentro de su ventana crítica'
+  );
+
+  liberarAdmision();
+  await admisionEnCurso;
+  const respuesta = await borrado;
+  assert.equal(respuesta.status, 200);
+  const cuerpo = await respuesta.json();
+  assert.equal(cuerpo.suppressed_external_ids, 1);
+  assert.equal(await store.isExternalIdSuppressed(FICHA), true);
+});
+
+test('withExternalIdLock serializa dos secciones críticas de la MISMA llave, y no toca llaves distintas', async (t) => {
+  const { server, store } = await startApp(countingMatcher());
+  t.after(() => server.close());
+
+  const eventos = [];
+  let liberarA;
+  const puertaA = new Promise((resolve) => {
+    liberarA = resolve;
+  });
+
+  const tareaA = store.withExternalIdLock('clave-x', async () => {
+    eventos.push('A-entra');
+    await puertaA;
+    eventos.push('A-sale');
+  });
+
+  let bEntro = false;
+  const tareaB = store.withExternalIdLock('clave-x', async () => {
+    bEntro = true;
+    eventos.push('B-entra');
+  });
+
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(bEntro, false, 'B no debería poder entrar mientras A sigue dentro de la misma llave');
+
+  // Una llave DISTINTA no tiene por qué esperar a nadie: el alcance del lock
+  // es la misma llave y nada más (#191, mismo límite que la supresión).
+  let cEntro = false;
+  await store.withExternalIdLock('clave-y', async () => {
+    cEntro = true;
+  });
+  assert.equal(cEntro, true, 'una llave distinta no debería esperar a que A termine con la suya');
+
+  liberarA();
+  await Promise.all([tareaA, tareaB]);
+  assert.deepEqual(eventos, ['A-entra', 'A-sale', 'B-entra']);
+});
+
 test('borrar a alguien que nunca entró por una llave no deja constancia de nada', async (t) => {
   const matcher = countingMatcher();
   const { server, base } = await startApp(matcher);

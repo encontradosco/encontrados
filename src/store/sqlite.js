@@ -211,7 +211,40 @@ async function createSqliteAdapter(dbPath) {
 
   const getPersonStmt = db.prepare('SELECT * FROM people WHERE id = ?');
 
+  // Serializa, por external_id, el chequeo-y-escritura de una admisión
+  // (src/report-admission.js) contra la ventana en la que `deletePerson`
+  // suprime esa misma llave (#192, condición de carrera señalada por
+  // coderabbitai). Un mutex en memoria alcanza acá porque este adaptador vive
+  // en UN solo proceso — SQLite es dev/tests, nunca varias instancias sobre el
+  // mismo archivo (a diferencia de Postgres en Vercel, que necesita un lock a
+  // nivel de base) — así que la garantía es la misma; solo la implementación
+  // no tiene por qué serlo. `externalIdLocks` guarda, por llave, la cola de lo
+  // que ya está encolado; se borra la entrada cuando nadie quedó esperando
+  // detrás, para no crecer para siempre en una instancia que vive días.
+  const externalIdLocks = new Map();
+  function lockExternalId(externalId, fn) {
+    const previous = externalIdLocks.get(externalId) || Promise.resolve();
+    const result = previous.then(fn, fn);
+    const marker = result.catch(() => {});
+    externalIdLocks.set(externalId, marker);
+    marker.finally(() => {
+      if (externalIdLocks.get(externalId) === marker) externalIdLocks.delete(externalId);
+    });
+    return result;
+  }
+  // Pide los locks de una lista de llaves, de una en una, y solo entonces
+  // corre `fn` — así dos borrados con llaves en común nunca se traban entre sí
+  // por pedirlas en órdenes distintos (acá siempre van ordenadas primero).
+  function lockExternalIds(keys, fn) {
+    if (!keys.length) return fn();
+    const [key, ...rest] = keys;
+    return lockExternalId(key, () => lockExternalIds(rest, fn));
+  }
+
   return {
+    async withExternalIdLock(externalId, fn) {
+      return lockExternalId(externalId, fn);
+    },
     async insertPerson(fullName, normalized, phonetic) {
       const info = db
         .prepare('INSERT INTO people (full_name, normalized_name, phonetic_name) VALUES (?, ?, ?)')
@@ -522,7 +555,7 @@ async function createSqliteAdapter(dbPath) {
       const suppress = db.prepare(
         'INSERT OR IGNORE INTO suppressed_external_ids (external_id) VALUES (?)'
       );
-      const externalIds = db.prepare(
+      const externalIdsStmt = db.prepare(
         'SELECT DISTINCT external_id FROM updates WHERE person_id = ? AND external_id IS NOT NULL'
       );
       const remove = db.prepare('DELETE FROM people WHERE id = ?');
@@ -531,14 +564,31 @@ async function createSqliteAdapter(dbPath) {
         if (!person) return null;
         let suppressed = 0;
         if (atSubjectRequest) {
-          for (const row of externalIds.all(id)) {
+          for (const row of externalIdsStmt.all(id)) {
             suppressed += suppress.run(row.external_id).changes;
           }
         }
         remove.run(id);
         return { ...person, suppressed_external_ids: suppressed };
       });
-      return run();
+
+      // Instantánea de qué llaves podría suprimir este borrado — solo para
+      // saber CUÁLES pedir; no es garantía de que sigan siendo las mismas para
+      // cuando la transacción de arriba corra. Una llave que aparezca después
+      // de esta foto no tiene lock que la proteja todavía, pero la relectura
+      // de `externalIdsStmt` YA ADENTRO de la transacción la encuentra y la
+      // suprime igual. Lo que eso no cierra —más angosto que la condición de
+      // carrera de #192— es una admisión que en ese mismo instante le agrega a
+      // ESTA MISMA persona una llave que nadie pidió suprimir todavía.
+      const snapshot = atSubjectRequest
+        ? externalIdsStmt.all(id).map((r) => r.external_id).sort()
+        : [];
+
+      // El MISMO lock que sostiene la admisión entre su chequeo y su escritura
+      // (#192) — si el borrado no lo pide antes de escribir, un re-envío que
+      // ya pasó el chequeo puede quedar en el aire mientras este borrado
+      // suprime y se va, y terminar escribiendo igual: la ficha revive.
+      return lockExternalIds(snapshot, () => run());
     },
     // La consulta que hace valer la constancia, en el ingreso. Por llave
     // exacta: una llave distinta para la misma persona no está suprimida, y ese
