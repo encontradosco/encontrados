@@ -41,6 +41,7 @@ async function createSqliteAdapter(dbPath) {
       status TEXT NOT NULL CHECK (status IN ('safe','injured','missing','deceased','unknown')),
       message TEXT,
       location TEXT,
+      department TEXT,
       lat REAL,
       lng REAL,
       contact TEXT,
@@ -109,6 +110,27 @@ async function createSqliteAdapter(dbPath) {
     CREATE INDEX IF NOT EXISTS idx_contact_log_person ON contact_log(person_id);
     CREATE INDEX IF NOT EXISTS idx_contact_log_created ON contact_log(created_at);
 
+    -- Bitácora de fusiones automáticas por nombre (#150, PR 2 — SOLO esquema
+    -- acá; el write vive en people.js/findOrCreatePerson). Mismas reglas que
+    -- las dos de arriba: sin PII, solo IDs/enums/números, ON DELETE CASCADE
+    -- sobre people(id). person_id es el CANDIDATO evaluado (con quien se
+    -- comparó), no necesariamente quien terminó dueño del update — por eso
+    -- update_id es nullable: cuando la fusión se bloquea, el update nuevo
+    -- termina en una persona DISTINTA, y esta fila igual queda como registro
+    -- de que la comparación ocurrió y qué decidió.
+    CREATE TABLE IF NOT EXISTS merge_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+      update_id INTEGER REFERENCES updates(id) ON DELETE CASCADE,
+      score REAL NOT NULL,
+      department_match TEXT NOT NULL CHECK (department_match IN ('match','mismatch','unknown')),
+      face_match TEXT NOT NULL CHECK (face_match IN ('match','mismatch','unknown')),
+      blocked INTEGER NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_merge_log_person ON merge_log(person_id);
+    CREATE INDEX IF NOT EXISTS idx_merge_log_created ON merge_log(created_at);
+
     CREATE TABLE IF NOT EXISTS pets (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       species TEXT NOT NULL CHECK (species IN ('dog','cat')),
@@ -161,6 +183,13 @@ async function createSqliteAdapter(dbPath) {
   // enlace es una afirmación que nadie puede verificar.
   try {
     db.exec('ALTER TABLE updates ADD COLUMN source_url TEXT');
+  } catch { /* already exists */ }
+  // Departamento del lugar donde se cree que está la persona — de una lista
+  // fija (src/departments.js), no texto libre. #150: es la señal que
+  // findOrCreatePerson usa para no fusionar por nombre solo cuando dos
+  // reportes apuntan a lugares muy distintos.
+  try {
+    db.exec('ALTER TABLE updates ADD COLUMN department TEXT');
   } catch { /* already exists */ }
   // Detection geometry (bounding box + landmarks) for the public overlay, and
   // the face thumbnail the public listing loads instead of the full photo.
@@ -229,16 +258,27 @@ async function createSqliteAdapter(dbPath) {
     // externalId updates the existing row's status/message/location/lat/lng/
     // reporter/contact instead of inserting a duplicate. Without externalId,
     // behavior is unchanged.
-    async insertUpdate(personId, { status, message, location, lat, lng, source, sourceUrl, reporter, contact, externalId }) {
+    //
+    // `department` es la ÚNICA excepción a "un re-push que perdió un dato
+    // BORRA el que la fila ya tenía" (ver la nota de toUpdate en
+    // src/sources/colombiatebusca.js). Señalado en revisión del PR de #150:
+    // ese comportamiento es aceptable para un campo informativo como
+    // location, pero department alimenta el guardrail de fusión — perderlo en
+    // un reintento debilitaría en silencio la protección contra el incidente
+    // que #150 existe para evitar. COALESCE conserva el valor existente
+    // cuando el nuevo push no trae uno; solo lo pisa cuando SÍ trae un valor
+    // distinto.
+    async insertUpdate(personId, { status, message, location, department, lat, lng, source, sourceUrl, reporter, contact, externalId }) {
       const extId = externalId || null;
       const info = db
         .prepare(
-          `INSERT INTO updates (person_id, status, message, location, lat, lng, source, source_url, reporter, contact, external_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO updates (person_id, status, message, location, department, lat, lng, source, source_url, reporter, contact, external_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT (external_id) WHERE external_id IS NOT NULL DO UPDATE SET
              status = excluded.status,
              message = excluded.message,
              location = excluded.location,
+             department = COALESCE(excluded.department, department),
              lat = excluded.lat,
              lng = excluded.lng,
              source_url = excluded.source_url,
@@ -250,6 +290,7 @@ async function createSqliteAdapter(dbPath) {
           status,
           message || null,
           location || null,
+          department || null,
           Number.isFinite(lat) ? lat : null,
           Number.isFinite(lng) ? lng : null,
           source,
@@ -282,6 +323,21 @@ async function createSqliteAdapter(dbPath) {
            ORDER BY created_at DESC, id DESC LIMIT 1`
         )
         .get(personId);
+    },
+    // #150, señalado en revisión del PR: mirar solo el update MÁS RECIENTE
+    // para el departamento se queda ciego si ese último update en particular
+    // no trae uno (por ejemplo un update de solo-estado sin repetir el dato).
+    // Esto busca el departamento no nulo más reciente entre TODOS los updates
+    // de la persona — el mismo patrón que ya usa matchContactBlock (routes/web.js)
+    // para no perder un contacto que sí quedó en un update anterior.
+    async latestDepartmentForPerson(personId) {
+      const row = db
+        .prepare(
+          `SELECT department FROM updates WHERE person_id = ? AND department IS NOT NULL
+           ORDER BY created_at DESC, id DESC LIMIT 1`
+        )
+        .get(personId);
+      return row ? row.department : null;
     },
     // Everyone currently reported missing, most recent report first.
     // Everyone whose LATEST update is 'missing' — not everyone who was EVER
@@ -545,6 +601,21 @@ async function createSqliteAdapter(dbPath) {
       db.prepare(
         'INSERT INTO contact_log (person_id, update_id, channel, result) VALUES (?, ?, ?, ?)'
       ).run(personId, updateId ?? null, channel, result);
+    },
+    async insertMergeLog({ personId, updateId, score, departmentMatch, faceMatch, blocked }) {
+      db.prepare(
+        'INSERT INTO merge_log (person_id, update_id, score, department_match, face_match, blocked) VALUES (?, ?, ?, ?, ?, ?)'
+      ).run(personId, updateId ?? null, score, departmentMatch, faceMatch, blocked ? 1 : 0);
+    },
+    // Cuántas fusiones se evaluaron y cuántas de esas se bloquearon — mismo
+    // `since` opcional que matchLogCounts.
+    async mergeLogCounts({ since } = {}) {
+      const where = since ? 'WHERE created_at >= ?' : '';
+      const params = since ? [since] : [];
+      const total = db.prepare(`SELECT COUNT(*) AS n FROM merge_log ${where}`).get(...params).n;
+      const blockedWhere = since ? 'WHERE created_at >= ? AND blocked = 1' : 'WHERE blocked = 1';
+      const blocked = db.prepare(`SELECT COUNT(*) AS n FROM merge_log ${blockedWhere}`).get(...params).n;
+      return { total, blocked };
     },
     // Cuenta total y por superficie. `since` (ISO) filtra a lo escrito desde
     // ahí — se usa para la línea de "cambio desde el reporte anterior" del

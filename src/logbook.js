@@ -37,6 +37,29 @@ async function logContact(store, { personId, updateId, channel, result }) {
   }
 }
 
+// #150: cada vez que findOrCreatePerson evalúa fusionar un reporte nuevo con
+// una persona existente por nombre (score >= 0.85), quede o no quede
+// fusionado. `personId` es el CANDIDATO evaluado, no necesariamente quien
+// terminó dueño del update — ver el comentario del esquema en
+// src/store/sqlite.js.
+async function logMerge(store, { personId, updateId, score, departmentMatch, faceMatch, blocked }) {
+  try {
+    await store.insertMergeLog({
+      personId,
+      updateId: updateId ?? null,
+      score,
+      departmentMatch,
+      faceMatch,
+      blocked: !!blocked
+    });
+  } catch (e) {
+    console.error(
+      `[logbook:merge] no se pudo registrar la fusión evaluada (persona ${personId}, score ${score}) — la decisión sigue en pie:`,
+      e.message
+    );
+  }
+}
+
 // Traduce el { ok, ... } que ya devuelven sendEmail/sendWhatsApp/relayToOperators
 // a un resultado del enum de contact_log. Cualquier envío que sí se intentó
 // (llegó a llamar al proveedor, o al relevo) es 'enviado' o 'fallido' — nunca
@@ -47,4 +70,4 @@ function resultFromSend(res) {
   return res && res.ok ? 'enviado' : 'fallido';
 }
 
-module.exports = { logMatch, logContact, resultFromSend };
+module.exports = { logMatch, logContact, logMerge, resultFromSend };

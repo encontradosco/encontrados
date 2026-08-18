@@ -203,6 +203,43 @@ test('an unknown/absent source is normalized to api without rejecting the report
   assert.equal(addUpdate.fields.source, 'api');
 });
 
+// #150: department is a fixed list (src/departments.js), never free text —
+// same "unknown degrades to null, never rejects the report" treatment as an
+// unknown source above.
+test('a department from the fixed list is stored as-is', async () => {
+  const store = fakeStore();
+  const t = tracker();
+  const svc = buildService(store, t);
+  const res = await svc.admitReport({ name: 'Ana Gómez', status: 'missing', department: 'Chocó' });
+  assert.equal(res.ok, true);
+  const addUpdate = store.events.find((e) => e.op === 'addUpdate');
+  assert.equal(addUpdate.fields.department, 'Chocó');
+});
+
+test('a department outside the fixed list degrades to null without rejecting the report', async () => {
+  const store = fakeStore();
+  const t = tracker();
+  const svc = buildService(store, t);
+  const res = await svc.admitReport({
+    name: 'Ana Gómez',
+    status: 'missing',
+    department: 'Narnia' // not a real Colombian department
+  });
+  assert.equal(res.ok, true);
+  const addUpdate = store.events.find((e) => e.op === 'addUpdate');
+  assert.equal(addUpdate.fields.department, null);
+});
+
+test('an absent department stores null', async () => {
+  const store = fakeStore();
+  const t = tracker();
+  const svc = buildService(store, t);
+  const res = await svc.admitReport({ name: 'Ana Gómez', status: 'missing' });
+  assert.equal(res.ok, true);
+  const addUpdate = store.events.find((e) => e.op === 'addUpdate');
+  assert.equal(addUpdate.fields.department, null);
+});
+
 // ------------------------------------------------- subscriber notification
 
 test('subscriber notification is consistent — always fires with the reporter self-echo skipped', async () => {

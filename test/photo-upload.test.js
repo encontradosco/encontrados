@@ -79,6 +79,7 @@ async function postReport(base, file) {
   const fd = new FormData();
   fd.set('name', 'Persona Prueba Uno');
   fd.set('location', 'Barrio San José');
+  fd.set('department', 'Antioquia');
   fd.set('contact', '3001234567');
   fd.append('photos', file);
   return fetch(`${base}/report`, { method: 'POST', body: fd, redirect: 'manual' });

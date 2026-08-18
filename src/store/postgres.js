@@ -38,6 +38,7 @@ async function createPostgresAdapter(connectionString) {
       status TEXT NOT NULL CHECK (status IN ('safe','injured','missing','deceased','unknown')),
       message TEXT,
       location TEXT,
+      department TEXT,
       lat DOUBLE PRECISION,
       lng DOUBLE PRECISION,
       contact TEXT,
@@ -112,6 +113,27 @@ async function createPostgresAdapter(connectionString) {
     CREATE INDEX IF NOT EXISTS idx_contact_log_person ON contact_log(person_id);
     CREATE INDEX IF NOT EXISTS idx_contact_log_created ON contact_log(created_at);
 
+    -- Bitácora de fusiones automáticas por nombre (#150, PR 2 — SOLO esquema
+    -- acá; el write vive en people.js/findOrCreatePerson). Mismas reglas que
+    -- las dos de arriba: sin PII, solo IDs/enums/números, ON DELETE CASCADE
+    -- sobre people(id). person_id es el CANDIDATO evaluado (con quien se
+    -- comparó), no necesariamente quien terminó dueño del update — por eso
+    -- update_id es nullable: cuando la fusión se bloquea, el update nuevo
+    -- termina en una persona DISTINTA, y esta fila igual queda como registro
+    -- de que la comparación ocurrió y qué decidió.
+    CREATE TABLE IF NOT EXISTS merge_log (
+      id SERIAL PRIMARY KEY,
+      person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+      update_id INTEGER REFERENCES updates(id) ON DELETE CASCADE,
+      score DOUBLE PRECISION NOT NULL,
+      department_match TEXT NOT NULL CHECK (department_match IN ('match','mismatch','unknown')),
+      face_match TEXT NOT NULL CHECK (face_match IN ('match','mismatch','unknown')),
+      blocked BOOLEAN NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_merge_log_person ON merge_log(person_id);
+    CREATE INDEX IF NOT EXISTS idx_merge_log_created ON merge_log(created_at);
+
     CREATE TABLE IF NOT EXISTS pets (
       id SERIAL PRIMARY KEY,
       species TEXT NOT NULL CHECK (species IN ('dog','cat')),
@@ -162,6 +184,11 @@ async function createPostgresAdapter(connectionString) {
   // De dónde salió la afirmación: el enlace a la noticia que confirma que una
   // persona apareció. Un `safe` con enlace carga su propia prueba.
   await pool.query('ALTER TABLE updates ADD COLUMN IF NOT EXISTS source_url TEXT');
+  // Departamento del lugar donde se cree que está la persona — de una lista
+  // fija (src/departments.js), no texto libre. #150: es la señal que
+  // findOrCreatePerson usa para no fusionar por nombre solo cuando dos
+  // reportes apuntan a lugares muy distintos.
+  await pool.query('ALTER TABLE updates ADD COLUMN IF NOT EXISTS department TEXT');
   // Detection geometry (bounding box + landmarks) for the public overlay, and
   // the face thumbnail the public listing loads instead of the full photo.
   await pool.query('ALTER TABLE photos ADD COLUMN IF NOT EXISTS face_detail JSONB');
@@ -253,14 +280,25 @@ async function createPostgresAdapter(connectionString) {
     // new one (the aggregator re-sending its latest snapshot doesn't duplicate
     // the person's history). Without externalId, behavior is unchanged: a
     // plain insert every time.
-    async insertUpdate(personId, { status, message, location, lat, lng, source, sourceUrl, reporter, contact, externalId }) {
+    //
+    // `department` es la ÚNICA excepción a "un re-push que perdió un dato
+    // BORRA el que la fila ya tenía" (ver la nota de toUpdate en
+    // src/sources/colombiatebusca.js). Señalado en revisión del PR de #150:
+    // ese comportamiento es aceptable para un campo informativo como
+    // location, pero department alimenta el guardrail de fusión — perderlo en
+    // un reintento debilitaría en silencio la protección contra el incidente
+    // que #150 existe para evitar. COALESCE conserva el valor existente
+    // cuando el nuevo push no trae uno; solo lo pisa cuando SÍ trae un valor
+    // distinto.
+    async insertUpdate(personId, { status, message, location, department, lat, lng, source, sourceUrl, reporter, contact, externalId }) {
       return one(
-        `INSERT INTO updates (person_id, status, message, location, lat, lng, source, source_url, reporter, contact, external_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        `INSERT INTO updates (person_id, status, message, location, department, lat, lng, source, source_url, reporter, contact, external_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
          ON CONFLICT (external_id) WHERE external_id IS NOT NULL DO UPDATE SET
            status = EXCLUDED.status,
            message = EXCLUDED.message,
            location = EXCLUDED.location,
+           department = COALESCE(EXCLUDED.department, updates.department),
            lat = EXCLUDED.lat,
            lng = EXCLUDED.lng,
            source_url = EXCLUDED.source_url,
@@ -272,6 +310,7 @@ async function createPostgresAdapter(connectionString) {
           status,
           message || null,
           location || null,
+          department || null,
           Number.isFinite(lat) ? lat : null,
           Number.isFinite(lng) ? lng : null,
           source,
@@ -298,6 +337,20 @@ async function createPostgresAdapter(connectionString) {
          ORDER BY created_at DESC, id DESC LIMIT 1`,
         [personId]
       );
+    },
+    // #150, señalado en revisión del PR: mirar solo el update MÁS RECIENTE
+    // para el departamento se queda ciego si ese último update en particular
+    // no trae uno (por ejemplo un update de solo-estado sin repetir el dato).
+    // Esto busca el departamento no nulo más reciente entre TODOS los updates
+    // de la persona — el mismo patrón que ya usa matchContactBlock (routes/web.js)
+    // para no perder un contacto que sí quedó en un update anterior.
+    async latestDepartmentForPerson(personId) {
+      const row = await one(
+        `SELECT department FROM updates WHERE person_id = $1 AND department IS NOT NULL
+         ORDER BY created_at DESC, id DESC LIMIT 1`,
+        [personId]
+      );
+      return row ? row.department : null;
     },
     // Everyone whose LATEST update is 'missing' — not everyone who was EVER
     // reported missing. Under the old "has ANY missing update" filter a person
@@ -553,6 +606,22 @@ async function createPostgresAdapter(connectionString) {
         'INSERT INTO contact_log (person_id, update_id, channel, result) VALUES ($1, $2, $3, $4)',
         [personId, updateId ?? null, channel, result]
       );
+    },
+    async insertMergeLog({ personId, updateId, score, departmentMatch, faceMatch, blocked }) {
+      await pool.query(
+        'INSERT INTO merge_log (person_id, update_id, score, department_match, face_match, blocked) VALUES ($1, $2, $3, $4, $5, $6)',
+        [personId, updateId ?? null, score, departmentMatch, faceMatch, !!blocked]
+      );
+    },
+    // Cuántas fusiones se evaluaron y cuántas de esas se bloquearon — mismo
+    // `since` opcional que matchLogCounts.
+    async mergeLogCounts({ since } = {}) {
+      const clause = since ? 'WHERE created_at >= $1' : '';
+      const params = since ? [since] : [];
+      const total = (await one(`SELECT COUNT(*)::int AS n FROM merge_log ${clause}`, params)).n;
+      const blockedClause = since ? 'WHERE created_at >= $1 AND blocked = true' : 'WHERE blocked = true';
+      const blocked = (await one(`SELECT COUNT(*)::int AS n FROM merge_log ${blockedClause}`, params)).n;
+      return { total, blocked };
     },
     // Cuenta total y por superficie. `since` (ISO) filtra a lo escrito desde
     // ahí — se usa para la línea de "cambio desde el reporte anterior" del

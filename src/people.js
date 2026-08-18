@@ -47,27 +47,109 @@ function createStore(adapter) {
       .slice(0, limit);
   }
 
+  // #150: antes de fusionar por nombre solo (score >= 0.85), busca una señal
+  // que CONTRADIGA que sea la misma persona, en vez de subir el umbral —
+  // "Jhon" vs "John" puntúa 0.967 y ahí sí hay que fusionar; el número nunca
+  // fue el problema, la señal era insuficiente. Departamento es la primera y
+  // más barata; el rostro entra SOLO cuando el departamento no puede decidir
+  // (falta en alguno de los dos lados), así el costo de una búsqueda en
+  // Rekognition lo paga exactamente el caso raro y de más riesgo — a punto de
+  // fusionar dos personas —, no cada reporte que llega. Sin ninguna señal
+  // real que comparar, el comportamiento es el de siempre: se fusiona.
+  //
+  // PENDIENTE — edad, la segunda señal que propone el issue, queda afuera:
+  // src/sources/colombiatebusca.js ya la parsea (parseAge) pero ese módulo no
+  // está conectado a nada en este repo hoy, solo lo usa su propio test.
+  // Construir un guardrail alrededor de un dato que no fluye por ningún lado
+  // todavía sería alcance especulativo — retomar esto cuando esa integración
+  // exista de verdad.
+  async function evaluateMerge(candidate, { department, matcher, photoBytes }) {
+    const score = candidate.score;
+    // El departamento no nulo MÁS RECIENTE entre todos los updates del
+    // candidato — no solo el del último update, que puede no traer uno
+    // (señalado en revisión del PR: un update de solo-estado no repite el
+    // dato de un reporte anterior, y mirar solo ese último dejaba pasar
+    // señal que sí existía).
+    const candidateDept = await latestDepartmentForPerson(candidate.id);
+
+    let departmentMatch = 'unknown';
+    if (department && candidateDept) {
+      departmentMatch = department === candidateDept ? 'match' : 'mismatch';
+    }
+    if (departmentMatch !== 'unknown') {
+      return { score, departmentMatch, faceMatch: 'unknown', blocked: departmentMatch === 'mismatch' };
+    }
+
+    // Desempate por rostro (propuesta 4 del issue), solo si hay algo que
+    // comparar de los dos lados: una firma ya indexada del candidato, y una
+    // foto nueva con la que compararla.
+    let faceMatch = 'unknown';
+    if (matcher && photoBytes && photoBytes.length) {
+      const candidateFaceIds = await faceIdsForPerson(candidate.id);
+      if (candidateFaceIds.length) {
+        try {
+          const hits = await matcher.searchByImage(photoBytes);
+          faceMatch = hits.some((h) => candidateFaceIds.includes(h.faceId)) ? 'match' : 'mismatch';
+        } catch (e) {
+          // Un Rekognition caído no puede bloquear un reporte — degrada a
+          // "sin señal", como si nunca se hubiera intentado.
+          console.error('[people:merge] búsqueda facial falló, se fusiona sin desempate:', e.message);
+        }
+      }
+    }
+    return { score, departmentMatch, faceMatch, blocked: faceMatch === 'mismatch' };
+  }
+
   // Reuse an existing person when the name confidently matches; otherwise create.
-  async function findOrCreatePerson(fullName) {
+  //
+  // `mergeCheck` en el resultado es null cuando no hubo nada que evaluar
+  // (nombre exacto, o ningún candidato por encima del umbral) y un objeto
+  // `{ personId, score, departmentMatch, faceMatch, blocked }` cuando sí
+  // lo hubo — `personId` ahí es el CANDIDATO evaluado, que si `blocked` es
+  // true NO es la persona devuelta en `person` (report-admission.js usa esto
+  // para la bitácora, ver src/logbook.js logMerge).
+  async function findOrCreatePerson(fullName, { department = null, matcher = null, photoBytes = null } = {}) {
     const norm = normalize(fullName);
     if (!norm) throw new Error('Name is required');
+    // PENDIENTE, señalado en revisión: el guardrail de #150 solo corre acá
+    // abajo, sobre el candidato FUZZY (score >= 0.85) — un nombre EXACTO
+    // (normalizado idéntico) sigue fusionando sin pasar por evaluateMerge,
+    // igual que antes de #150. Es el comportamiento previo a este PR, no algo
+    // que este PR introdujo, y extenderlo acá es una decisión aparte y más
+    // grande: dos personas reales con el mismo nombre exacto son más raras
+    // que variantes ortográficas, pero también es el camino que toma el
+    // reporte de seguimiento de una familia sobre su propio caso — aplicar el
+    // guardrail acá arriesga bloquear justamente eso.
     const exact = await adapter.exactByNormalized(norm);
-    if (exact) return { person: isoRow(exact), created: false };
+    if (exact) return { person: isoRow(exact), created: false, mergeCheck: null };
     const [best] = await searchPeople(fullName, { limit: 1, minScore: 0.85 });
-    if (best) return { person: await getPerson(best.id), created: false };
+    if (best) {
+      const check = await evaluateMerge(best, { department, matcher, photoBytes });
+      const mergeCheck = { ...check, personId: best.id };
+      if (!check.blocked) {
+        return { person: await getPerson(best.id), created: false, mergeCheck };
+      }
+      // El nombre puntuó alto, pero el departamento o el rostro contradicen
+      // que sea la misma persona: se crea aparte en vez de fusionar a ciegas.
+      // src/duplicates.js sigue disponible para que un operador la revise
+      // como candidata, con la señal fuerte a la vista.
+      const blockedPerson = await adapter.insertPerson(titleCaseName(fullName), norm, phoneticKey(fullName));
+      return { person: isoRow(blockedPerson), created: true, mergeCheck };
+    }
     // Only new people are re-cased: an existing row keeps whatever it has, so
     // a correction made by hand isn't undone by the next report.
     const person = await adapter.insertPerson(titleCaseName(fullName), norm, phoneticKey(fullName));
-    return { person: isoRow(person), created: true };
+    return { person: isoRow(person), created: true, mergeCheck: null };
   }
 
-  async function addUpdate(personId, { status, message, location, lat, lng, source, sourceUrl, reporter, contact, externalId }) {
+  async function addUpdate(personId, { status, message, location, department, lat, lng, source, sourceUrl, reporter, contact, externalId }) {
     if (!STATUSES.includes(status)) throw new Error(`Invalid status: ${status}`);
     return isoRow(
       await adapter.insertUpdate(personId, {
         status,
         message,
         location,
+        department,
         lat,
         lng,
         source,
@@ -115,6 +197,12 @@ function createStore(adapter) {
 
   async function getLatestUpdate(personId) {
     return isoRow(await adapter.latestUpdate(personId));
+  }
+
+  // Uso interno de evaluateMerge — no hace falta exportarlo, nadie más lo
+  // necesita hoy.
+  async function latestDepartmentForPerson(personId) {
+    return adapter.latestDepartmentForPerson(personId);
   }
 
   async function getRecentUpdates(limit = 20) {
@@ -299,6 +387,14 @@ function createStore(adapter) {
     return adapter.insertContactLog(fields);
   }
 
+  async function insertMergeLog(fields) {
+    return adapter.insertMergeLog(fields);
+  }
+
+  async function mergeLogCounts(opts) {
+    return adapter.mergeLogCounts(opts);
+  }
+
   async function matchLogCounts(opts) {
     return adapter.matchLogCounts(opts);
   }
@@ -379,6 +475,8 @@ function createStore(adapter) {
     deletePerson,
     insertMatchLog,
     insertContactLog,
+    insertMergeLog,
+    mergeLogCounts,
     matchLogCounts,
     contactLogCounts,
     matchLogDaily,

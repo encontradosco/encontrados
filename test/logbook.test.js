@@ -9,7 +9,7 @@ const assert = require('node:assert');
 const sharp = require('sharp');
 const { createSqliteAdapter } = require('../src/store/sqlite');
 const { createApp } = require('../src/server');
-const { logMatch, logContact } = require('../src/logbook');
+const { logMatch, logContact, logMerge } = require('../src/logbook');
 const { fakeSendgrid } = require('./helpers');
 
 // Mismo patrón que test/rescue.test.js: firmas idénticas por bytes idénticos,
@@ -57,6 +57,7 @@ async function reportMissing(base, { name, contact, face }) {
   const fd = new FormData();
   fd.set('name', name);
   fd.set('location', 'Barrio San José');
+  fd.set('department', 'Antioquia');
   fd.set('contact', contact);
   fd.append('photos', new File([await photoBytes(face)], 'f.jpg', { type: 'image/jpeg' }));
   return fetch(`${base}/report`, { method: 'POST', body: fd, redirect: 'manual' });
@@ -87,13 +88,41 @@ test('logContact escribe una fila real, con el resultado correcto', async () => 
   assert.equal(byChannel['whatsapp:fallido'], 1);
 });
 
-test('regla de oro (unidad): un store que revienta al escribir no tumba logMatch/logContact', async () => {
+test('logMerge escribe una fila real, y distingue las fusiones bloqueadas de las que procedieron', async () => {
+  const store = (await createApp(await createSqliteAdapter(':memory:'))).locals.store;
+  const { person } = await store.findOrCreatePerson('Alguien De Prueba');
+  await logMerge(store, {
+    personId: person.id,
+    updateId: null,
+    score: 0.9,
+    departmentMatch: 'match',
+    faceMatch: 'unknown',
+    blocked: false
+  });
+  await logMerge(store, {
+    personId: person.id,
+    updateId: null,
+    score: 0.86,
+    departmentMatch: 'mismatch',
+    faceMatch: 'unknown',
+    blocked: true
+  });
+
+  const counts = await store.mergeLogCounts();
+  assert.equal(counts.total, 2);
+  assert.equal(counts.blocked, 1);
+});
+
+test('regla de oro (unidad): un store que revienta al escribir no tumba logMatch/logContact/logMerge', async () => {
   const brokenStore = {
     async insertMatchLog() {
       throw new Error('match_log roto a propósito');
     },
     async insertContactLog() {
       throw new Error('contact_log roto a propósito');
+    },
+    async insertMergeLog() {
+      throw new Error('merge_log roto a propósito');
     }
   };
   // No debe lanzar — ese es exactamente el contrato que protege el flujo
@@ -103,6 +132,16 @@ test('regla de oro (unidad): un store que revienta al escribir no tumba logMatch
   );
   await assert.doesNotReject(
     logContact(brokenStore, { personId: 1, updateId: null, channel: 'email', result: 'enviado' })
+  );
+  await assert.doesNotReject(
+    logMerge(brokenStore, {
+      personId: 1,
+      updateId: null,
+      score: 0.9,
+      departmentMatch: 'unknown',
+      faceMatch: 'unknown',
+      blocked: false
+    })
   );
 });
 
@@ -166,6 +205,66 @@ test('las filas de match_log/contact_log no filtran nada de lo sembrado — solo
   }
 });
 
+// ----------------------------------------------- integración, #150 merge_log
+
+// Mismo orden de nombres que test/merge-guardrails.test.js: matchScore no es
+// simétrico y searchPeople compara matchScore(nombreBuscado,
+// nombreYaGuardado) — 0.855 (el ejemplo del propio issue) solo sale en este
+// sentido, nombre largo guardado primero, nombre corto en el segundo reporte.
+async function reportConDepartamento(base, { name, department, contact, face }) {
+  const fd = new FormData();
+  fd.set('name', name);
+  fd.set('location', 'Barrio San José');
+  if (department) fd.set('department', department);
+  fd.set('contact', contact);
+  fd.append('photos', new File([await photoBytes(face)], 'f.jpg', { type: 'image/jpeg' }));
+  return fetch(`${base}/report`, { method: 'POST', body: fd, redirect: 'manual' });
+}
+
+test('un segundo reporte con el mismo departamento fusiona, y queda una fila en merge_log', async (t) => {
+  const { server, base, store } = await startApp();
+  t.after(() => server.close());
+
+  await reportConDepartamento(base, {
+    name: 'John Alex Gomez',
+    department: 'Chocó',
+    contact: 'familia1@ejemplo.com',
+    face: 'gomez-uno'
+  });
+  await reportConDepartamento(base, {
+    name: 'Johan Gómez',
+    department: 'Chocó',
+    contact: 'familia2@ejemplo.com',
+    face: 'gomez-dos'
+  });
+
+  const counts = await store.mergeLogCounts();
+  assert.equal(counts.total, 1, 'debía quedar una fusión evaluada');
+  assert.equal(counts.blocked, 0, 'mismo departamento: la fusión procede');
+});
+
+test('un segundo reporte con OTRO departamento no fusiona, y merge_log lo registra como bloqueado', async (t) => {
+  const { server, base, store } = await startApp();
+  t.after(() => server.close());
+
+  await reportConDepartamento(base, {
+    name: 'John Alex Gomez',
+    department: 'Chocó',
+    contact: 'familia1@ejemplo.com',
+    face: 'gomez-uno'
+  });
+  await reportConDepartamento(base, {
+    name: 'Johan Gómez',
+    department: 'Valle del Cauca',
+    contact: 'familia2@ejemplo.com',
+    face: 'gomez-dos'
+  });
+
+  const counts = await store.mergeLogCounts();
+  assert.equal(counts.total, 1);
+  assert.equal(counts.blocked, 1, 'departamentos distintos: la fusión se bloquea, y eso también queda registrado');
+});
+
 // -------------------------------------------- regla de oro, extremo a extremo
 
 test('regla de oro (integración): la bitácora rota no tumba un match real en /rescate', async (t) => {
@@ -216,6 +315,32 @@ test('regla de oro (integración): la bitácora rota no tumba un reporte con fot
   assert.equal(res.status, 303, 'el /report debe seguir redirigiendo normalmente (reporte guardado)');
 });
 
+test('regla de oro (integración): merge_log roto no tumba una fusión evaluada en /report', async (t) => {
+  const { server, base, store } = await startApp();
+  t.after(() => server.close());
+
+  await reportConDepartamento(base, {
+    name: 'John Alex Gomez',
+    department: 'Chocó',
+    contact: 'familia1@ejemplo.com',
+    face: 'gomez-uno'
+  });
+
+  store.insertMergeLog = async () => {
+    throw new Error('merge_log roto a propósito (prueba)');
+  };
+
+  // Segundo reporte, nombre parecido y mismo departamento: dispara
+  // evaluateMerge + logMerge, con la escritura ya rota.
+  const res = await reportConDepartamento(base, {
+    name: 'Johan Gómez',
+    department: 'Chocó',
+    contact: 'familia2@ejemplo.com',
+    face: 'gomez-dos'
+  });
+  assert.equal(res.status, 303, 'la fusión debe seguir procediendo aunque la bitácora esté rota');
+});
+
 // ------------------------------------- relevos operativos al equipo (#116)
 //
 // "0 envíos" en el panel se leía como que no había pasado nada, cuando en
@@ -237,6 +362,7 @@ test('un reporte por el formulario no deja ningún envío en la bitácora', asyn
   const fd = new FormData();
   fd.set('name', 'Gabriela Prueba Sin Relevo');
   fd.set('location', 'Barrio San José');
+  fd.set('department', 'Antioquia');
   fd.set('contact_phone', '300 333 4444');
   fd.append('photos', new File([await photoBytes('gabriela')], 'g.jpg', { type: 'image/jpeg' }));
   const res = await fetch(`${base}/report`, { method: 'POST', body: fd, redirect: 'manual' });

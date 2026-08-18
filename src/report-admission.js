@@ -32,6 +32,8 @@ const { STATUSES, SOURCES } = require('./people');
 const notifyModule = require('./notify');
 const duplicatesModule = require('./duplicates');
 const facematchModule = require('./facematch');
+const { cleanDepartment } = require('./departments');
+const { logMerge } = require('./logbook');
 
 // El enlace a la fuente pública que respalda un reporte — hoy, la noticia que
 // dice que una persona apareció.
@@ -98,6 +100,7 @@ function createReportAdmission({
     status,
     message = null,
     location = null,
+    department = null,
     lat,
     lng,
     source,
@@ -122,10 +125,23 @@ function createReportAdmission({
     }
     const cleanSource = SOURCES.includes(source) ? source : 'api';
     const cleanSourceUrl = normalizeSourceUrl(sourceUrl);
+    // Un valor fuera de la lista fija (src/departments.js) se descarta a null
+    // en vez de guardarse como texto libre — silencioso a propósito, igual
+    // que cleanSource: un valor desconocido no puede tumbar el reporte.
+    const cleanDept = cleanDepartment(department);
     const usablePhotos = (photos || []).filter((p) => p && p.bytes && p.bytes.length);
 
     // ---- 2. Find or create the person ----------------------------------
-    const { person, created } = await store.findOrCreatePerson(cleanName);
+    // department + matcher + una foto (la primera usable, si hay) son la
+    // entrada del desempate de #150 — ver evaluateMerge en src/people.js.
+    // Pasarlos acá, ANTES de indexar nada, es lo que permite decidir sin
+    // fusionar a ciegas; los mismos bytes se vuelven a indexar de verdad en
+    // el paso 5, esta llamada nunca escribe nada en Rekognition.
+    const { person, created, mergeCheck } = await store.findOrCreatePerson(cleanName, {
+      department: cleanDept,
+      matcher,
+      photoBytes: usablePhotos[0] ? usablePhotos[0].bytes : null
+    });
 
     // Read the record's existing report photo BEFORE this report's own photos
     // are stored — afterwards there is no way to tell which face was already
@@ -142,6 +158,7 @@ function createReportAdmission({
       status,
       message,
       location,
+      department: cleanDept,
       lat,
       lng,
       source: cleanSource,
@@ -150,6 +167,23 @@ function createReportAdmission({
       contact,
       externalId
     });
+
+    // Bitácora de fusiones evaluadas (#150). `mergeCheck.personId` es el
+    // CANDIDATO comparado, no necesariamente `person.id`: si la fusión se
+    // bloqueó, `person` es la ficha nueva que se creó aparte, y el update
+    // queda ahí — por eso `updateId` solo se manda cuando de verdad pertenece
+    // al candidato registrado en la fila. No lanza y no puede tumbar el
+    // reporte (ver src/logbook.js).
+    if (mergeCheck) {
+      await logMerge(store, {
+        personId: mergeCheck.personId,
+        updateId: mergeCheck.blocked ? null : update.id,
+        score: mergeCheck.score,
+        departmentMatch: mergeCheck.departmentMatch,
+        faceMatch: mergeCheck.faceMatch,
+        blocked: mergeCheck.blocked
+      });
+    }
 
     // ---- 4. Resolve the ACTUAL owner -----------------------------------
     // With external_id the upsert may have landed on a different person than
