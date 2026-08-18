@@ -1,7 +1,7 @@
 const crypto = require('crypto');
 const express = require('express');
-const multer = require('multer');
 const env = require('../env');
+const { upload } = require('../upload');
 const { sendVerificationEmail, sendEmail, avisoEmail, relayEnabled } = require('../notify');
 const {
   identifyRescuedPerson,
@@ -15,39 +15,10 @@ const gh = require('../github');
 const { logContact, resultFromSend } = require('../logbook');
 const { RESCUE_ANCHOR_PREFIX } = require('../people');
 const { createReportAdmission } = require('../report-admission');
-const { DEPARTMENTS } = require('../departments');
+const { DEPARTMENTS, cleanDepartment } = require('../departments');
 
 // Express 4 doesn't catch async errors on its own.
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
-
-// A browser does not reliably label what it is uploading. A photo picked
-// through the Files app, received over WhatsApp, or dragged in from a desktop
-// folder routinely arrives as application/octet-stream, and filtering on the
-// label alone threw those away — `cb(null, false)` drops a file WITHOUT an
-// error, so the handler saw a request carrying no photo and told the person
-// they had forgotten to attach one. They had not. That is the literal shape of
-// "no puedo subir fotos": the app insisting there is no photo.
-//
-// So the label is only ever a hint here, and the real verdict is reached on
-// the bytes themselves in src/photo.js, which can also say precisely what went
-// wrong. The size ceiling is 12 MB because that is the territory a current
-// phone camera lives in; anything oversized is downscaled server-side before
-// it is stored or matched.
-const IMAGE_EXT = /\.(jpe?g|png|gif|webp|heic|heif|avif|bmp|tiff?)$/i;
-
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 12 * 1024 * 1024, files: 8 },
-  fileFilter: (req, file, cb) => {
-    const type = (file.mimetype || '').toLowerCase();
-    cb(
-      null,
-      type.startsWith('image/') ||
-        type === 'application/octet-stream' ||
-        IMAGE_EXT.test(file.originalname || '')
-    );
-  }
-});
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -1113,13 +1084,28 @@ ${LOCATION_SCRIPT}`,
       // casillas: con cualquiera de las dos el reporte pasa, igual que antes.
       const contact = composeContact({ phone, email, contact: req.body.contact });
       const files = (req.files || []).slice(0, MAX_QUERY_PHOTOS);
-      if (!name || !name.trim() || !location || !location.trim() || !contact || !files.length) {
+      // El <select> ya lo marca `required` en el formulario, pero eso no
+      // valida un POST directo (un multipart armado a mano, sin pasar por el
+      // navegador). Sin este chequeo, saltarse el campo se salta también la
+      // señal principal del guardrail de fusión de #150 — señalado en
+      // revisión del PR. Server-side SOLO acá, en la ruta web: el servicio
+      // compartido (admitReport) sigue degradando a null para quien llame
+      // desde la API o WhatsApp, que hoy no tienen forma de mandar este dato.
+      if (
+        !name ||
+        !name.trim() ||
+        !location ||
+        !location.trim() ||
+        !contact ||
+        !files.length ||
+        !cleanDepartment(department)
+      ) {
         return res
           .status(400)
           .send(
             layout(
               'Error',
-              '<p class="error">Faltan datos: hacen falta las fotos, el nombre, el lugar y un teléfono o correo de contacto.</p>'
+              '<p class="error">Faltan datos: hacen falta las fotos, el nombre, el lugar, el departamento y un teléfono o correo de contacto.</p>'
             )
           );
       }

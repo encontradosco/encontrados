@@ -82,6 +82,7 @@ async function reportForm({
   const fd = new FormData();
   fd.set('name', name);
   fd.set('location', location);
+  fd.set('department', 'Antioquia');
   fd.set('contact', contact);
   for (const [i, label] of photos.entries()) {
     fd.append('photos', new File([await photoBytes(label)], `f${i}.jpg`, { type: 'image/jpeg' }));

@@ -133,6 +133,43 @@ async function createPostgresAdapter(connectionString) {
     );
     CREATE INDEX IF NOT EXISTS idx_merge_log_person ON merge_log(person_id);
     CREATE INDEX IF NOT EXISTS idx_merge_log_created ON merge_log(created_at);
+
+    CREATE TABLE IF NOT EXISTS pets (
+      id SERIAL PRIMARY KEY,
+      species TEXT NOT NULL CHECK (species IN ('dog','cat')),
+      pet_name TEXT,
+      description TEXT,
+      contact TEXT,
+      resolved_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS pet_subscriptions (
+      id SERIAL PRIMARY KEY,
+      channel TEXT NOT NULL CHECK (channel IN ('email','whatsapp')),
+      address TEXT NOT NULL,
+      verified BOOLEAN NOT NULL DEFAULT false,
+      verify_token TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS pet_photos (
+      id SERIAL PRIMARY KEY,
+      pet_id INTEGER REFERENCES pets(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL CHECK (kind IN ('report','query')),
+      species TEXT NOT NULL CHECK (species IN ('dog','cat')),
+      subscription_id INTEGER REFERENCES pet_subscriptions(id) ON DELETE CASCADE,
+      content BYTEA NOT NULL,
+      content_type TEXT NOT NULL,
+      embedding JSONB,
+      embedding_model TEXT,
+      thumb BYTEA,
+      thumb_type TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CHECK (kind <> 'report' OR pet_id IS NOT NULL)
+    );
+    CREATE INDEX IF NOT EXISTS idx_pet_photos_pet ON pet_photos(pet_id);
+    CREATE INDEX IF NOT EXISTS idx_pet_photos_kind_species ON pet_photos(kind, species);
   `);
   if (hasTrgm) {
     await pool.query(`
@@ -243,6 +280,16 @@ async function createPostgresAdapter(connectionString) {
     // new one (the aggregator re-sending its latest snapshot doesn't duplicate
     // the person's history). Without externalId, behavior is unchanged: a
     // plain insert every time.
+    //
+    // `department` es la ÚNICA excepción a "un re-push que perdió un dato
+    // BORRA el que la fila ya tenía" (ver la nota de toUpdate en
+    // src/sources/colombiatebusca.js). Señalado en revisión del PR de #150:
+    // ese comportamiento es aceptable para un campo informativo como
+    // location, pero department alimenta el guardrail de fusión — perderlo en
+    // un reintento debilitaría en silencio la protección contra el incidente
+    // que #150 existe para evitar. COALESCE conserva el valor existente
+    // cuando el nuevo push no trae uno; solo lo pisa cuando SÍ trae un valor
+    // distinto.
     async insertUpdate(personId, { status, message, location, department, lat, lng, source, sourceUrl, reporter, contact, externalId }) {
       return one(
         `INSERT INTO updates (person_id, status, message, location, department, lat, lng, source, source_url, reporter, contact, external_id)
@@ -251,7 +298,7 @@ async function createPostgresAdapter(connectionString) {
            status = EXCLUDED.status,
            message = EXCLUDED.message,
            location = EXCLUDED.location,
-           department = EXCLUDED.department,
+           department = COALESCE(EXCLUDED.department, updates.department),
            lat = EXCLUDED.lat,
            lng = EXCLUDED.lng,
            source_url = EXCLUDED.source_url,
@@ -695,6 +742,101 @@ async function createPostgresAdapter(connectionString) {
     // de repetir los límites en dos motores de SQL distintos).
     async matchLogSimilarityRows() {
       return all('SELECT similarity, surface FROM match_log');
+    },
+
+    async insertPet({ species, petName, description, contact }) {
+      return one(
+        'INSERT INTO pets (species, pet_name, description, contact) VALUES ($1, $2, $3, $4) RETURNING *',
+        [species, petName || null, description || null, contact || null]
+      );
+    },
+    async getPet(id) {
+      return one('SELECT * FROM pets WHERE id = $1', [id]);
+    },
+    async markPetResolved(id) {
+      return one('UPDATE pets SET resolved_at = now() WHERE id = $1 RETURNING *', [id]);
+    },
+    async insertPetPhoto({ petId, kind, species, subscriptionId, content, contentType }) {
+      return one(
+        `INSERT INTO pet_photos (pet_id, kind, species, subscription_id, content, content_type)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         RETURNING id, pet_id, kind, species, content_type, created_at`,
+        [petId || null, kind, species, subscriptionId || null, content, contentType]
+      );
+    },
+    async getPetPhoto(id) {
+      return one('SELECT * FROM pet_photos WHERE id = $1', [id]);
+    },
+    async setPetPhotoEmbedding(photoId, embedding, model) {
+      await pool.query('UPDATE pet_photos SET embedding = $1, embedding_model = $2 WHERE id = $3', [
+        JSON.stringify(embedding),
+        model || null,
+        photoId
+      ]);
+    },
+    async setPetPhotoThumbnail(photoId, { small, contentType }) {
+      await pool.query('UPDATE pet_photos SET thumb = $1, thumb_type = $2 WHERE id = $3', [
+        small,
+        contentType,
+        photoId
+      ]);
+    },
+    async clearPetPhotoContent(photoId) {
+      await pool.query('UPDATE pet_photos SET content = $1 WHERE id = $2', [Buffer.alloc(0), photoId]);
+    },
+    // LEFT JOIN porque una foto 'query' no tiene pet_id (nadie sabe todavía de
+    // qué mascota es) — el filtro de resuelta solo debe aplicar cuando SÍ hay
+    // una mascota asociada (siempre el caso para 'report', nunca para
+    // 'query'). Mostrar como "posible avistamiento" a una mascota que ya se
+    // marcó como encontrada no ayuda a nadie.
+    async petPhotosForMatching(kind, species) {
+      return all(
+        `SELECT pet_photos.id, pet_photos.pet_id, pet_photos.embedding, pet_photos.embedding_model
+         FROM pet_photos
+         LEFT JOIN pets ON pets.id = pet_photos.pet_id
+         WHERE pet_photos.kind = $1 AND pet_photos.species = $2 AND pet_photos.embedding IS NOT NULL
+           AND (pet_photos.pet_id IS NULL OR pets.resolved_at IS NULL)`,
+        [kind, species]
+      );
+    },
+    // Mismo patrón que photosMissingDerivatives (personas): sin el filtro de
+    // contenido no vacío, una foto 'query' que ya se procesó y se le borraron
+    // los bytes queda "pendiente" para siempre y ahoga la red de seguridad
+    // con filas que ya no se pueden comparar.
+    async petPhotosMissingEmbedding(limit) {
+      return all(
+        'SELECT * FROM pet_photos WHERE embedding IS NULL AND octet_length(content) > 0 ORDER BY id LIMIT $1',
+        [limit]
+      );
+    },
+    async petPhotosForPet(petId) {
+      return all(
+        `SELECT id, pet_id, content_type, thumb_type FROM pet_photos
+         WHERE kind = 'report' AND pet_id = $1 ORDER BY id`,
+        [petId]
+      );
+    },
+    // El listado público — espejo de missingPeople: toda mascota sin
+    // resolved_at, más reciente primero.
+    async lostPets(limit) {
+      return all('SELECT * FROM pets WHERE resolved_at IS NULL ORDER BY created_at DESC LIMIT $1', [limit]);
+    },
+    // Espejo de reunitedCount — el contador de buenas noticias.
+    async reunitedPetsCount() {
+      const r = await one('SELECT COUNT(*)::int AS n FROM pets WHERE resolved_at IS NOT NULL', []);
+      return r.n;
+    },
+    // Una foto por mascota para el listado — espejo de reportPhotosForPeople:
+    // la primera foto 'report' que además tenga miniatura gana, para no
+    // repetir en el listado el problema de una foto ilegible sin thumb.
+    async petPhotosForPets(petIds) {
+      if (!petIds.length) return [];
+      return all(
+        `SELECT id, pet_id, content_type, thumb_type FROM pet_photos
+         WHERE kind = 'report' AND pet_id = ANY($1)
+         ORDER BY pet_id, (thumb_type IS NULL), id`,
+        [petIds]
+      );
     },
 
     async close() {

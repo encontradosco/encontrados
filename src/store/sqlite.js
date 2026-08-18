@@ -130,6 +130,43 @@ async function createSqliteAdapter(dbPath) {
     );
     CREATE INDEX IF NOT EXISTS idx_merge_log_person ON merge_log(person_id);
     CREATE INDEX IF NOT EXISTS idx_merge_log_created ON merge_log(created_at);
+
+    CREATE TABLE IF NOT EXISTS pets (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      species TEXT NOT NULL CHECK (species IN ('dog','cat')),
+      pet_name TEXT,
+      description TEXT,
+      contact TEXT,
+      resolved_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS pet_subscriptions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      channel TEXT NOT NULL CHECK (channel IN ('email','whatsapp')),
+      address TEXT NOT NULL,
+      verified INTEGER NOT NULL DEFAULT 0,
+      verify_token TEXT,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS pet_photos (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      pet_id INTEGER REFERENCES pets(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL CHECK (kind IN ('report','query')),
+      species TEXT NOT NULL CHECK (species IN ('dog','cat')),
+      subscription_id INTEGER REFERENCES pet_subscriptions(id) ON DELETE CASCADE,
+      content BLOB NOT NULL,
+      content_type TEXT NOT NULL,
+      embedding TEXT,
+      embedding_model TEXT,
+      thumb BLOB,
+      thumb_type TEXT,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+      CHECK (kind <> 'report' OR pet_id IS NOT NULL)
+    );
+    CREATE INDEX IF NOT EXISTS idx_pet_photos_pet ON pet_photos(pet_id);
+    CREATE INDEX IF NOT EXISTS idx_pet_photos_kind_species ON pet_photos(kind, species);
   `);
 
   // Older dev databases: add the GPS columns if missing.
@@ -221,6 +258,16 @@ async function createSqliteAdapter(dbPath) {
     // externalId updates the existing row's status/message/location/lat/lng/
     // reporter/contact instead of inserting a duplicate. Without externalId,
     // behavior is unchanged.
+    //
+    // `department` es la ÚNICA excepción a "un re-push que perdió un dato
+    // BORRA el que la fila ya tenía" (ver la nota de toUpdate en
+    // src/sources/colombiatebusca.js). Señalado en revisión del PR de #150:
+    // ese comportamiento es aceptable para un campo informativo como
+    // location, pero department alimenta el guardrail de fusión — perderlo en
+    // un reintento debilitaría en silencio la protección contra el incidente
+    // que #150 existe para evitar. COALESCE conserva el valor existente
+    // cuando el nuevo push no trae uno; solo lo pisa cuando SÍ trae un valor
+    // distinto.
     async insertUpdate(personId, { status, message, location, department, lat, lng, source, sourceUrl, reporter, contact, externalId }) {
       const extId = externalId || null;
       const info = db
@@ -231,7 +278,7 @@ async function createSqliteAdapter(dbPath) {
              status = excluded.status,
              message = excluded.message,
              location = excluded.location,
-             department = excluded.department,
+             department = COALESCE(excluded.department, department),
              lat = excluded.lat,
              lng = excluded.lng,
              source_url = excluded.source_url,
@@ -670,6 +717,105 @@ async function createSqliteAdapter(dbPath) {
     },
     async matchLogSimilarityRows() {
       return db.prepare('SELECT similarity, surface FROM match_log').all();
+    },
+
+    async insertPet({ species, petName, description, contact }) {
+      const info = db
+        .prepare('INSERT INTO pets (species, pet_name, description, contact) VALUES (?, ?, ?, ?)')
+        .run(species, petName || null, description || null, contact || null);
+      return db.prepare('SELECT * FROM pets WHERE id = ?').get(info.lastInsertRowid);
+    },
+    async getPet(id) {
+      return db.prepare('SELECT * FROM pets WHERE id = ?').get(id);
+    },
+    async markPetResolved(id) {
+      db.prepare("UPDATE pets SET resolved_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?").run(id);
+      return db.prepare('SELECT * FROM pets WHERE id = ?').get(id);
+    },
+    async insertPetPhoto({ petId, kind, species, subscriptionId, content, contentType }) {
+      const info = db
+        .prepare(
+          'INSERT INTO pet_photos (pet_id, kind, species, subscription_id, content, content_type) VALUES (?, ?, ?, ?, ?, ?)'
+        )
+        .run(petId || null, kind, species, subscriptionId || null, content, contentType);
+      return db
+        .prepare('SELECT id, pet_id, kind, species, content_type, created_at FROM pet_photos WHERE id = ?')
+        .get(info.lastInsertRowid);
+    },
+    async getPetPhoto(id) {
+      return db.prepare('SELECT * FROM pet_photos WHERE id = ?').get(id);
+    },
+    async setPetPhotoEmbedding(photoId, embedding, model) {
+      db.prepare('UPDATE pet_photos SET embedding = ?, embedding_model = ? WHERE id = ?').run(
+        JSON.stringify(embedding),
+        model || null,
+        photoId
+      );
+    },
+    async setPetPhotoThumbnail(photoId, { small, contentType }) {
+      db.prepare('UPDATE pet_photos SET thumb = ?, thumb_type = ? WHERE id = ?').run(small, contentType, photoId);
+    },
+    async clearPetPhotoContent(photoId) {
+      db.prepare('UPDATE pet_photos SET content = ? WHERE id = ?').run(Buffer.alloc(0), photoId);
+    },
+    // LEFT JOIN porque una foto 'query' no tiene pet_id (nadie sabe todavía de
+    // qué mascota es) — el filtro de resuelta solo debe aplicar cuando SÍ hay
+    // una mascota asociada (siempre el caso para 'report', nunca para
+    // 'query'). Mostrar como "posible avistamiento" a una mascota que ya se
+    // marcó como encontrada no ayuda a nadie.
+    async petPhotosForMatching(kind, species) {
+      return db
+        .prepare(
+          `SELECT pet_photos.id, pet_photos.pet_id, pet_photos.embedding, pet_photos.embedding_model
+           FROM pet_photos
+           LEFT JOIN pets ON pets.id = pet_photos.pet_id
+           WHERE pet_photos.kind = ? AND pet_photos.species = ? AND pet_photos.embedding IS NOT NULL
+             AND (pet_photos.pet_id IS NULL OR pets.resolved_at IS NULL)`
+        )
+        .all(kind, species);
+    },
+    // Mismo patrón que photosMissingDerivatives (personas): sin el filtro de
+    // contenido no vacío, una foto 'query' que ya se procesó y se le borraron
+    // los bytes (nunca va a tener embedding si el matcher estaba caído en su
+    // momento y nadie corrió el backfill mientras tanto) queda "pendiente"
+    // para siempre y ahoga la red de seguridad con filas que ya no se pueden
+    // comparar.
+    async petPhotosMissingEmbedding(limit) {
+      return db
+        .prepare('SELECT * FROM pet_photos WHERE embedding IS NULL AND length(content) > 0 ORDER BY id LIMIT ?')
+        .all(limit);
+    },
+    async petPhotosForPet(petId) {
+      return db
+        .prepare(
+          "SELECT id, pet_id, content_type, thumb_type FROM pet_photos WHERE kind = 'report' AND pet_id = ? ORDER BY id"
+        )
+        .all(petId);
+    },
+    // El listado público — espejo de missingPeople: toda mascota sin
+    // resolved_at, más reciente primero.
+    async lostPets(limit) {
+      return db
+        .prepare('SELECT * FROM pets WHERE resolved_at IS NULL ORDER BY created_at DESC LIMIT ?')
+        .all(limit);
+    },
+    // Espejo de reunitedCount — el contador de buenas noticias.
+    async reunitedPetsCount() {
+      return db.prepare('SELECT COUNT(*) AS n FROM pets WHERE resolved_at IS NOT NULL').get().n;
+    },
+    // Una foto por mascota para el listado — espejo de reportPhotosForPeople:
+    // la primera foto 'report' que además tenga miniatura gana, para no
+    // repetir en el listado el problema de una foto ilegible sin thumb.
+    async petPhotosForPets(petIds) {
+      if (!petIds.length) return [];
+      const marks = petIds.map(() => '?').join(',');
+      return db
+        .prepare(
+          `SELECT id, pet_id, content_type, thumb_type FROM pet_photos
+           WHERE kind = 'report' AND pet_id IN (${marks})
+           ORDER BY pet_id, (thumb_type IS NULL), id`
+        )
+        .all(...petIds);
     },
 
     async close() {

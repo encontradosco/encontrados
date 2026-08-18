@@ -38,14 +38,21 @@
 # comportamiento observable, pruebas, estilos y documentación.
 *                            @torrenegra @cris-pappcorn @ni500 @yesid-lopez
 
-# Sobre @yesid-lopez, que entró el 14-ago-2026: la idea es ampliarle el alcance
-# por anillos, y el primero se decidió el mismo día. Está en este catch-all y,
-# más abajo, en la superficie pública del API — no en biometría, privacidad,
-# esquema, autenticación ni gobierno. No es desconfianza: es que esos bloques
-# son las categorías donde un error no rompe una pantalla, y su historial como
-# portero apenas empieza.
+# Sobre @yesid-lopez, que entró el 14-ago-2026: el alcance se le amplía por
+# anillos. Van dos.
 #
-# El anillo siguiente se decide con un dato, no con una impresión: cuántos PRs
+#   1. 14-ago-2026 — este catch-all y, más abajo, la superficie pública del API.
+#   2. 18-ago-2026 — `.github/` salvo este archivo (ver el bloque de gobierno):
+#      workflows y plantillas. El motivo es de disponibilidad, no de confianza:
+#      `.github/` estaba anclado a los dos owners de la organización, así que
+#      cualquier cambio de CI quedaba esperando a que uno de los dos apareciera.
+#
+# Sigue AFUERA de biometría, privacidad, esquema y autenticación, y afuera de
+# este archivo — que es la llave maestra, porque quien lo aprueba puede sumarse
+# a todo lo demás. No es desconfianza: son las categorías donde un error no
+# rompe una pantalla.
+#
+# El anillo que viene se decide con un dato, no con una impresión: cuántos PRs
 # quedan esperando a @torrenegra o @ni500. Medido el 14-ago-2026 eran 9 de 10
 # abiertos, y de esos cinco eran biometría. El despertador reporta ese número en
 # su digest, así que la ampliación se discute contra la carga real.
@@ -132,7 +139,17 @@
 # Se lleva de paso las plantillas de issue y de PR, que no conceden nada. Es
 # colateral y lo decimos: no hay forma de excluirlas sin negación (punto 3), y
 # no vale la pena mover archivos de sitio para ganar eso.
-/.github/                    @torrenegra @ni500
+/.github/                    @torrenegra @ni500 @yesid-lopez
+
+# Y una excepción DENTRO de la excepción, que va DESPUÉS porque gana el último
+# patrón que coincide (punto 1 del encabezado).
+#
+# Este archivo es la llave maestra: quien pueda aprobar un cambio ACÁ puede
+# aprobar el PR que lo suma a cualquier otra ruta de arriba. O sea que "un
+# anillo más" en CODEOWNERS no es un anillo más: son todos, de una. Por eso se
+# queda con los dos owners de la organización, y por eso el resto de `.github/`
+# —workflows, plantillas— sí se puede delegar sin regalar el repo.
+/.github/CODEOWNERS          @torrenegra @ni500
 /CONTRIBUTING.md             @torrenegra @ni500
 /SECURITY.md                 @torrenegra @ni500
 /.coderabbit.yaml            @torrenegra @ni500

@@ -114,6 +114,7 @@ test('POST /report notifies an existing subscriber, same as POST /api/updates', 
   const fd = new FormData();
   fd.set('name', 'Rosa Elena Duarte');
   fd.set('location', 'Barrio Centro');
+  fd.set('department', 'Antioquia');
   fd.set('contact_phone', '300 111 2222');
   fd.append('photos', new File([Buffer.from('foto')], 'f.jpg', { type: 'image/jpeg' }));
   const res = await fetch(`${app.base}/report`, { method: 'POST', body: fd, redirect: 'manual' });
@@ -151,6 +152,7 @@ test('POST /report does not echo the update back to the reporter if they are als
   const fd = new FormData();
   fd.set('name', 'Iván Mauricio Salas');
   fd.set('location', 'Barrio Centro');
+  fd.set('department', 'Antioquia');
   // Same address as the subscription, on purpose, and mixed case — the store
   // lowercases email on subscribe, so the skip has to match case-insensitively.
   fd.set('contact_email', 'Reportante@Ejemplo.com');
@@ -190,6 +192,7 @@ test('POST /report does not echo the update back to a WhatsApp subscriber sharin
   const fd = new FormData();
   fd.set('name', 'Fabián Torres Lemus');
   fd.set('location', 'Barrio Centro');
+  fd.set('department', 'Antioquia');
   fd.set('contact_phone', '573145556677');
   fd.append('photos', new File([Buffer.from('foto')], 'f.jpg', { type: 'image/jpeg' }));
   await fetch(`${app.base}/report`, { method: 'POST', body: fd, redirect: 'manual' });
@@ -202,6 +205,7 @@ test('POST /report does not echo the update back to a WhatsApp subscriber sharin
   const fd2 = new FormData();
   fd2.set('name', 'Fabián Torres Lemus');
   fd2.set('location', 'Barrio Centro');
+  fd2.set('department', 'Antioquia');
   fd2.set('message', 'Fue visto de nuevo cerca del parque');
   fd2.set('contact_phone', '573145556677');
   fd2.append('photos', new File([Buffer.from('foto')], 'f2.jpg', { type: 'image/jpeg' }));
