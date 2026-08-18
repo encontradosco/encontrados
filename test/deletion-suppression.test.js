@@ -205,6 +205,22 @@ test('la purga de registros de prueba NO suprime la llave', async (t) => {
 // llevaba la fila; cuando el re-envío seguía, escribía igual y la ficha
 // revivía sin log ni error. Las dos pruebas de abajo prueban el arreglo:
 // `withExternalIdLock` en los dos adaptadores.
+// coderabbitai marcó la primera versión de esta prueba: el `setTimeout(20)`
+// probaba "el DELETE no terminó todavía", no "el DELETE de verdad intentó
+// pedir el mismo lock". Un test así puede pasar aunque la serialización esté
+// rota, si el DELETE sencillamente no llegó a programarse a tiempo.
+//
+// El arreglo no es esperar más — es no depender del reloj. Se llama a
+// `store.deletePerson` directo (no por HTTP) porque, leyendo el código,
+// `deletePerson` no tiene NINGÚN `await` antes de encolarse en el lock de esta
+// llave: lee la instantánea y llama a `lockExternalIds` de forma síncrona. Eso
+// significa que en el instante en que esta llamada RETORNA (antes de que
+// corra ningún microtask), su pedido ya quedó encolado detrás de la admisión
+// que sigue adentro — es un hecho del orden de ejecución de JS, no una
+// carrera de temporizador. Y si el lock no lo bloqueara, `deletePerson` —
+// sobre SQLite síncrono, sin red— resolvería en un puñado de microtasks; la
+// espera de abajo solo existe para dejarle esa chance, no para "alcanzar a
+// tiempo".
 test('un DELETE no puede intercalarse con una admisión en curso para la MISMA llave', async (t) => {
   const matcher = countingMatcher();
   const { server, base, store } = await startApp(matcher);
@@ -219,26 +235,29 @@ test('un DELETE no puede intercalarse con una admisión en curso para la MISMA l
   // Simula el tramo de admisión que ahora corre bajo lock (el chequeo y la
   // escritura, src/report-admission.js) sosteniendo el MISMO lock que ese
   // tramo pediría para esta llave — como si una admisión ya hubiera leído
-  // "no suprimida" y estuviera a mitad de camino hacia su escritura.
+  // "no suprimida" y estuviera a mitad de camino hacia su escritura. Señala
+  // con una promesa CUÁNDO entró de verdad, en vez de asumirlo.
+  let avisarAdmisionEntro;
+  const admisionEntro = new Promise((resolve) => {
+    avisarAdmisionEntro = resolve;
+  });
   let liberarAdmision;
   const sigueAdentro = new Promise((resolve) => {
     liberarAdmision = resolve;
   });
   const admisionEnCurso = store.withExternalIdLock(FICHA, async () => {
+    avisarAdmisionEntro();
     await sigueAdentro;
     return 'listo';
   });
+  await admisionEntro;
 
   let borradoListo = false;
-  const borrado = del(base, creada.person_id).then((r) => {
+  const borrado = store.deletePerson(creada.person_id, { atSubjectRequest: true }).then((r) => {
     borradoListo = true;
     return r;
   });
 
-  // Nada de temporizador para forzar el orden: esta espera solo le da chance
-  // al resto del sistema de terminar lo que pueda. El DELETE no tiene cómo
-  // completar antes de que se llame liberarAdmision() — eso es lo que se
-  // afirma, no una carrera contra el reloj.
   await new Promise((r) => setTimeout(r, 20));
   assert.equal(
     borradoListo,
@@ -248,18 +267,26 @@ test('un DELETE no puede intercalarse con una admisión en curso para la MISMA l
 
   liberarAdmision();
   await admisionEnCurso;
-  const respuesta = await borrado;
-  assert.equal(respuesta.status, 200);
-  const cuerpo = await respuesta.json();
-  assert.equal(cuerpo.suppressed_external_ids, 1);
+  const resultado = await borrado;
+  assert.equal(resultado.suppressed_external_ids, 1);
   assert.equal(await store.isExternalIdSuppressed(FICHA), true);
 });
 
+// Igual que la prueba de arriba, sin depender del reloj: se espera la señal
+// de que A ya entró, no un tiempo fijo. `tareaA` y `tareaB` se piden en el
+// MISMO turno síncrono (nada las separa salvo estas dos líneas), así que B ya
+// quedó encolado detrás de A antes de que este test llegue siquiera a
+// `await`. Para cuando A avisa que entró, si B pudiera entrar antes de que A
+// suelte la puerta sería un fallo real de exclusión mutua, no una carrera.
 test('withExternalIdLock serializa dos secciones críticas de la MISMA llave, y no toca llaves distintas', async (t) => {
   const { server, store } = await startApp(countingMatcher());
   t.after(() => server.close());
 
   const eventos = [];
+  let avisarAEntro;
+  const aEntro = new Promise((resolve) => {
+    avisarAEntro = resolve;
+  });
   let liberarA;
   const puertaA = new Promise((resolve) => {
     liberarA = resolve;
@@ -267,6 +294,7 @@ test('withExternalIdLock serializa dos secciones críticas de la MISMA llave, y 
 
   const tareaA = store.withExternalIdLock('clave-x', async () => {
     eventos.push('A-entra');
+    avisarAEntro();
     await puertaA;
     eventos.push('A-sale');
   });
@@ -277,7 +305,7 @@ test('withExternalIdLock serializa dos secciones críticas de la MISMA llave, y 
     eventos.push('B-entra');
   });
 
-  await new Promise((r) => setTimeout(r, 20));
+  await aEntro;
   assert.equal(bEntro, false, 'B no debería poder entrar mientras A sigue dentro de la misma llave');
 
   // Una llave DISTINTA no tiene por qué esperar a nadie: el alcance del lock
