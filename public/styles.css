@@ -257,6 +257,31 @@ h1.compact .subtle { font-family: var(--font-sans); font-weight: 400; font-size:
   position: relative;
   z-index: 1;
 }
+
+/* Mascotas — mismo layout que .card.person/.person-info arriba, mascota en
+   vez de persona. Reglas idénticas a propósito: es la misma estructura de
+   tarjeta, solo el nombre de la clase cambia para no llamar "person" a una
+   mascota en el DOM. */
+.card.pet {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  position: relative;
+}
+.card.pet:hover { border-color: var(--accent); }
+.card.pet .card-link::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+}
+.pet-info { flex: 1; min-width: 0; }
+.pet-info h3,
+.pet-info p { margin: 0; }
+.card.pet .card-cta,
+.card.pet .face {
+  position: relative;
+  z-index: 1;
+}
 .card-cta {
   display: inline-block;
   margin-top: 0.5rem;
