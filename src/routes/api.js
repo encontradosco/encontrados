@@ -15,6 +15,7 @@ const {
   computeMatchStats,
   MAX_QUERY_PHOTOS
 } = require('../facematch');
+const { backfillUnindexedPetPhotos } = require('../petmatch');
 const { publicUpdate } = require('../privacy');
 const gh = require('../github');
 const { sendReport } = require('../report');
@@ -62,7 +63,7 @@ function emailVerdict(email) {
   return `SendGrid respondió ${t.status || 'sin estado'}: ${err.slice(0, 300)}`;
 }
 
-function apiRoutes(store, matcher) {
+function apiRoutes(store, matcher, petStore, petMatcher) {
   const router = express.Router();
   router.use(express.json({ limit: '16mb' }));
 
@@ -345,7 +346,8 @@ function apiRoutes(store, matcher) {
       const limit = Math.min(parseInt(req.query.limit || '100', 10) || 100, 500);
       const indexed = await backfillUnindexedPhotos(store, matcher, limit);
       const derivatives = await backfillPhotoDerivatives(store, matcher, limit);
-      res.json({ ...indexed, derivatives });
+      const pets = petStore ? await backfillUnindexedPetPhotos(petStore, petMatcher, limit) : null;
+      res.json({ ...indexed, derivatives, pets });
     })
   );
 
@@ -516,6 +518,11 @@ function apiRoutes(store, matcher) {
           aws_region: process.env.AWS_REGION || '(sin definir → us-east-1)',
           matcher_enabled: !!matcher.enabled,
           status: matcher.status || 'desconocido'
+        },
+        pet_matching: {
+          api_url_present: !!process.env.PET_MATCH_API_URL,
+          enabled: !!(petMatcher && petMatcher.enabled),
+          status: (petMatcher && petMatcher.status) || 'sin inicializar'
         },
         // Same reasoning as aviso_email_present: without a token /ideas and
         // /bug keep working but quietly fall back to email, so the issue
