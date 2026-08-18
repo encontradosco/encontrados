@@ -112,6 +112,35 @@ async function createPostgresAdapter(connectionString) {
     CREATE INDEX IF NOT EXISTS idx_contact_log_person ON contact_log(person_id);
     CREATE INDEX IF NOT EXISTS idx_contact_log_created ON contact_log(created_at);
 
+    -- Constancia de que una ficha se borró a solicitud de la persona misma
+    -- (#191), y el mecanismo que hace durable ese borrado. Es la única tabla
+    -- del esquema que a propósito NO cuelga de people(id): su trabajo es
+    -- justamente sobrevivir a la fila.
+    --
+    -- Sin ella el borrado se deshace solo. El ON CONFLICT (external_id) de
+    -- insertUpdate es lo que hace idempotente a un re-envío, y necesita que la
+    -- fila exista para chocar con ella; borrada la ficha, un re-envío de la
+    -- misma no actualiza nada: inserta de nuevo, y processPhoto le reindexa la
+    -- cara. Sin log, sin error y sin contador — para el sistema es una ficha
+    -- nueva que entró bien.
+    --
+    -- Guarda la llave y la fecha, y nada más: ni nombre, ni foto, ni contacto,
+    -- ni person_id. El punto es impedir que la ficha vuelva, no poder
+    -- reconstruir lo que se borró. Por eso tampoco hay una columna de "motivo"
+    -- en texto libre: sería la puerta por la que entraría PII a la única tabla
+    -- del esquema que no se borra nunca.
+    --
+    -- El alcance es la MISMA llave externa y nada más. Un reporte sin
+    -- external_id —el formulario web, el bot— no se bloquea jamás, ni siquiera
+    -- si es sobre la misma persona: si una familia la reporta de verdad más
+    -- adelante, impedírselo sería peor que el problema que esto cierra. Lo que
+    -- se suprime es la re-entrada automática de una ficha, no el derecho de
+    -- nadie a reportar.
+    CREATE TABLE IF NOT EXISTS suppressed_external_ids (
+      external_id TEXT PRIMARY KEY,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
     CREATE TABLE IF NOT EXISTS pets (
       id SERIAL PRIMARY KEY,
       species TEXT NOT NULL CHECK (species IN ('dog','cat')),
@@ -513,8 +542,56 @@ async function createPostgresAdapter(connectionString) {
       );
       return rows.map((r) => r.face_id);
     },
-    async deletePerson(id) {
-      return one('DELETE FROM people WHERE id = $1 RETURNING *', [id]);
+    // `atSubjectRequest` distingue los dos borrados que hoy existen, y la
+    // diferencia no es de forma sino de consecuencia. El del ARCO
+    // (DELETE /api/people/:id) es alguien ejerciendo un derecho, y ahí borrar
+    // ES suprimir: queda constancia de la llave para que la ficha no vuelva a
+    // entrar sola. La purga de registros de prueba borra filas que nadie pidió
+    // borrar, así que no suprime nada — bloquear para siempre la llave de un
+    // registro de prueba sería un efecto que nadie pidió.
+    //
+    // Las dos escrituras van en UNA transacción porque las dos mitades sueltas
+    // fallan distinto y las dos fallan mal: constancia sin borrado rechazaría
+    // los re-envíos de una ficha que sigue publicada y viva, y borrado sin
+    // constancia es exactamente el defecto que esto cierra.
+    //
+    // Las llaves se leen ANTES del DELETE por la misma razón que los face_id
+    // (ver faceIdsForPerson arriba): la cascada se lleva las filas de `updates`
+    // y con ellas la única copia de la llave.
+    async deletePerson(id, { atSubjectRequest = false } = {}) {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        let suppressed = 0;
+        if (atSubjectRequest) {
+          const res = await client.query(
+            `INSERT INTO suppressed_external_ids (external_id)
+             SELECT DISTINCT external_id FROM updates
+               WHERE person_id = $1 AND external_id IS NOT NULL
+             ON CONFLICT (external_id) DO NOTHING`,
+            [id]
+          );
+          suppressed = res.rowCount || 0;
+        }
+        const deleted = (await client.query('DELETE FROM people WHERE id = $1 RETURNING *', [id]))
+          .rows[0];
+        await client.query('COMMIT');
+        return deleted ? { ...deleted, suppressed_external_ids: suppressed } : null;
+      } catch (e) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw e;
+      } finally {
+        client.release();
+      }
+    },
+    // La consulta que hace valer la constancia, en el ingreso. Va por llave
+    // exacta: una llave distinta para la misma persona no está suprimida, y eso
+    // es el límite honesto de este mecanismo (ver el comentario de la tabla).
+    async isExternalIdSuppressed(externalId) {
+      const r = await one('SELECT 1 FROM suppressed_external_ids WHERE external_id = $1', [
+        externalId
+      ]);
+      return !!r;
     },
     async counts() {
       const r = await one(`SELECT

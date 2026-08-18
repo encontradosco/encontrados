@@ -126,6 +126,9 @@ function apiRoutes(store, matcher, petStore, petMatcher) {
   //   POST with the same external_id updates this same update idempotently
   //   instead of creating a duplicate — safe to retry or re-sync from upstream.
   //   source_url is part of that upsert, so a re-push corrects a wrong link.
+  //   Si esa llave está suprimida —la ficha se borró a solicitud de la persona
+  //   (#191)— la respuesta es 409 con `suppressed: true` y no se crea nada.
+  //   Reintentar no la corrige: esa llave no vuelve a entrar.
   router.post(
     '/updates',
     requireKey,
@@ -163,6 +166,19 @@ function apiRoutes(store, matcher, petStore, petMatcher) {
         photos: photo ? [photo] : [],
         checkDuplicates: true
       });
+      // Una llave suprimida no es un cuerpo mal formado: es una decisión ya
+      // tomada sobre esa ficha (#191). Se responde aparte y explícito para que
+      // quien empuja pueda distinguirlas — un 400 se reintenta creyendo que hay
+      // algo que corregir, y este caso no se corrige nunca. Devuelve la llave
+      // que el propio llamador mandó, para que la marque en su registro y deje
+      // de mandarla.
+      if (!result.ok && result.suppressed) {
+        return res.status(409).json({
+          error: result.errors.join(' '),
+          suppressed: true,
+          external_id: externalId
+        });
+      }
       // Unreachable today — the checks above already cover exactly what the
       // service validates — but the service is the single source of truth for
       // its own contract: a caller that stops prevalidating, or a validation
@@ -277,6 +293,13 @@ function apiRoutes(store, matcher, petStore, petMatcher) {
           // Mismo orden que el DELETE del ARCO, y por la misma razón: los ids
           // antes del borrado porque la cascada se los lleva, y las firmas
           // después, cuando ya no hay ficha que dejar huérfana.
+          //
+          // Lo que este borrado NO hace, a propósito, es suprimir la llave
+          // externa (#191): eso es constancia de que alguien ejerció un
+          // derecho, y acá nadie pidió nada — se están limpiando filas que
+          // sembramos nosotros. Suprimirlas bloquearía para siempre una llave
+          // de prueba, que es un efecto que nadie pidió y que no se ve hasta
+          // que la ficha real no puede entrar.
           const faceIds = await store.faceIdsForPerson(p.id);
           const deleted = await store.deletePerson(p.id);
           if (!deleted) continue;
@@ -297,6 +320,11 @@ function apiRoutes(store, matcher, petStore, petMatcher) {
   // Borra las dos copias del rastro: la fila (y en cascada sus reportes,
   // suscripciones y fotos) y las firmas faciales en la colección de
   // Rekognition, que no viven en la base y por tanto la cascada no toca.
+  //
+  // Y deja constancia (#191): la fila se va, pero las llaves externas con las
+  // que esa ficha podría volver a entrar quedan suprimidas. Sin eso el borrado
+  // duraba hasta el siguiente re-envío del agregador, que insertaba la ficha de
+  // nuevo y le reindexaba la cara sin que nada lo registrara.
   router.delete(
     '/people/:id',
     wrap(async (req, res) => {
@@ -311,7 +339,12 @@ function apiRoutes(store, matcher, petStore, petMatcher) {
       // Los ids se leen ANTES del borrado: la cascada se lleva las filas de
       // `photos` y con ellas la única forma de saber qué firmas retirar.
       const faceIds = await store.faceIdsForPerson(req.params.id);
-      const deleted = await store.deletePerson(req.params.id);
+      // `atSubjectRequest` es lo que separa este borrado del de registros de
+      // prueba: este es alguien ejerciendo un derecho, así que borrar ES
+      // suprimir, y las dos escrituras van juntas en la misma transacción del
+      // adaptador — la durabilidad no puede depender de que un handler se
+      // acuerde de un segundo paso.
+      const deleted = await store.deletePerson(req.params.id, { atSubjectRequest: true });
       if (!deleted) return res.status(404).json({ error: 'Persona no encontrada' });
       // Y las firmas DESPUÉS, ya sabiendo que la ficha se fue. Al revés —como
       // abrió este PR— si la base fallaba en el medio quedaban las firmas
@@ -328,7 +361,12 @@ function apiRoutes(store, matcher, petStore, petMatcher) {
         // Lo que quedó por retirar. Reintentar el DELETE ya no sirve —la
         // persona no existe y sus ids se fueron con ella—, así que esta
         // respuesta y el log son el único rastro para limpiarlo a mano.
-        faces
+        faces,
+        // Cuántas llaves quedaron suprimidas. Va el CONTEO y no las llaves:
+        // quien atiende la solicitud necesita saber que la constancia se
+        // escribió, y la llave la elige quien empuja —puede traer un nombre
+        // adentro— así que no tiene por qué terminar en un log de respuesta.
+        suppressed_external_ids: deleted.suppressed_external_ids
       });
     })
   );

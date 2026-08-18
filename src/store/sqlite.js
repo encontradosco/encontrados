@@ -109,6 +109,16 @@ async function createSqliteAdapter(dbPath) {
     CREATE INDEX IF NOT EXISTS idx_contact_log_person ON contact_log(person_id);
     CREATE INDEX IF NOT EXISTS idx_contact_log_created ON contact_log(created_at);
 
+    -- Constancia de un borrado pedido por la persona misma (#191). Mismas
+    -- reglas que en Postgres, y ahí está el comentario largo con el por qué:
+    -- es la única tabla que a propósito NO cuelga de people(id) —tiene que
+    -- sobrevivir a la fila—, guarda solo la llave y la fecha, y su alcance es
+    -- la misma llave externa y nada más.
+    CREATE TABLE IF NOT EXISTS suppressed_external_ids (
+      external_id TEXT PRIMARY KEY,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+    );
+
     CREATE TABLE IF NOT EXISTS pets (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       species TEXT NOT NULL CHECK (species IN ('dog','cat')),
@@ -503,11 +513,40 @@ async function createSqliteAdapter(dbPath) {
         .all(personId)
         .map((r) => r.face_id);
     },
-    async deletePerson(id) {
-      const person = getPersonStmt.get(id);
-      if (!person) return null;
-      db.prepare('DELETE FROM people WHERE id = ?').run(id);
-      return person;
+    // Mismo contrato que en Postgres (ver el comentario ahí): `atSubjectRequest`
+    // marca el borrado del ARCO, el único que deja constancia, y las dos
+    // escrituras van en una transacción para que no exista el estado
+    // intermedio. Las llaves se leen ANTES del DELETE porque la cascada se
+    // lleva las filas de `updates` y con ellas la única copia.
+    async deletePerson(id, { atSubjectRequest = false } = {}) {
+      const suppress = db.prepare(
+        'INSERT OR IGNORE INTO suppressed_external_ids (external_id) VALUES (?)'
+      );
+      const externalIds = db.prepare(
+        'SELECT DISTINCT external_id FROM updates WHERE person_id = ? AND external_id IS NOT NULL'
+      );
+      const remove = db.prepare('DELETE FROM people WHERE id = ?');
+      const run = db.transaction(() => {
+        const person = getPersonStmt.get(id);
+        if (!person) return null;
+        let suppressed = 0;
+        if (atSubjectRequest) {
+          for (const row of externalIds.all(id)) {
+            suppressed += suppress.run(row.external_id).changes;
+          }
+        }
+        remove.run(id);
+        return { ...person, suppressed_external_ids: suppressed };
+      });
+      return run();
+    },
+    // La consulta que hace valer la constancia, en el ingreso. Por llave
+    // exacta: una llave distinta para la misma persona no está suprimida, y ese
+    // es el límite honesto del mecanismo.
+    async isExternalIdSuppressed(externalId) {
+      return !!db
+        .prepare('SELECT 1 AS uno FROM suppressed_external_ids WHERE external_id = ?')
+        .get(externalId);
     },
     async counts() {
       const n = (sql) => db.prepare(sql).get().n;

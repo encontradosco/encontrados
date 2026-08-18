@@ -5,6 +5,8 @@
 // sequence of business rules has to run every time:
 //
 //   1. Validate and normalize the input.
+//   1b. Refuse a report whose external_id was suppressed by a deletion request
+//      (#191) — before anything is written, so nothing gets re-created.
 //   2. Find or create the person by name.
 //   3. Add (or, with external_id, upsert) the update.
 //   4. Resolve the ACTUAL owner of the update. external_id can land the row on
@@ -123,6 +125,37 @@ function createReportAdmission({
     const cleanSource = SOURCES.includes(source) ? source : 'api';
     const cleanSourceUrl = normalizeSourceUrl(sourceUrl);
     const usablePhotos = (photos || []).filter((p) => p && p.bytes && p.bytes.length);
+
+    // ---- 1b. ¿La llave de este reporte está suprimida? -------------------
+    // Alguien pidió el borrado de su ficha (DELETE /api/people/:id) y eso dejó
+    // constancia de la llave con la que había entrado. Sin este chequeo el
+    // borrado no es durable: la fila ya no existe, así que el
+    // ON CONFLICT (external_id) del upsert no aplica y un re-envío de la misma
+    // ficha inserta de nuevo — persona nueva, foto nueva y la cara reindexada,
+    // sin log ni error.
+    //
+    // El issue lo pedía en POST /api/updates; vive acá porque acá es donde la
+    // frase "protege contra cualquier ruta de ingreso" es verdad. Este servicio
+    // es la secuencia compartida de las tres puertas (web, API, WhatsApp) y de
+    // la que se agregue mañana; en el handler del API solo protegería a ese
+    // handler.
+    //
+    // El alcance es la MISMA llave externa, y el límite es deliberado: un
+    // reporte sin external_id no se bloquea nunca. Si una familia reporta a esa
+    // persona de verdad más adelante —por el formulario, que no manda llave—
+    // tiene que poder. Lo que se suprime es la re-entrada automática de una
+    // ficha, no el derecho de nadie a reportar. Hoy solo el API acepta
+    // external_id, así que las otras dos puertas no pueden llegar hasta acá.
+    //
+    // Va ANTES de findOrCreatePerson a propósito: más adelante ya habría una
+    // persona creada, que es justo lo que hay que evitar.
+    if (externalId && (await store.isExternalIdSuppressed(externalId))) {
+      return {
+        ok: false,
+        suppressed: true,
+        errors: ['Esta ficha se borró a solicitud de la persona y no se vuelve a crear.']
+      };
+    }
 
     // ---- 2. Find or create the person ----------------------------------
     const { person, created } = await store.findOrCreatePerson(cleanName);
