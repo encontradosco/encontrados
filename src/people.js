@@ -2,6 +2,7 @@
 // All fuzzy-matching decisions live here so both backends behave identically.
 const crypto = require('crypto');
 const { normalize, phoneticKey, titleCaseName, matchScore } = require('./names');
+const { logMerge } = require('./logbook');
 
 const STATUSES = ['safe', 'injured', 'missing', 'deceased', 'unknown'];
 // 'aggregator': updates pushed by an external data aggregator, distinct from
@@ -54,7 +55,12 @@ function createStore(adapter) {
     const exact = await adapter.exactByNormalized(norm);
     if (exact) return { person: isoRow(exact), created: false };
     const [best] = await searchPeople(fullName, { limit: 1, minScore: 0.85 });
-    if (best) return { person: await getPerson(best.id), created: false };
+    if (best) {
+      // #150: solo la fusión difusa (por score) se registra — un match exacto
+      // sobre el mismo normalized_name no es una decisión discutible.
+      await logMerge(adapter, { personId: best.id, submittedName: fullName, score: best.score });
+      return { person: await getPerson(best.id), created: false };
+    }
     // Only new people are re-cased: an existing row keeps whatever it has, so
     // a correction made by hand isn't undone by the next report.
     const person = await adapter.insertPerson(titleCaseName(fullName), norm, phoneticKey(fullName));
@@ -299,6 +305,10 @@ function createStore(adapter) {
     return adapter.insertContactLog(fields);
   }
 
+  async function insertMergeLog(fields) {
+    return adapter.insertMergeLog(fields);
+  }
+
   async function matchLogCounts(opts) {
     return adapter.matchLogCounts(opts);
   }
@@ -379,6 +389,7 @@ function createStore(adapter) {
     deletePerson,
     insertMatchLog,
     insertContactLog,
+    insertMergeLog,
     matchLogCounts,
     contactLogCounts,
     matchLogDaily,
