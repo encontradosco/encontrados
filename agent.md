@@ -160,9 +160,16 @@ hay framework de frontend ni paso de build: lo que se lee es lo que corre.
   `matchLogCounts`/`contactLogCounts` (agregados, con `since` opcional para
   ventanas — los usa el reporte por correo). Desde #191 vive ahí también
   `suppressed_external_ids`, la constancia de un borrado pedido por la persona
-  misma: guarda solo la llave externa y la fecha, y es **la única tabla que a
-  propósito NO cuelga de `people(id)`** — tiene que sobrevivir a la fila, porque
-  su trabajo es impedir que la ficha vuelva a entrar sola.
+  misma: guarda solo el **hash sha256** de la llave externa (nunca el valor
+  crudo — la llave la elige quien empuja, y puede traer un nombre) y la
+  fecha, y es **la única tabla que a propósito NO cuelga de `people(id)`** —
+  tiene que sobrevivir a la fila, porque su trabajo es impedir que la ficha
+  vuelva a entrar sola. La admisión y el borrado a solicitud serializan el
+  chequeo-y-escritura de una misma llave con un advisory lock **transaccional**
+  por `external_id` (`withExternalIdLock` en los dos adaptadores) — no de
+  sesión: bajo el endpoint pooled de Neon, que es el único que
+  `findPostgresUrl()` puede resolver, un lock de sesión y su unlock pueden
+  caer en backends distintos y quedar tomado para siempre.
 - `src/logbook.js` — `logMatch`/`logContact` (#116, PR 4): la capa que
   instrumenta `facematch.js` y `notify.js` escribiendo en `match_log`/
   `contact_log`. Regla de oro, aplicada acá una sola vez para todo el árbol de
@@ -445,10 +452,11 @@ alguien, sí:
   persona no existe y sus ids se fueron con ella—, así que esa respuesta y la
   línea `[facematch:olvido]` del log son el único rastro para limpiarlo a mano.
   Desde #191 este borrado además **deja constancia**: en la misma transacción
-  del adaptador escribe en `suppressed_external_ids` las llaves externas con las
-  que esa ficha podría volver a entrar, y la respuesta trae cuántas fueron en
-  `suppressed_external_ids` (el conteo, no las llaves). Sin eso el borrado duraba
-  hasta el siguiente re-envío del agregador.
+  del adaptador escribe en `suppressed_external_ids` el **hash sha256** de las
+  llaves externas con las que esa ficha podría volver a entrar (nunca la
+  llave cruda), y la respuesta trae cuántas fueron en `suppressed_external_ids`
+  (el conteo, no las llaves). Sin eso el borrado duraba hasta el siguiente
+  re-envío del agregador.
   `POST /api/maintenance/purge-test-data` usa el mismo orden y también retira
   firmas, pero **no suprime llaves**, y esa es la única diferencia entre los dos
   caminos de borrado: la supresión es constancia de que alguien ejerció un

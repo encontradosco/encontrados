@@ -1,6 +1,7 @@
 // SQLite adapter — local development and tests. Zero setup, single file.
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const Database = require('better-sqlite3');
 
 // #78: the public-registry sweep (source='aggregator') used to push a person
@@ -16,6 +17,17 @@ const Database = require('better-sqlite3');
 // written: whatever real status came before resurfaces, and a person with no
 // other update simply has none — neither missing nor reunited.
 const AGGREGATOR_SAFE_EXCLUSION = `WHERE NOT (u.source = 'aggregator' AND u.status = 'safe')`;
+
+// La llave que se guarda en suppressed_external_ids nunca es el valor crudo
+// (#192, revisión de cris-pappcorn, punto 2 — mismo comentario que en
+// src/store/postgres.js): la llave la elige quien empuja, y hay integradores
+// que usan el nombre completo de la persona como external_id cuando la
+// fuente no trae otro identificador. Guardar el hash mantiene la misma
+// garantía de bloqueo por igualdad exacta sin dejar un dato personal en la
+// única tabla del esquema que a propósito no se borra nunca.
+function hashExternalId(externalId) {
+  return crypto.createHash('sha256').update(String(externalId), 'utf8').digest('hex');
+}
 
 async function createSqliteAdapter(dbPath) {
   if (dbPath !== ':memory:') {
@@ -614,8 +626,11 @@ async function createSqliteAdapter(dbPath) {
         if (!person) return null;
         let suppressed = 0;
         if (atSubjectRequest) {
+          // Se guarda el hash, nunca la llave cruda (#192, revisión de
+          // cris-pappcorn, punto 2) — ver el comentario de hashExternalId,
+          // arriba.
           for (const row of externalIdsStmt.all(id)) {
-            suppressed += suppress.run(row.external_id).changes;
+            suppressed += suppress.run(hashExternalId(row.external_id)).changes;
           }
         }
         remove.run(id);
@@ -641,12 +656,13 @@ async function createSqliteAdapter(dbPath) {
       return lockExternalIds(snapshot, () => run());
     },
     // La consulta que hace valer la constancia, en el ingreso. Por llave
-    // exacta: una llave distinta para la misma persona no está suprimida, y ese
-    // es el límite honesto del mecanismo.
+    // exacta sobre el hash (#192, revisión de cris-pappcorn, punto 2): una
+    // llave distinta para la misma persona no está suprimida, y ese es el
+    // límite honesto del mecanismo.
     async isExternalIdSuppressed(externalId) {
       return !!db
         .prepare('SELECT 1 AS uno FROM suppressed_external_ids WHERE external_id = ?')
-        .get(externalId);
+        .get(hashExternalId(externalId));
     },
     async counts() {
       const n = (sql) => db.prepare(sql).get().n;

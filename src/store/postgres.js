@@ -2,10 +2,22 @@
 // Uses pg_trgm (when available) to prefilter fuzzy-search candidates with an index;
 // the shared JS scorer in people.js does the final ranking.
 const { Pool } = require('pg');
+const crypto = require('crypto');
 
 // #78: see the same constant in src/store/sqlite.js for why "latest status"
 // must treat an aggregator-sourced 'safe' row as if it were never written.
 const AGGREGATOR_SAFE_EXCLUSION = `WHERE NOT (u.source = 'aggregator' AND u.status = 'safe')`;
+
+// La llave que se guarda en suppressed_external_ids nunca es el valor crudo
+// (#192, revisión de cris-pappcorn, punto 2): la llave la elige quien empuja,
+// y hay integradores que usan el nombre completo de la persona como
+// external_id cuando la fuente no trae otro identificador. Guardar el hash
+// mantiene la misma garantía de bloqueo — la comparación sigue siendo por
+// igualdad exacta, sha256(a) === sha256(b) sii a === b — sin dejar un dato
+// personal en la única tabla del esquema que a propósito no se borra nunca.
+function hashExternalId(externalId) {
+  return crypto.createHash('sha256').update(String(externalId), 'utf8').digest('hex');
+}
 
 async function createPostgresAdapter(connectionString) {
   const sslConfig = /localhost|127\.0\.0\.1/.test(connectionString)
@@ -18,19 +30,33 @@ async function createPostgresAdapter(connectionString) {
     ssl: sslConfig
   });
 
-  // Pool APARTE, chico, solo para sostener un pg_advisory_lock mientras corre
-  // `fn` en withExternalIdLock (#192) — NUNCA `pool`. `fn` corre los métodos
-  // normales del store, que a su vez hacen `pool.query(...)` en conexiones del
-  // pool de arriba; si la conexión que sostiene el lock viniera de esa MISMA
-  // fuente, bastaban tres admisiones concurrentes de llaves distintas (o tres
-  // esperas del mismo advisory lock) para dejar las tres conexiones de
-  // `pool` ocupadas sosteniendo/esperando el lock, sin ninguna libre para que
-  // `fn` corriera su propio isExternalIdSuppressed/findOrCreatePerson/
-  // insertUpdate — un deadlock del pool entero, no solo de esta llave
-  // (hallazgo de QA). Un pool separado hace que sostener el lock JAMÁS le
-  // quite una conexión a lo que `fn` necesita: la única cola posible es la de
-  // este pool chico esperando a que otra sección crítica termine — más
-  // lento bajo mucha concurrencia, nunca trabado para siempre.
+  // Pool APARTE, chico, solo para sostener un advisory lock TRANSACCIONAL
+  // mientras corre la sección crítica que protege (#192) — NUNCA `pool`.
+  //
+  // Dos consumidores, la misma razón:
+  //   - `withExternalIdLock`: `fn` corre los métodos normales del store, que
+  //     a su vez hacen `pool.query(...)` en conexiones del pool de arriba; si
+  //     la conexión que sostiene el lock viniera de esa MISMA fuente, bastaban
+  //     tres admisiones concurrentes de llaves distintas (o tres esperas del
+  //     mismo advisory lock) para dejar las tres conexiones de `pool`
+  //     ocupadas sosteniendo/esperando el lock, sin ninguna libre para que
+  //     `fn` corriera su propio isExternalIdSuppressed/findOrCreatePerson/
+  //     insertUpdate — un deadlock del pool entero, no solo de esta llave
+  //     (hallazgo de QA).
+  //   - `deletePerson` (a solicitud): sostiene el MISMO tipo de lock mientras
+  //     su propia transacción corre. Si tomara su conexión de `pool` (como
+  //     hacía antes de la revisión de cris-pappcorn, punto 3), varios DELETE
+  //     concurrentes esperando un lock que sostiene una admisión en curso —
+  //     cuyo `fn` necesita, a su vez, conexiones de `pool` — podían agotarlo
+  //     entre los dos lados. `deletePerson` no reentra a `pool` mientras
+  //     sostiene su conexión (solo corre sus propias queries en el mismo
+  //     client), así que moverlo acá no crea el mismo problema en sentido
+  //     contrario.
+  //
+  // Un pool separado hace que sostener cualquiera de los dos locks JAMÁS le
+  // quite una conexión a lo que el otro lado necesita: la única cola posible
+  // es la de este pool chico esperando a que otra sección crítica termine —
+  // más lento bajo mucha concurrencia, nunca trabado para siempre.
   const lockPool = new Pool({
     connectionString,
     max: 2, // igual de chico; ver el porqué arriba
@@ -147,11 +173,18 @@ async function createPostgresAdapter(connectionString) {
     -- cara. Sin log, sin error y sin contador — para el sistema es una ficha
     -- nueva que entró bien.
     --
-    -- Guarda la llave y la fecha, y nada más: ni nombre, ni foto, ni contacto,
-    -- ni person_id. El punto es impedir que la ficha vuelva, no poder
-    -- reconstruir lo que se borró. Por eso tampoco hay una columna de "motivo"
-    -- en texto libre: sería la puerta por la que entraría PII a la única tabla
-    -- del esquema que no se borra nunca.
+    -- Guarda el HASH sha256 de la llave (hex, 64 caracteres) y la fecha, y
+    -- nada más: ni nombre, ni foto, ni contacto, ni person_id, ni la llave
+    -- cruda. La llave la elige quien empuja, y hay integradores que usan el
+    -- nombre completo de la persona como external_id cuando la fuente no
+    -- trae otro identificador — guardar el hash evita que alguien que ejerce
+    -- su derecho de supresión termine con su nombre en claro, a perpetuidad,
+    -- en la única tabla del esquema sin retención. El chequeo sigue siendo
+    -- por igualdad exacta (sha256(a) === sha256(b) sii a === b), así que la
+    -- garantía de bloqueo no cambia. El punto es impedir que la ficha vuelva,
+    -- no poder reconstruir lo que se borró. Por eso tampoco hay una columna
+    -- de "motivo" en texto libre: sería otra puerta por la que entraría PII a
+    -- esta tabla.
     --
     -- El alcance es la MISMA llave externa y nada más. Un reporte sin
     -- external_id —el formulario web, el bot— no se bloquea jamás, ni siquiera
@@ -633,14 +666,15 @@ async function createPostgresAdapter(connectionString) {
     // y con ellas la única copia de la llave.
     async deletePerson(id, { atSubjectRequest = false } = {}) {
       // Instantánea de qué llaves podría suprimir este borrado — solo para
-      // saber CUÁLES pedir con pg_advisory_lock antes de escribir; no es
+      // saber CUÁLES pedir con pg_advisory_xact_lock antes de escribir; no es
       // garantía de que sigan siendo las mismas para cuando la transacción de
       // abajo corra. Una llave que aparezca después de esta foto no tiene lock
-      // que la proteja todavía, pero el `SELECT DISTINCT` de la transacción la
-      // vuelve a leer y la suprime igual. Lo que eso no cierra —más angosto
-      // que la condición de carrera de #192, que es la que este lock existe
-      // para cerrar— es una admisión que en ese mismo instante le agrega a
-      // ESTA MISMA persona una llave que nadie pidió suprimir todavía.
+      // que la proteja todavía, pero la relectura de más abajo, YA ADENTRO de
+      // la transacción, la vuelve a leer y la suprime igual. Lo que eso no
+      // cierra —más angosto que la condición de carrera de #192, que es la
+      // que este lock existe para cerrar— es una admisión que en ese mismo
+      // instante le agrega a ESTA MISMA persona una llave que nadie pidió
+      // suprimir todavía.
       const snapshot = atSubjectRequest
         ? (
             await pool.query(
@@ -650,30 +684,65 @@ async function createPostgresAdapter(connectionString) {
           ).rows.map((r) => r.external_id).sort()
         : [];
 
-      const client = await pool.connect();
+      // La conexión dedicada sale de `lockPool`, NUNCA de `pool` (#192,
+      // revisión de cris-pappcorn, punto 3) — ver el comentario largo donde
+      // se crea `lockPool`, arriba.
+      const client = await lockPool.connect();
       try {
+        await client.query('BEGIN');
+        // Convierte una espera patológica en un error, en vez de un cuelgue
+        // sin límite — mismo razonamiento que en withExternalIdLock, abajo.
+        // SET LOCAL es de alcance transaccional: sí funciona detrás de un
+        // pooler en modo transacción (SET a secas, no).
+        await client.query("SET LOCAL lock_timeout = '5s'");
         // El MISMO lock que sostiene la admisión entre su chequeo y su
         // escritura (#192, `withExternalIdLock` abajo) — si el borrado no lo
         // pide antes de escribir, un re-envío que ya pasó el chequeo puede
         // quedar en el aire mientras este borrado suprime y se va, y terminar
-        // escribiendo igual: la ficha revive. Van todos en la MISMA conexión
-        // que la transacción de abajo (no una por llave): el pool acá es de
-        // 3 conexiones nomás (serverless), y una persona con varias llaves no
-        // debería poder agotarlo.
+        // escribiendo igual: la ficha revive.
+        //
+        // pg_advisory_xact_lock, no pg_advisory_lock (revisión de
+        // cris-pappcorn, punto 1): un lock de SESIÓN no sobrevive a un pooler
+        // en modo transacción (PgBouncer / el endpoint pooled de Neon, que es
+        // el que ve `findPostgresUrl()` — ver el comentario largo en
+        // withExternalIdLock) — cada sentencia suelta puede repartirse en un
+        // backend distinto, y el lock queda tomado para siempre en uno que ya
+        // nadie va a liberar. El de transacción se toma y se libera en el
+        // MISMO backend porque todo esto es una sola transacción, y se libera
+        // SOLO al COMMIT o ROLLBACK — también si el proceso muere a mitad.
+        //
+        // Van todos en la MISMA conexión que el resto de esta transacción (no
+        // una por llave): el `for` no reentra a ningún otro pool.
+        //
+        // `hashtextextended(_, 0)` da 64 bits en vez de los 32 de `hashtext`:
+        // baja la probabilidad de colisión entre llaves distintas que no
+        // tenían nada que ver entre sí. Tiene que usar la MISMA forma que
+        // `withExternalIdLock` — son espacios de lock distintos, y media
+        // migración no serializa nada.
         for (const externalId of snapshot) {
-          await client.query('SELECT pg_advisory_lock(hashtext($1))', [externalId]);
+          await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [externalId]);
         }
-        await client.query('BEGIN');
         let suppressed = 0;
         if (atSubjectRequest) {
-          const res = await client.query(
-            `INSERT INTO suppressed_external_ids (external_id)
-             SELECT DISTINCT external_id FROM updates
-               WHERE person_id = $1 AND external_id IS NOT NULL
-             ON CONFLICT (external_id) DO NOTHING`,
-            [id]
-          );
-          suppressed = res.rowCount || 0;
+          // Relectura fresca, YA ADENTRO de la transacción — ver el
+          // comentario de `snapshot`, arriba. Se hashea en JS antes de
+          // guardar (#192, revisión de cris-pappcorn, punto 2: ver el
+          // comentario de la tabla, más arriba, para el porqué).
+          const fresh = (
+            await client.query(
+              'SELECT DISTINCT external_id FROM updates WHERE person_id = $1 AND external_id IS NOT NULL',
+              [id]
+            )
+          ).rows.map((r) => r.external_id);
+          if (fresh.length) {
+            const res = await client.query(
+              `INSERT INTO suppressed_external_ids (external_id)
+               SELECT * FROM unnest($1::text[])
+               ON CONFLICT (external_id) DO NOTHING`,
+              [fresh.map(hashExternalId)]
+            );
+            suppressed = res.rowCount || 0;
+          }
         }
         const deleted = (await client.query('DELETE FROM people WHERE id = $1 RETURNING *', [id]))
           .rows[0];
@@ -683,46 +752,84 @@ async function createPostgresAdapter(connectionString) {
         await client.query('ROLLBACK').catch(() => {});
         throw e;
       } finally {
-        if (snapshot.length) await client.query('SELECT pg_advisory_unlock_all()').catch(() => {});
+        // Nada que liberar a mano: un lock transaccional se suelta solo en el
+        // COMMIT o el ROLLBACK de arriba. El pg_advisory_unlock_all() que
+        // había acá antes de la revisión de cris-pappcorn (punto 1) liberaba
+        // TODOS los locks de sesión del backend donde cayera la conexión —
+        // incluidos los de otro cliente lógico que compartiera ese backend a
+        // través del pooler — rompiendo su exclusión mutua sin ningún
+        // síntoma.
         client.release();
       }
     },
     // La consulta que hace valer la constancia, en el ingreso. Va por llave
-    // exacta: una llave distinta para la misma persona no está suprimida, y eso
-    // es el límite honesto de este mecanismo (ver el comentario de la tabla).
+    // exacta sobre el hash (#192, revisión de cris-pappcorn, punto 2): una
+    // llave distinta para la misma persona no está suprimida, y eso es el
+    // límite honesto de este mecanismo (ver el comentario de la tabla).
     async isExternalIdSuppressed(externalId) {
       const r = await one('SELECT 1 FROM suppressed_external_ids WHERE external_id = $1', [
-        externalId
+        hashExternalId(externalId)
       ]);
       return !!r;
     },
-    // Lock de sesión por external_id: serializa el chequeo-y-escritura de una
-    // admisión (src/report-admission.js) contra la ventana en la que
+    // Lock TRANSACCIONAL por external_id: serializa el chequeo-y-escritura de
+    // una admisión (src/report-admission.js) contra la ventana en la que
     // `deletePerson({ atSubjectRequest: true })` suprime esa misma llave
-    // (#192, condición de carrera señalada por coderabbitai). Es a nivel de
-    // SESIÓN, no de transacción, porque adentro de `fn` el llamador corre
-    // varias queries no transaccionales (el chequeo, el find-or-create, el
-    // upsert) — se pide una conexión dedicada solo para sostener el lock
-    // mientras `fn` corre, y se libera siempre, lance `fn` o no.
+    // (#192, condición de carrera señalada por coderabbitai).
+    //
+    // Es `pg_advisory_xact_lock`, no `pg_advisory_lock` (revisión de
+    // cris-pappcorn, punto 1, confirmada leyendo `src/store/index.js`, no
+    // adivinada): `findPostgresUrl()` acepta seis nombres de variable y
+    // ninguno de los dos que apuntan al endpoint DIRECTO de Neon
+    // (`DATABASE_URL_UNPOOLED`, `POSTGRES_URL_NON_POOLING`) está en la lista
+    // ni casa con su regex dinámico — así que el código SIEMPRE resuelve el
+    // endpoint pooled (PgBouncer en modo transacción), nunca el directo. Bajo
+    // ese pooler, un lock de sesión y su unlock pueden caer en backends
+    // distintos: el unlock no lanza, devuelve `false` y loguea un WARNING que
+    // nadie ve, y el lock queda tomado hasta que el pooler recicle esa
+    // conexión — sin timeout, cuelga toda admisión futura con esa llave. No
+    // es un "depende del entorno": para llegar al endpoint directo haría
+    // falta inventar una variable con un nombre que casualmente termine en
+    // `_DATABASE_URL`.
+    //
+    // El lock transaccional no necesita compartir conexión con lo que
+    // protege — necesita estar tomado MIENTRAS ese trabajo corre. Por eso se
+    // abre una transacción en esta conexión dedicada, se toma el lock ahí, y
+    // `fn` sigue corriendo sobre el `pool` principal sin tocar nada de su
+    // código: la exclusión mutua es idéntica a la de antes, porque nunca
+    // dependió de la conexión sino del candado. Se libera SOLO al COMMIT o al
+    // ROLLBACK — nunca queda un `finally` que no corrió, y si el proceso
+    // muere a mitad, el pooler hace ROLLBACK de la transacción abierta al
+    // devolver el backend al pool, así que el lock se libera igual.
     //
     // La conexión dedicada sale de `lockPool`, NUNCA de `pool` — ver el
     // comentario largo donde se crea `lockPool`, arriba: si saliera de la
-    // misma fuente que `fn` necesita para sus propias queries, alcanzaban tres
-    // admisiones concurrentes para agotar el pool entero y dejarlas a las tres
-    // esperando una conexión que ninguna puede soltar (hallazgo de QA).
+    // misma fuente que `fn` necesita para sus propias queries, alcanzaban
+    // tres admisiones concurrentes para agotar el pool entero y dejarlas a
+    // las tres esperando una conexión que ninguna puede soltar (hallazgo de
+    // QA).
     //
-    // `hashtext()` da un entero de 32 bits: dos external_id distintos PUEDEN
-    // compartir la llave del lock (colisión de hash). Eso cuesta, en el peor
-    // caso, una espera de más entre llaves que no tenían nada que ver entre
-    // sí — nunca dos secciones críticas de la MISMA llave corriendo a la vez,
-    // que es la única garantía que hace falta.
+    // `hashtextextended(_, 0)` da un entero de 64 bits (existe desde PG 11),
+    // no los 32 de `hashtext()`: baja en la práctica a cero la probabilidad
+    // de que dos external_id distintos compartan la llave del lock. Tiene
+    // que usar la MISMA forma que `deletePerson` — son espacios de lock
+    // distintos, y media migración no serializa nada.
     async withExternalIdLock(externalId, fn) {
       const client = await lockPool.connect();
       try {
-        await client.query('SELECT pg_advisory_lock(hashtext($1))', [externalId]);
-        return await fn();
+        await client.query('BEGIN');
+        // Convierte una espera patológica en un error en vez de un cuelgue
+        // sin límite. SET LOCAL es de alcance transaccional, así que sí
+        // funciona detrás de un pooler en modo transacción (SET a secas, no).
+        await client.query("SET LOCAL lock_timeout = '5s'");
+        await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [externalId]);
+        const out = await fn();
+        await client.query('COMMIT');
+        return out;
+      } catch (e) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw e;
       } finally {
-        await client.query('SELECT pg_advisory_unlock(hashtext($1))', [externalId]).catch(() => {});
         client.release();
       }
     },
