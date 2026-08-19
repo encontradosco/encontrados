@@ -84,6 +84,13 @@ function parseMessage(text) {
 // registrarla como a salvo: un dato falso, y justo el que hace que nadie la
 // siga buscando.
 //
+// Por eso DESAPARECIDO va en su PROPIA viñeta y no junto a BIEN/HERIDO: los
+// tres son reportes, pero no describen la misma situación. BIEN y HERIDO los
+// manda quien encontró a la persona; DESAPARECIDO, quien no sabe dónde está.
+// Meterlos en una sola línea rotulada "si la encontraste" volvía a decir algo
+// falso — el mismo defecto de la versión anterior, en la otra dirección — y
+// dejaba a quien está buscando sin ninguna línea que lo describa.
+//
 // FALLECIDO queda fuera a propósito, y no por descuido: procesa la foto
 // igual que los otros tres (las cuatro palabras entran por el mismo intent
 // 'report'). Se omite por dos razones que apuntan al mismo lado. La primera
@@ -103,7 +110,8 @@ const PHOTO_NOT_PROCESSED_NOTE = [
   '📷 Recibí una foto, pero con este mensaje no puedo usarla, así que no la guardé.',
   'Para que sirva, mándala otra vez con el comando como leyenda:',
   '• SUSCRIBIR <nombre> — si estás buscando a esa persona',
-  '• BIEN / HERIDO / DESAPARECIDO <nombre> — si la encontraste'
+  '• BIEN / HERIDO <nombre> — si la encontraste',
+  '• DESAPARECIDO <nombre> — si no sabes dónde está'
 ].join('\n');
 
 function withPhotoNote(reply, photo) {

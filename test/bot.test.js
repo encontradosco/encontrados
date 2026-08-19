@@ -248,8 +248,12 @@ test('una foto en un mensaje no reconocido no se indexa y se avisa (#156)', asyn
   // desaparición. Proponerle solo BIEN la empujaba a registrar como a salvo
   // a alguien a quien no encuentra, que es el dato que hace que nadie la
   // siga buscando.
-  assert.match(r, /SUSCRIBIR <nombre>/);
-  assert.match(r, /DESAPARECIDO <nombre>/);
+  assert.match(r, /• SUSCRIBIR <nombre> — si estás buscando a esa persona/);
+  assert.match(r, /• DESAPARECIDO <nombre> — si no sabes dónde está/);
+  // Y DESAPARECIDO va en su propia viñeta: agruparlo con BIEN/HERIDO bajo
+  // "si la encontraste" describe la situación contraria a la que reporta.
+  assert.match(r, /• BIEN \/ HERIDO <nombre> — si la encontraste/);
+  assert.doesNotMatch(r, /DESAPARECIDO <nombre> — si la encontraste/);
 });
 
 test('una foto con AYUDA (o mensaje vacío) no se indexa y se avisa (#156)', async () => {
