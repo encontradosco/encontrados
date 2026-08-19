@@ -2,7 +2,7 @@ const crypto = require('crypto');
 const express = require('express');
 const env = require('../env');
 const { upload } = require('../upload');
-const { sendVerificationEmail, sendEmail, avisoEmail, relayEnabled } = require('../notify');
+const { sendVerificationEmail, mailOperators, logSafe, relayEnabled } = require('../notify');
 const {
   identifyRescuedPerson,
   notifyRescuerOfMatches,
@@ -960,33 +960,21 @@ ${RESCUE_FOOTER}`
       // Best effort: the aviso already lives in the timeline; this mail is the
       // operators' real-time signal to go relay it to the source registry. An
       // email failure must never lose the aviso.
-      const operators = avisoEmail();
-      let relayResult;
-      if (operators) {
-        try {
-          relayResult = await sendEmail(
-            operators,
-            `Aviso de rescatista — ${person.full_name}`,
-            [
-              'Un rescatista informa dónde puede ser localizada una persona reportada como desaparecida.',
-              `Persona: ${person.full_name} (${env.BASE_URL}/person/${person.id})`,
-              `Teléfono del rescatista: ${phone}`,
-              // La etiqueta de esta línea la leen herramientas que procesan
-              // este buzón. Es un nombre de campo, no copy: cambiarlo rompe su
-              // parseo en silencio. La pregunta que se le hace al rescatista sí
-              // se reformuló, arriba en el formulario.
-              `Dónde puede ser localizada: ${location}`,
-              '',
-              'Siguiente paso: verificar y hacer llegar el aviso a la fuente del reporte (Colombia Te Busca: llenar su formulario de información en nombre del rescatista).'
-            ].join('\n')
-          );
-        } catch (e) {
-          console.error('[rescate:aviso] email failed:', e.message);
-          relayResult = { ok: false, error: e.message };
-        }
-      } else {
-        relayResult = { ok: false, error: 'AVISO_EMAIL no configurada' };
-      }
+      const relayResult = await mailOperators(
+        `Aviso de rescatista — ${person.full_name}`,
+        [
+          'Un rescatista informa dónde puede ser localizada una persona reportada como desaparecida.',
+          `Persona: ${person.full_name} (${env.BASE_URL}/person/${person.id})`,
+          `Teléfono del rescatista: ${phone}`,
+          // La etiqueta de esta línea la leen herramientas que procesan
+          // este buzón. Es un nombre de campo, no copy: cambiarlo rompe su
+          // parseo en silencio. La pregunta que se le hace al rescatista sí
+          // se reformuló, arriba en el formulario.
+          `Dónde puede ser localizada: ${location}`,
+          '',
+          'Siguiente paso: verificar y hacer llegar el aviso a la fuente del reporte (Colombia Te Busca: llenar su formulario de información en nombre del rescatista).'
+        ].join('\n')
+      );
       // Bitácora (#116): esto es un aviso OPERATIVO al equipo — pide que un
       // operador verifique y reenvíe a la fuente — no un aviso a una persona.
       // Mismo canal 'relevo' que ya usa el relevo de coincidencias pendientes
@@ -1424,26 +1412,19 @@ ${feedbackForm(kind, values)}
         // to the operators so it can be filed by hand — from the sender's side
         // the outcome is the same, which is the point.
         if (!issue.ok) {
-          const to = avisoEmail();
-          if (to) {
-            try {
-              await sendEmail(
-                to,
-                `[${k.noun}] ${summary}`,
-                [
-                  `No se pudo crear el issue en GitHub (${issue.error || 'motivo desconocido'}). Queda aquí para abrirlo a mano.`,
-                  '',
-                  `Tipo: ${k.noun}`,
-                  `Resumen: ${summary}`,
-                  '',
-                  details || '(sin detalles)'
-                ].join('\n')
-              );
-            } catch (e) {
-              console.error(`[${kind}] email de respaldo falló:`, e.message);
-            }
-          } else {
-            console.error(`[${kind}] PERDIDO — sin GITHUB_TOKEN y sin AVISO_EMAIL: "${summary}"`);
+          const result = await mailOperators(
+            `[${k.noun}] ${summary}`,
+            [
+              `No se pudo crear el issue en GitHub (${issue.error || 'motivo desconocido'}). Queda aquí para abrirlo a mano.`,
+              '',
+              `Tipo: ${k.noun}`,
+              `Resumen: ${summary}`,
+              '',
+              details || '(sin detalles)'
+            ].join('\n')
+          );
+          if (!result.ok) {
+            console.error(`[${kind}] PERDIDO — sin GitHub y sin este respaldo por correo (${result.error}): "${logSafe(summary)}"`);
           }
         }
 
