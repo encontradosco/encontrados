@@ -2,7 +2,7 @@ const crypto = require('crypto');
 const express = require('express');
 const env = require('../env');
 const { upload } = require('../upload');
-const { sendVerificationEmail, mailOperators, relayEnabled } = require('../notify');
+const { sendVerificationEmail, mailOperators, logSafe, relayEnabled } = require('../notify');
 const {
   identifyRescuedPerson,
   notifyRescuerOfMatches,
@@ -1424,7 +1424,7 @@ ${feedbackForm(kind, values)}
             ].join('\n')
           );
           if (!result.ok) {
-            console.error(`[${kind}] PERDIDO — sin GitHub y sin este respaldo por correo (${result.error}): "${summary}"`);
+            console.error(`[${kind}] PERDIDO — sin GitHub y sin este respaldo por correo (${result.error}): "${logSafe(summary)}"`);
           }
         }
 

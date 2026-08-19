@@ -140,6 +140,15 @@ async function relayToOperators({ reason, channel, address, subject, text, perso
   return { ...result, relayed: true };
 }
 
+// Neutraliza saltos de línea y demás caracteres de control antes de que un
+// texto escrito por alguien de afuera entre a un log. El resumen de /ideas y
+// /bug es texto libre: sin esto, uno que traiga su propio salto de línea
+// fabrica una línea de log entera, y quien diagnostica termina leyendo un
+// evento que nunca ocurrió.
+function logSafe(value) {
+  return String(value === null || value === undefined ? '' : value).replace(/[\u0000-\u001f\u007f]/g, ' ');
+}
+
 // Manda un correo al buzón de operación con el asunto y el cuerpo que arma
 // quien llama. Comparte la mecánica de `relayToOperators` (leer `avisoEmail()`
 // en vivo, degradar con un log claro si no está configurada, nunca lanzar)
@@ -162,7 +171,7 @@ async function mailOperators(subject, body) {
     // avisa y el lugar donde dice que está la persona: en zona de desastre ese
     // par es materia de extorsión, no un campo más. El asunto alcanza para
     // saber qué se perdió e ir a buscarlo.
-    console.error(`[notify:operadores] PERDIDO — AVISO_EMAIL sin configurar. asunto="${subject}"`);
+    console.error(`[notify:operadores] PERDIDO — AVISO_EMAIL sin configurar. asunto="${logSafe(subject)}"`);
     return { ok: false, error: 'AVISO_EMAIL no configurada' };
   }
   return sendEmail(to, subject, body);
@@ -460,6 +469,7 @@ module.exports = {
   relayEnabled,
   relayToOperators,
   mailOperators,
+  logSafe,
   avisoEmail,
   rescueConfirmTemplate,
   rescueSourceTemplate,
