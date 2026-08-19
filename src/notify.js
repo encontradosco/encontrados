@@ -152,7 +152,17 @@ async function relayToOperators({ reason, channel, address, subject, text, perso
 async function mailOperators(subject, body) {
   const to = avisoEmail();
   if (!to) {
-    console.error(`[notify:operadores] PERDIDO — AVISO_EMAIL sin configurar. asunto="${subject}"\n${body}`);
+    // Este log lleva el asunto y NO el cuerpo, al revés que el de
+    // `relayToOperators`. La diferencia es deliberada: allá el texto se vuelca
+    // porque el log es la ÚNICA copia que queda del aviso, y ese comentario lo
+    // dice. Acá esa razón no aplica — el aviso del rescatista ya quedó
+    // guardado con `addUpdate` antes de intentar este correo (por eso su
+    // llamador lo llama "best effort"), así que el cuerpo es recuperable de la
+    // base. Volcarlo aquí regalaría, a cambio de nada, el teléfono de quien
+    // avisa y el lugar donde dice que está la persona: en zona de desastre ese
+    // par es materia de extorsión, no un campo más. El asunto alcanza para
+    // saber qué se perdió e ir a buscarlo.
+    console.error(`[notify:operadores] PERDIDO — AVISO_EMAIL sin configurar. asunto="${subject}"`);
     return { ok: false, error: 'AVISO_EMAIL no configurada' };
   }
   return sendEmail(to, subject, body);
