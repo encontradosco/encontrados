@@ -25,6 +25,7 @@ const { createStore } = require('../src/people');
 const { createApp } = require('../src/server');
 const { nullMatcher } = require('../src/faces');
 const { publicUpdate } = require('../src/privacy');
+const { CONFIRMATION_VALUE } = require('../src/statusReview');
 
 const ADMIN = 'revisora@ejemplo.com';
 const SECRET = 'secreto-de-prueba';
@@ -492,6 +493,57 @@ test('un :id que no es un entero da 404, no un 500 de la base', async () => {
         assert.equal(post.status, 404, `POST ${accion} con id «${id}»`);
       }
     }
+  } finally {
+    app.stop();
+  }
+});
+
+test('solo el valor exacto de la casilla cuenta como confirmación', async () => {
+  const app = await startApp();
+  try {
+    const person = await fichaSinConfirmar(app.store, 'Olga Sintética Quince');
+    await app.store.subscribe(person.id, 'email', 'sobrina@ejemplo.test', { verified: true });
+
+    // Toda cadena no vacía es truthy en JS, así que `confirmo=0` y
+    // `confirmo=false` pasaban como un sí. Un script o un curl copiado que
+    // mandara "false" queriendo decir "no" habría resuelto la ficha y avisado
+    // a la familia.
+    for (const confirmo of ['0', 'false', 'no', 'on', 'true', '', '2', ' 1']) {
+      const res = await fetch(
+        `${app.base}/admin/revision/${person.id}/resolver`,
+        form({ estado: 'deceased', evidencia: NOTA_PRIVADA, confirmo })
+      );
+      assert.equal(res.status, 400, `«${confirmo}» no puede contar como confirmación`);
+      assert.equal((await app.store.getLatestUpdate(person.id)).status, 'unknown');
+      assert.equal((await reviews(app.adapter, person.id)).length, 0);
+    }
+
+    // Y el valor que la casilla realmente emite sí resuelve.
+    const ok = await fetch(
+      `${app.base}/admin/revision/${person.id}/resolver`,
+      form({ estado: 'deceased', evidencia: NOTA_PRIVADA, confirmo: CONFIRMATION_VALUE })
+    );
+    assert.equal(ok.status, 200);
+    assert.equal((await app.store.getLatestUpdate(person.id)).status, 'deceased');
+  } finally {
+    app.stop();
+  }
+});
+
+test('la casilla del formulario emite exactamente el valor que el servidor exige', async () => {
+  const app = await startApp();
+  try {
+    const person = await fichaSinConfirmar(app.store, 'Pilar Sintética Dieciséis');
+    const html = await (
+      await fetch(`${app.base}/admin/revision/${person.id}`, { headers: { Cookie: sessionCookie() } })
+    ).text();
+    // Si la casilla y su validador se desincronizan, resolver deja de ser
+    // posible desde la interfaz sin que ninguna otra prueba lo note.
+    assert.match(
+      html,
+      new RegExp(`name="confirmo" value="${CONFIRMATION_VALUE}" required`),
+      'la casilla tiene que emitir el mismo valor que exige validateEvidence'
+    );
   } finally {
     app.stop();
   }

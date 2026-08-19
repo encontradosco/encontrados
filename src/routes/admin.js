@@ -287,7 +287,9 @@ function adminRoutes(store, matcher) {
         estado,
         evidencia,
         enlace,
-        confirmo: Boolean(confirmo),
+        // Crudo a propósito: la regla de qué cuenta como confirmación vive en
+        // src/statusReview.js, al lado de la casilla que emite el valor.
+        confirmo,
         normalizeSourceUrl
       });
       if (!result.ok) return reRenderWithErrors(req, res, result.errors, 'resolver');

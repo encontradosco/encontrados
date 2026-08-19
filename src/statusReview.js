@@ -60,6 +60,19 @@ const REVIEW_STATUSES = ['safe', 'deceased'];
 // privado. Lo público es que la decisión la tomó el equipo, no quién.
 const REVIEW_REPORTER = 'Revisión';
 
+// El ÚNICO valor que cuenta como confirmación, y vive acá —al lado del
+// formulario que lo emite— para que la casilla y su validador no se puedan
+// desincronizar.
+//
+// Antes se leía con Boolean(confirmo), y eso aceptaba `confirmo=0` y
+// `confirmo=false` como un sí: toda cadena no vacía es truthy en JS. La
+// consecuencia no es un ataque —esta ruta ya exige sesión de /admin— sino algo
+// peor de explicar: un script, un curl copiado o una integración que mandara
+// `confirmo=false` queriendo decir "no" habría resuelto la ficha y avisado a
+// la familia. Una casilla que acepta 0 como sí no es una confirmación.
+// Hallazgo de coderabbitai en la revisión de este PR.
+const CONFIRMATION_VALUE = '1';
+
 // Quién recibe de verdad un aviso, con el MISMO criterio que notifySubscribers
 // (src/notify.js): suscripción verificada y canal entregable. Si estos dos
 // filtros se separan, la pantalla promete un número y sale otro — y el número
@@ -161,7 +174,7 @@ async function resolveFicha({
   // La confirmación explícita de que esto manda un aviso. No es letra chica:
   // es una casilla que hay que marcar, y el servidor la exige igual que la
   // evidencia — un formulario armado a mano no se salta la advertencia.
-  if (!confirmo) {
+  if (String(confirmo) !== CONFIRMATION_VALUE) {
     errors.push('Marca la casilla que dice que entiendes que resolver manda un aviso.');
   }
   if (errors.length) return { ok: false, errors };
@@ -439,7 +452,7 @@ function resolveFormHtml({ person, latest, recipients, mode, form }) {
       <label>Enlace público que lo respalda (opcional)
         <input type="url" name="enlace" placeholder="https://…" value="${esc(form.enlace || '')}">
       </label>
-      <label><input type="checkbox" name="confirmo" value="1" required> Entiendo que al resolver
+      <label><input type="checkbox" name="confirmo" value="${CONFIRMATION_VALUE}" required> Entiendo que al resolver
         ${
           recipients === 0
             ? 'no sale ningún aviso hoy, porque nadie sigue a esta persona'
@@ -478,6 +491,7 @@ function buildResolvedPageHtml(result) {
 module.exports = {
   REVIEW_STATUSES,
   REVIEW_REPORTER,
+  CONFIRMATION_VALUE,
   notifiableSubscribers,
   gatherQueue,
   gatherFicha,
