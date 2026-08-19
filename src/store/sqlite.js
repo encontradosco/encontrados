@@ -109,6 +109,61 @@ async function createSqliteAdapter(dbPath) {
     CREATE INDEX IF NOT EXISTS idx_contact_log_person ON contact_log(person_id);
     CREATE INDEX IF NOT EXISTS idx_contact_log_created ON contact_log(created_at);
 
+    CREATE TABLE IF NOT EXISTS pets (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      species TEXT NOT NULL CHECK (species IN ('dog','cat')),
+      pet_name TEXT,
+      description TEXT,
+      contact TEXT,
+      resolved_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS pet_subscriptions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      channel TEXT NOT NULL CHECK (channel IN ('email','whatsapp')),
+      address TEXT NOT NULL,
+      verified INTEGER NOT NULL DEFAULT 0,
+      verify_token TEXT,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS pet_photos (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      pet_id INTEGER REFERENCES pets(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL CHECK (kind IN ('report','query')),
+      species TEXT NOT NULL CHECK (species IN ('dog','cat')),
+      subscription_id INTEGER REFERENCES pet_subscriptions(id) ON DELETE CASCADE,
+      content BLOB NOT NULL,
+      content_type TEXT NOT NULL,
+      embedding TEXT,
+      embedding_model TEXT,
+      thumb BLOB,
+      thumb_type TEXT,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+      CHECK (kind <> 'report' OR pet_id IS NOT NULL)
+    );
+    CREATE INDEX IF NOT EXISTS idx_pet_photos_pet ON pet_photos(pet_id);
+    CREATE INDEX IF NOT EXISTS idx_pet_photos_kind_species ON pet_photos(kind, species);
+
+    -- Bitácora de auto-fusiones (#150): a diferencia de match_log/contact_log,
+    -- ACÁ SÍ guarda un nombre a propósito. findOrCreatePerson no persiste el
+    -- fullName del reporte que se fusiona en ningún otro lado (addUpdate no lo
+    -- recibe) — sin esta columna, el nombre original desaparece y una fusión
+    -- mala queda imposible de deshacer sin adivinar. Se acepta el desvío del
+    -- "sin nombres" de las bitácoras anteriores porque el nombre de una persona
+    -- reportada ya es dato público del producto (se muestra en /person/:id),
+    -- a diferencia de contact/reporter/message, que nunca lo son.
+    CREATE TABLE IF NOT EXISTS merge_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+      submitted_name TEXT NOT NULL,
+      score REAL NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_merge_log_person ON merge_log(person_id);
+    CREATE INDEX IF NOT EXISTS idx_merge_log_created ON merge_log(created_at);
+
     -- Constancia de acciones de privacidad hechas a mano desde /admin (#161):
     -- hoy solo "retirar la firma facial sin borrar la ficha", a pedido de una
     -- familia que ya encontró a la persona. A diferencia de match_log/contact_log
@@ -186,6 +241,20 @@ async function createSqliteAdapter(dbPath) {
   );
 
   const getPersonStmt = db.prepare('SELECT * FROM people WHERE id = ?');
+
+  // Las firmas faciales atadas a una o más suscripciones. Hay que leerlas
+  // ANTES de borrar la suscripción: `photos.subscription_id` también cascada
+  // (ver el esquema arriba), y con la suscripción se va la única fila que
+  // decía qué firma retirar de Rekognition — el mismo problema que
+  // `faceIdsForPerson` ya resuelve para el borrado de persona (#162).
+  function faceIdsForSubscriptionIds(subscriptionIds) {
+    if (!subscriptionIds.length) return [];
+    const marks = subscriptionIds.map(() => '?').join(',');
+    return db
+      .prepare(`SELECT face_id FROM photos WHERE subscription_id IN (${marks}) AND face_id IS NOT NULL`)
+      .all(...subscriptionIds)
+      .map((r) => r.face_id);
+  }
 
   return {
     async insertPerson(fullName, normalized, phonetic) {
@@ -351,21 +420,38 @@ async function createSqliteAdapter(dbPath) {
       db.prepare('UPDATE subscriptions SET verified = 1 WHERE id = ?').run(sub.id);
       return { ...sub, verified: 1 };
     },
+    // Igual que deletePerson en src/routes/api.js: los face_id se leen ANTES
+    // de borrar la fila, porque la cascada de subscription_id se la lleva
+    // junto con la única forma de saber qué firma retirar (#162).
     async deleteSubscriptionByToken(token) {
       const sub = db.prepare('SELECT * FROM subscriptions WHERE verify_token = ?').get(token);
       if (!sub) return null;
+      const faceIds = faceIdsForSubscriptionIds([sub.id]);
       db.prepare('DELETE FROM subscriptions WHERE id = ?').run(sub.id);
-      return sub;
+      return { ...sub, faceIds };
     },
     async deleteSubscription(personId, channel, address) {
-      return db
-        .prepare('DELETE FROM subscriptions WHERE person_id = ? AND channel = ? AND address = ?')
-        .run(personId, channel, address).changes;
+      const sub = db
+        .prepare('SELECT id FROM subscriptions WHERE person_id = ? AND channel = ? AND address = ?')
+        .get(personId, channel, address);
+      if (!sub) return { count: 0, faceIds: [] };
+      const faceIds = faceIdsForSubscriptionIds([sub.id]);
+      const info = db.prepare('DELETE FROM subscriptions WHERE id = ?').run(sub.id);
+      return { count: info.changes, faceIds };
     },
     async deleteSubscriptionsForAddress(channel, address) {
-      return db
-        .prepare('DELETE FROM subscriptions WHERE channel = ? AND address = ?')
-        .run(channel, address).changes;
+      const subs = db
+        .prepare('SELECT id FROM subscriptions WHERE channel = ? AND address = ?')
+        .all(channel, address);
+      if (!subs.length) return { count: 0, faceIds: [] };
+      const ids = subs.map((s) => s.id);
+      const faceIds = faceIdsForSubscriptionIds(ids);
+      // Por id, no por (channel, address): ver el comentario equivalente en
+      // postgres.js — una suscripción creada entre el SELECT y este DELETE no
+      // debe quedar alcanzada por él (#162).
+      const marks = ids.map(() => '?').join(',');
+      const info = db.prepare(`DELETE FROM subscriptions WHERE id IN (${marks})`).run(...ids);
+      return { count: info.changes, faceIds };
     },
     async subscriptionsForPerson(personId) {
       return db.prepare('SELECT * FROM subscriptions WHERE person_id = ?').all(personId);
@@ -545,6 +631,13 @@ async function createSqliteAdapter(dbPath) {
         'INSERT INTO contact_log (person_id, update_id, channel, result) VALUES (?, ?, ?, ?)'
       ).run(personId, updateId ?? null, channel, result);
     },
+    // #150: registro de cada auto-fusión por nombre — ver el comentario del
+    // esquema sobre por qué esta tabla sí guarda un nombre.
+    async insertMergeLog({ personId, submittedName, score }) {
+      db.prepare(
+        'INSERT INTO merge_log (person_id, submitted_name, score) VALUES (?, ?, ?)'
+      ).run(personId, submittedName, score);
+    },
     // Cuenta total y por superficie. `since` (ISO) filtra a lo escrito desde
     // ahí — se usa para la línea de "cambio desde el reporte anterior" del
     // correo operativo; sin `since`, es el acumulado histórico completo.
@@ -645,6 +738,105 @@ async function createSqliteAdapter(dbPath) {
     },
     async matchLogSimilarityRows() {
       return db.prepare('SELECT similarity, surface FROM match_log').all();
+    },
+
+    async insertPet({ species, petName, description, contact }) {
+      const info = db
+        .prepare('INSERT INTO pets (species, pet_name, description, contact) VALUES (?, ?, ?, ?)')
+        .run(species, petName || null, description || null, contact || null);
+      return db.prepare('SELECT * FROM pets WHERE id = ?').get(info.lastInsertRowid);
+    },
+    async getPet(id) {
+      return db.prepare('SELECT * FROM pets WHERE id = ?').get(id);
+    },
+    async markPetResolved(id) {
+      db.prepare("UPDATE pets SET resolved_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?").run(id);
+      return db.prepare('SELECT * FROM pets WHERE id = ?').get(id);
+    },
+    async insertPetPhoto({ petId, kind, species, subscriptionId, content, contentType }) {
+      const info = db
+        .prepare(
+          'INSERT INTO pet_photos (pet_id, kind, species, subscription_id, content, content_type) VALUES (?, ?, ?, ?, ?, ?)'
+        )
+        .run(petId || null, kind, species, subscriptionId || null, content, contentType);
+      return db
+        .prepare('SELECT id, pet_id, kind, species, content_type, created_at FROM pet_photos WHERE id = ?')
+        .get(info.lastInsertRowid);
+    },
+    async getPetPhoto(id) {
+      return db.prepare('SELECT * FROM pet_photos WHERE id = ?').get(id);
+    },
+    async setPetPhotoEmbedding(photoId, embedding, model) {
+      db.prepare('UPDATE pet_photos SET embedding = ?, embedding_model = ? WHERE id = ?').run(
+        JSON.stringify(embedding),
+        model || null,
+        photoId
+      );
+    },
+    async setPetPhotoThumbnail(photoId, { small, contentType }) {
+      db.prepare('UPDATE pet_photos SET thumb = ?, thumb_type = ? WHERE id = ?').run(small, contentType, photoId);
+    },
+    async clearPetPhotoContent(photoId) {
+      db.prepare('UPDATE pet_photos SET content = ? WHERE id = ?').run(Buffer.alloc(0), photoId);
+    },
+    // LEFT JOIN porque una foto 'query' no tiene pet_id (nadie sabe todavía de
+    // qué mascota es) — el filtro de resuelta solo debe aplicar cuando SÍ hay
+    // una mascota asociada (siempre el caso para 'report', nunca para
+    // 'query'). Mostrar como "posible avistamiento" a una mascota que ya se
+    // marcó como encontrada no ayuda a nadie.
+    async petPhotosForMatching(kind, species) {
+      return db
+        .prepare(
+          `SELECT pet_photos.id, pet_photos.pet_id, pet_photos.embedding, pet_photos.embedding_model
+           FROM pet_photos
+           LEFT JOIN pets ON pets.id = pet_photos.pet_id
+           WHERE pet_photos.kind = ? AND pet_photos.species = ? AND pet_photos.embedding IS NOT NULL
+             AND (pet_photos.pet_id IS NULL OR pets.resolved_at IS NULL)`
+        )
+        .all(kind, species);
+    },
+    // Mismo patrón que photosMissingDerivatives (personas): sin el filtro de
+    // contenido no vacío, una foto 'query' que ya se procesó y se le borraron
+    // los bytes (nunca va a tener embedding si el matcher estaba caído en su
+    // momento y nadie corrió el backfill mientras tanto) queda "pendiente"
+    // para siempre y ahoga la red de seguridad con filas que ya no se pueden
+    // comparar.
+    async petPhotosMissingEmbedding(limit) {
+      return db
+        .prepare('SELECT * FROM pet_photos WHERE embedding IS NULL AND length(content) > 0 ORDER BY id LIMIT ?')
+        .all(limit);
+    },
+    async petPhotosForPet(petId) {
+      return db
+        .prepare(
+          "SELECT id, pet_id, content_type, thumb_type FROM pet_photos WHERE kind = 'report' AND pet_id = ? ORDER BY id"
+        )
+        .all(petId);
+    },
+    // El listado público — espejo de missingPeople: toda mascota sin
+    // resolved_at, más reciente primero.
+    async lostPets(limit) {
+      return db
+        .prepare('SELECT * FROM pets WHERE resolved_at IS NULL ORDER BY created_at DESC LIMIT ?')
+        .all(limit);
+    },
+    // Espejo de reunitedCount — el contador de buenas noticias.
+    async reunitedPetsCount() {
+      return db.prepare('SELECT COUNT(*) AS n FROM pets WHERE resolved_at IS NOT NULL').get().n;
+    },
+    // Una foto por mascota para el listado — espejo de reportPhotosForPeople:
+    // la primera foto 'report' que además tenga miniatura gana, para no
+    // repetir en el listado el problema de una foto ilegible sin thumb.
+    async petPhotosForPets(petIds) {
+      if (!petIds.length) return [];
+      const marks = petIds.map(() => '?').join(',');
+      return db
+        .prepare(
+          `SELECT id, pet_id, content_type, thumb_type FROM pet_photos
+           WHERE kind = 'report' AND pet_id IN (${marks})
+           ORDER BY pet_id, (thumb_type IS NULL), id`
+        )
+        .all(...petIds);
     },
 
     async close() {
