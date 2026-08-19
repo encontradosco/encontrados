@@ -5,6 +5,7 @@ const { relayEnabled, STATUS_LABEL } = require('./notify');
 const {
   processPhoto,
   resolveRescueAnswer,
+  forgetPersonFaces,
   MAX_QUERY_PHOTOS
 } = require('./facematch');
 const { nullMatcher } = require('./faces');
@@ -292,24 +293,24 @@ async function handleInbound(store, { channel, from, text, photo, matcher = null
   }
 
   if (parsed.intent === 'unsubscribe') {
+    // El retiro de firmas (#162) es best effort y no cambia esta respuesta —
+    // se construye del `count` que ya devolvió el borrado. Se espera de
+    // todos modos (no fire-and-forget): en un runtime serverless, cualquier
+    // trabajo sin await muere apenas se manda la respuesta al webhook.
     if (normalize(parsed.name) === 'todo' || normalize(parsed.name) === 'all') {
-      const n = await store.unsubscribeAll(channel, from);
-      return withPhotoNote(
-        n ? `Listo, cancelé tus ${n} suscripciones.` : 'No tenías suscripciones activas.',
-        photo
-      );
+      const { count, faceIds } = await store.unsubscribeAll(channel, from);
+      if (!count) return withPhotoNote('No tenías suscripciones activas.', photo);
+      await forgetPersonFaces(matcher, faceIds, 'BAJA TODO');
+      return withPhotoNote(`Listo, cancelé tus ${count} suscripciones.`, photo);
     }
     const matches = await store.searchPeople(parsed.name, { limit: 1 });
     if (!matches.length) {
       return withPhotoNote(`No encontré a "${parsed.name}" entre tus suscripciones.`, photo);
     }
-    const n = await store.unsubscribe(matches[0].id, channel, from);
-    return withPhotoNote(
-      n
-        ? `Listo, ya no recibirás avisos sobre *${matches[0].full_name}*.`
-        : `No estabas suscrito(a) a ${matches[0].full_name}.`,
-      photo
-    );
+    const { count, faceIds } = await store.unsubscribe(matches[0].id, channel, from);
+    if (!count) return withPhotoNote(`No estabas suscrito(a) a ${matches[0].full_name}.`, photo);
+    await forgetPersonFaces(matcher, faceIds, `suscripción de persona ${matches[0].id}`);
+    return withPhotoNote(`Listo, ya no recibirás avisos sobre *${matches[0].full_name}*.`, photo);
   }
 
   return withPhotoNote(HELP, photo);
