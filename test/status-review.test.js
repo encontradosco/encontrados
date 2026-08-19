@@ -399,3 +399,27 @@ test('la cola entera exige sesión de /admin', async () => {
     app.stop();
   }
 });
+
+test('una ficha que ya no está en la cola no muestra el botón de resolver', async () => {
+  const app = await startApp();
+  try {
+    const person = await fichaSinConfirmar(app.store, 'Lucía Sintética Doce');
+    await fetch(
+      `${app.base}/admin/revision/${person.id}/resolver`,
+      form({ estado: 'safe', evidencia: NOTA_PRIVADA, confirmo: '1' })
+    );
+
+    const html = await (
+      await fetch(`${app.base}/admin/revision/${person.id}`, { headers: { Cookie: sessionCookie() } })
+    ).text();
+    assert.match(html, /no está en la cola/i, 'la pantalla dice por qué no hay botón');
+    assert.ok(
+      !/action="\/admin\/revision\/\d+\/resolver"/.test(html),
+      'ofrecer el botón sobre una ficha ya cerrada invita a mandar un segundo aviso a la misma familia'
+    );
+    // El de dejar constancia sí sigue: no tiene efecto y sirve para el registro.
+    assert.match(html, /action="\/admin\/revision\/\d+\/nota"/);
+  } finally {
+    app.stop();
+  }
+});

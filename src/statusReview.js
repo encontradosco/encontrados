@@ -345,7 +345,6 @@ function reviewHistoryHtml(reviews) {
 function buildFichaPageHtml(ficha, { errors = [], form = {} } = {}) {
   const { person, latest, reviews, recipients, mode } = ficha;
   const enlaceActual = latest && latest.source_url;
-  const estado = REVIEW_STATUSES.includes(form.estado) ? form.estado : '';
 
   const body = `
     <h1>Revisar: ${esc(person.full_name)}</h1>
@@ -388,6 +387,29 @@ function buildFichaPageHtml(ficha, { errors = [], form = {} } = {}) {
     </form>
 
     <h2>Resolver la ficha</h2>
+    ${resolveFormHtml({ person, latest, recipients, mode, form })}
+  `;
+  return layout(`Revisar ${person.full_name}`, body, {
+    path: `/admin/revision/${person.id}`,
+    robots: PAGE_ROBOTS
+  });
+}
+
+// El formulario de resolución solo existe si la ficha SIGUE en la cola.
+//
+// La pantalla es alcanzable por id para cualquier persona, no solo para las
+// que están en `unknown`. Pintar el formulario igual y rechazar el envío
+// después sería ofrecer un botón que nunca funciona; peor, sobre una ficha que
+// alguien más ya cerró, invita a mandar un segundo aviso a la misma familia.
+function resolveFormHtml({ person, latest, recipients, mode, form }) {
+  if (!latest || latest.status !== 'unknown') {
+    return `<div class="notice"><p>Esta ficha no está en la cola: su estado actual es
+      <strong>${esc(STATUS_LABEL[latest && latest.status] || 'sin reportes')}</strong>, no SIN CONFIRMAR.
+      La cola solo resuelve lo que sigue sin confirmar. Si hay que corregir este estado, es otro
+      camino y otra conversación.</p></div>`;
+  }
+  const estado = REVIEW_STATUSES.includes(form.estado) ? form.estado : '';
+  return `
     ${noticeWarningHtml({ person, recipients, mode })}
     <form method="post" action="/admin/revision/${esc(person.id)}/resolver">
       <label>Cerrar como
@@ -414,12 +436,7 @@ function buildFichaPageHtml(ficha, { errors = [], form = {} } = {}) {
               : `se relevan ${recipients} aviso(s) al buzón de operación`
         }, y que la decisión queda registrada a mi nombre.</label>
       <button type="submit">Resolver esta ficha</button>
-    </form>
-  `;
-  return layout(`Revisar ${person.full_name}`, body, {
-    path: `/admin/revision/${person.id}`,
-    robots: PAGE_ROBOTS
-  });
+    </form>`;
 }
 
 function buildResolvedPageHtml(result) {
