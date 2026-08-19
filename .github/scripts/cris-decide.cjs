@@ -76,6 +76,18 @@ const CODERABBIT_CHECK = 'CodeRabbit';
 // afina con datos reales; no se adivina hoy.
 const CODERABBIT_REVIEWED_RE = /^Review completed/i;
 
+// Y quién tiene permitido FIRMAR ese status. Sin esto, la lista blanca de la
+// descripción no protege nada: un commit status no es un check run — lo puede
+// crear CUALQUIER cuenta con permiso de escritura al repo, con el `context` y
+// la `description` que quiera. O sea que sin validar el emisor, cualquiera con
+// push podría escribir un status «CodeRabbit / Review completed» y comprarse la
+// firma del agente.
+//
+// Se compara contra el login del creador, en minúscula. GitHub reporta las
+// Apps con el sufijo `[bot]`, y se aceptan las dos formas porque cuál llega
+// depende de si el status lo creó la App o su cuenta asociada.
+const CODERABBIT_EMISORES = new Set(['coderabbitai', 'coderabbitai[bot]']);
+
 // La segunda etiqueta, y la razón de que este aprobador no sea un clon del de
 // otro repo.
 //
@@ -333,6 +345,20 @@ function decide(input) {
     // nunca sobre otra: mezclar entradas distintas dentro del mismo chequeo
     // reabriría el hueco que esto cierra.
     if (name === CODERABBIT_CHECK) {
+      // El emisor va PRIMERO. La descripción es texto libre que escribe quien
+      // crea el status, así que preguntarle a un desconocido si revisó no vale
+      // más que su palabra; lo que hay que establecer antes es que el que
+      // habla sea quien decimos.
+      const emisor = String(ultimaConcluida.creator || '').toLowerCase();
+      if (!CODERABBIT_EMISORES.has(emisor)) {
+        return {
+          decision: 'abort',
+          reason:
+            `el check \`${name}\` está verde, pero lo firmó ${emisor ? `\`${emisor}\`` : 'una cuenta que no puedo identificar'}, ` +
+            `que no es CodeRabbit. Un commit status lo puede crear cualquier cuenta con permiso de escritura, ` +
+            `así que un verde de un emisor que no reconozco no es una revisión: espera a una persona.`,
+        };
+      }
       const descripcion = typeof ultimaConcluida.description === 'string' ? ultimaConcluida.description : '';
       if (!CODERABBIT_REVIEWED_RE.test(descripcion)) {
         return {
@@ -551,3 +577,4 @@ module.exports.NO_USER_EFFECT_LABEL = NO_USER_EFFECT_LABEL;
 module.exports.AUTHORIZING_LABEL = AUTHORIZING_LABEL;
 module.exports.CODERABBIT_CHECK = CODERABBIT_CHECK;
 module.exports.CODERABBIT_REVIEWED_RE = CODERABBIT_REVIEWED_RE;
+module.exports.CODERABBIT_EMISORES = CODERABBIT_EMISORES;

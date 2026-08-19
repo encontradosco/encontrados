@@ -194,6 +194,11 @@ jobs:
               started_at: s.created_at,
               completed_at: s.updated_at,
               description: s.description,
+              // Quién firmó el status. Sin esto la lista blanca de la
+              // descripción no protege nada: un commit status lo puede crear
+              // cualquier cuenta con permiso de escritura, con el `context` y
+              // el texto que quiera.
+              creator: (s.creator || {}).login,
             }));
             // El head al MOMENTO de decidir, no el congelado del payload.
             const { data: fresco } = await github.rest.pulls.get({

@@ -48,6 +48,7 @@ function pr(overrides = {}) {
         conclusion: 'success',
         started_at: '2026-08-15T10:00:00Z',
         description: 'Review completed',
+        creator: 'coderabbitai',
       },
     ],
     ...overrides,
@@ -195,13 +196,14 @@ test('el gate acepta a CodeRabbit, que llega como commit status y no como check 
 // probaran las dos causas conocidas, un refactor que las volviera un
 // blacklist pasaría estas mismas pruebas y el hueco del issue seguiría
 // abierto.
-function coderabbitStatus(description) {
+function coderabbitStatus(description, creator = 'coderabbitai') {
   return {
     name: 'CodeRabbit',
     status: 'completed',
     conclusion: 'success',
     started_at: '2026-08-15T10:00:00Z',
     description,
+    creator,
   };
 }
 const NPM_TEST_OK = {
@@ -266,6 +268,7 @@ test('un check en rojo aborta', () => {
         conclusion: 'success',
         started_at: '2026-08-15T10:00:00Z',
         description: 'Review completed',
+        creator: 'coderabbitai',
       },
       ],
     })
@@ -294,6 +297,7 @@ test('gana la última corrida CONCLUIDA, no la última empezada', () => {
         conclusion: 'success',
         started_at: '2026-08-15T10:00:00Z',
         description: 'Review completed',
+        creator: 'coderabbitai',
       },
       ],
     })
@@ -313,6 +317,7 @@ test('si la última concluida es roja, una corrida en vuelo no la rescata', () =
         conclusion: 'success',
         started_at: '2026-08-15T10:00:00Z',
         description: 'Review completed',
+        creator: 'coderabbitai',
       },
       ],
     })
@@ -369,4 +374,49 @@ test('la firma de un bot no es juicio humano, y la del propio agente no cuenta',
     CRIS
   );
   assert.equal(vivos.size, 0);
+});
+
+// ── Quién FIRMA el status, que es la mitad que faltaba ──────────────────────
+//
+// La lista blanca de la descripción no protege nada por sí sola: un commit
+// status NO es un check run — lo puede crear cualquier cuenta con permiso de
+// escritura, con el `context` y la `description` que quiera. Preguntarle a un
+// desconocido si revisó no vale más que su palabra.
+
+test('un status «CodeRabbit» firmado por otra cuenta no cuenta como revisión', () => {
+  const d = decide(
+    pr({ checkRuns: [NPM_TEST_OK, coderabbitStatus('Review completed', 'alguien-con-push')] })
+  );
+  assert.equal(d.decision, 'abort');
+  // El motivo tiene que nombrar al emisor: quien lea el log necesita saber
+  // QUIÉN lo firmó, no solo que se rechazó.
+  assert.match(d.reason, /alguien-con-push/);
+});
+
+test('un status sin emisor identificable tampoco pasa', () => {
+  // Se borra la propiedad en vez de pasar `undefined`: pasarlo activaría el
+  // valor por defecto del parámetro y la prueba mediría lo contrario de lo que
+  // dice su nombre. Es el caso de una API que no devuelve `creator`.
+  const sinEmisor = coderabbitStatus('Review completed');
+  delete sinEmisor.creator;
+  const d = decide(pr({ checkRuns: [NPM_TEST_OK, sinEmisor] }));
+  assert.equal(d.decision, 'abort');
+});
+
+test('se acepta la forma con sufijo [bot], porque GitHub reporta las Apps así', () => {
+  // Cuál de las dos formas llega depende de si el status lo creó la App o su
+  // cuenta asociada, y ninguna es menos legítima que la otra.
+  const d = decide(
+    pr({ checkRuns: [NPM_TEST_OK, coderabbitStatus('Review completed', 'coderabbitai[bot]')] })
+  );
+  assert.equal(d.decision, 'approve_and_merge');
+});
+
+test('el emisor se valida ANTES que la descripción', () => {
+  // Si el orden se invirtiera, el motivo del rechazo hablaría de la
+  // descripción de un impostor — como si su texto fuera el problema y no su
+  // identidad.
+  const d = decide(pr({ checkRuns: [NPM_TEST_OK, coderabbitStatus('Review rate limited', 'impostor')] }));
+  assert.equal(d.decision, 'abort');
+  assert.match(d.reason, /impostor/);
 });
