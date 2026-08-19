@@ -253,9 +253,44 @@ async function revokeToken(accessToken) {
   }
 }
 
+// El código de error de OAuth es un token corto (`access_denied`,
+// `invalid_request`, …). Todo lo que no tenga esa forma no se propaga: no es
+// algo que Vercel emita y no vale la pena arrastrarlo a la URL de la pantalla
+// de login.
+const OAUTH_ERROR_CODE_RE = /^[a-zA-Z0-9_.:-]{1,64}$/;
+// `error_description` es texto libre de un tercero. Se muestra porque ayuda a
+// diagnosticar (Vercel dice ahí QUÉ parámetro no le gustó), pero acotado.
+const OAUTH_DESCRIPTION_MAX = 300;
+
+// El mismo texto tiene dos destinos con necesidades opuestas, así que se
+// prepara dos veces:
+//
+//   - La PANTALLA lo quiere corto (OAUTH_DESCRIPTION_MAX) para no volverse
+//     ilegible con un mensaje largo.
+//   - El LOG lo quiere completo: truncarlo antes de registrarlo borra
+//     justamente el detalle por el que existe este bloque.
+//
+// Y en los dos casos hay que neutralizar saltos de línea y control: el valor
+// viene de la query, así que un `%0A` deja escribir una línea entera de log
+// que parece emitida por el servidor. Se colapsa a espacios antes de escribir.
+function oneLine(text) {
+  return text.replace(/[\s\u0000-\u001f\u007f]+/g, ' ').trim();
+}
+
+function redirectToLogin(res, params) {
+  return res.redirect(`/admin/login?${new URLSearchParams(params).toString()}`);
+}
+
 // GET /admin/auth/callback — valida state, intercambia el code, pide el
 // email verificado y decide: allowlist → sesión propia; lo que sea que
 // falle → a /admin/login con el motivo, nunca una sesión a medias.
+//
+// Cada motivo sale con su propio código porque son diagnósticos distintos y
+// llevan a arreglos distintos. Antes los cinco caían en `error=state`, y eso
+// costó horas de depuración: un `access_denied` de Vercel —la App configurada
+// para admitir solo miembros del team dueño— se leía en pantalla como "la
+// sesión de login expiró", que manda a reintentar justo lo único que no puede
+// funcionar.
 async function completeLogin(req, res) {
   clearCookie(res, OAUTH_STATE_COOKIE);
   clearCookie(res, OAUTH_VERIFIER_COOKIE);
@@ -263,13 +298,68 @@ async function completeLogin(req, res) {
   if (!oauthConfigured()) {
     return res.status(503).send('Login de administración no configurado.');
   }
-  const { code, state } = req.query;
+  const { code, state, error: providerError, error_description: providerDescription } = req.query;
   const storedState = readCookie(req, OAUTH_STATE_COOKIE);
   const verifier = readCookie(req, OAUTH_VERIFIER_COOKIE);
+  const stateMatches = !!(state && storedState && safeEqual(state, storedState));
 
-  if (!code || !state || !storedState || !verifier || !safeEqual(state, storedState)) {
-    console.warn('[admin-auth] callback rechazado: state ausente o no coincide');
-    return res.redirect('/admin/login?error=state');
+  // 1) Vercel contestó con un error explícito. Contrato OAuth 2.0 estándar:
+  // vuelve `error` (+ `error_description` opcional) en vez de `code`.
+  // Referencia: https://vercel.com/docs/sign-in-with-vercel/troubleshooting
+  //
+  // Se atiende ANTES de validar el `state`, y no es un descuido: `state`
+  // protege contra que un tercero inyecte SU código de autorización en la
+  // sesión de otro, y esta rama no intercambia ningún código ni emite ninguna
+  // sesión — no hay nada que ganar inyectándola. Validarlo primero solo
+  // serviría para enterrar el motivo real cuando la cookie de 10 minutos ya
+  // venció, que es exactamente el error que este código venía cometiendo. El
+  // resultado del cotejo igual queda en el log.
+  if (providerError) {
+    const oauthError = OAUTH_ERROR_CODE_RE.test(String(providerError)) ? String(providerError) : 'desconocido';
+    // Completa para el log (es el detalle por el que existe este bloque) y
+    // acotada para la pantalla. Las dos pasan por oneLine: el valor viene de
+    // la query y un salto de línea dejaría escribir una línea de log falsa.
+    const descriptionForLog = oneLine(String(providerDescription || ''));
+    const description = descriptionForLog.slice(0, OAUTH_DESCRIPTION_MAX);
+    console.warn(
+      `[admin-auth] Vercel rechazó la autorización: error=${oauthError} error_description=${descriptionForLog || '(ninguna)'} ` +
+        `— state ${!state ? 'ausente' : stateMatches ? 'coincide' : 'NO coincide'}`
+    );
+    return redirectToLogin(res, {
+      error: 'oauth',
+      oauth_error: oauthError,
+      ...(description ? { oauth_description: description } : {})
+    });
+  }
+
+  // 2) Ni error ni state: la respuesta no es la de un flujo que arrancó acá.
+  if (!state) {
+    console.warn('[admin-auth] callback sin `state` y sin `error` — la respuesta no corresponde a un login iniciado acá');
+    return redirectToLogin(res, { error: 'no_state' });
+  }
+
+  // 3) Vino el state pero no hay con qué compararlo: la cookie de ida se
+  // venció (10 min) o el navegador no la mandó. No es CSRF, es una sesión de
+  // login perdida, y se arregla volviendo a empezar.
+  if (!storedState || !verifier) {
+    console.warn(
+      `[admin-auth] callback sin las cookies del flujo (state guardado: ${storedState ? 'sí' : 'no'}, ` +
+        `verifier: ${verifier ? 'sí' : 'no'}) — sesión de login vencida o cookie perdida`
+    );
+    return redirectToLogin(res, { error: 'expired' });
+  }
+
+  // 4) Están las dos y no coinciden. Acá sí: esto es lo que el `state`
+  // existe para frenar.
+  if (!stateMatches) {
+    console.warn('[admin-auth] callback con `state` que NO coincide con el de esta sesión — posible CSRF, rechazado');
+    return redirectToLogin(res, { error: 'state' });
+  }
+
+  // 5) State válido pero Vercel no mandó código ni dijo por qué.
+  if (!code) {
+    console.warn('[admin-auth] callback con `state` válido pero sin `code` y sin `error` — respuesta incompleta de Vercel');
+    return redirectToLogin(res, { error: 'no_code' });
   }
 
   let tokenData;

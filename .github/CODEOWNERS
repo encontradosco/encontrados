@@ -1,4 +1,147 @@
-# Los tres mantenedores core del proyecto.
-# Cualquiera de los tres satisface la revisión requerida en `main`.
-# Una entrada solo cuenta si esa cuenta tiene acceso de escritura al repo.
-*  @torrenegra @cris-pappcorn @ni500
+# CODEOWNERS — quién tiene que aprobar qué.
+#
+# `main` es producción: Vercel despliega cada merge, así que mergear ES
+# desplegar un servicio de emergencia con gente real del otro lado. De ese
+# hecho sale toda la regla de abajo, y es la que ya está escrita en
+# CONTRIBUTING.md: lo rutinario avanza con la revisión de un solo mantenedor;
+# lo que cambia el comportamiento de cara al usuario, el esquema de la base o
+# la privacidad lo decide una persona. Este archivo pasa esa frontera del texto
+# a la configuración, para las rutas donde la frontera coincide con una ruta.
+#
+# ---------------------------------------------------------------------------
+# Cómo lee GitHub este archivo. Importa, y es contraintuitivo:
+#
+#   1. GANA LA ÚLTIMA COINCIDENCIA. No gana el patrón más específico (no es
+#      CSS ni .gitignore): gana el que esté más abajo. Por eso el catch-all `*`
+#      va PRIMERO. Un `*` agregado al final desactivaría en silencio todo lo
+#      demás.
+#   2. Con `require_code_owner_review` activo en la regla de rama, GitHub exige
+#      la aprobación de un owner de CADA ruta que el PR toca. Si un PR toca una
+#      ruta rutinaria y una restringida, manda la restringida — pero una sola
+#      aprobación humana cubre ambas, porque la misma persona es owner de las
+#      dos. El costo no se acumula.
+#   3. NO existe negación (`!ruta`). Una ruta se restringe entera o no se
+#      restringe. Por eso un archivo que mezcla lo rutinario con lo delicado
+#      solo se puede aliviar partiéndolo en dos.
+#   4. Una entrada solo cuenta si esa cuenta tiene acceso de escritura al repo.
+#      Un owner sin permiso se ignora en SILENCIO: no bloquea y no avisa.
+#   5. Un archivo nuevo que no coincida con ningún patrón de abajo cae en `*`,
+#      es decir, nace rutinario. Contra eso está la prueba
+#      test/codeowners.test.js, que corre en CI y verifica que las piezas
+#      sensibles no se hayan mudado a una ruta sin freno.
+# ---------------------------------------------------------------------------
+
+
+# === Por defecto: los cuatro mantenedores core =============================
+# La aprobación de cualquiera de los cuatro alcanza. Acá vive lo rutinario, que
+# es la mayoría del repo: corrección de errores, refactors sin cambio de
+# comportamiento observable, pruebas, estilos y documentación.
+*                            @torrenegra @cris-pappcorn @ni500 @yesid-lopez
+
+# Sobre @yesid-lopez: entró el 14-ago-2026 y el alcance se le amplió por
+# anillos —14-ago el catch-all y la superficie pública del API, 18-ago el resto
+# de `.github/`—. El 19-ago-2026 se cerró el escalonamiento: queda con el mismo
+# alcance que @torrenegra y @ni500, este archivo incluido.
+#
+# La decisión se tomó contra el dato que el propio escalonamiento decía que
+# había que mirar —cuántos PRs quedan esperando a los dos owners— y no contra
+# una impresión. Medido el 19-ago-2026: 15 de 17 PRs abiertos. No era una cola
+# lenta, era la cola entera; el freno ya no estaba deteniendo lo riesgoso, sino
+# todo. El resto del criterio es de Nic, que trabaja con él a diario.
+#
+# Lo que hay que decir de frente, porque es la única asimetría que queda: él es
+# colaborador con permiso de escritura, no owner de la organización. En GitHub
+# eso sigue siendo distinto —los ajustes del repo, la regla de rama y quién
+# entra siguen siendo de @torrenegra y @ni500—, así que "paridad" acá significa
+# paridad de REVISIÓN, que es de lo que trata este archivo, no de administración.
+
+
+# === Esquema de la base ====================================================
+# Este proyecto no tiene migraciones: el esquema se crea al arrancar y toda
+# columna nueva tiene que ir en LOS DOS motores (sqlite en local, Postgres en
+# producción). La base de producción es compartida y un cambio acá no se
+# ensaya en un preview: se estrena en vivo.
+/src/store/                  @torrenegra @ni500 @yesid-lopez
+
+
+# === Biometría y matching ==================================================
+# Firmas faciales en Rekognition: indexado, borrado, comparación, y la decisión
+# de que dos fichas son la misma persona. Un error acá no rompe una pantalla —
+# borra la evidencia de que alguien está buscando a una persona, o le dice a un
+# rescatista que el desconocido que tiene al lado es el familiar de otro.
+/src/faces.js                @torrenegra @ni500 @yesid-lopez
+/src/facematch.js            @torrenegra @ni500 @yesid-lopez
+/src/duplicates.js           @torrenegra @ni500 @yesid-lopez
+
+
+# === Privacidad y datos de contacto ========================================
+# Qué sale de un reporte hacia afuera —enmascarado o crudo— y a quién se le
+# escribe. En zona de desastre el teléfono de una familia que está buscando a
+# alguien es materia de extorsión, no un campo más de un formulario.
+/src/privacy.js              @torrenegra @ni500 @yesid-lopez
+/src/notify.js               @torrenegra @ni500 @yesid-lopez
+
+
+# === La app pública ========================================================
+# INTERINO. Se relaja cuando se parta el archivo.
+#
+# web.js son ~1.600 líneas donde conviven el copy más rutinario del sitio y lo
+# más delicado que tiene el proyecto: el bloque que muestra en pantalla el
+# contacto de una familia, el relevo que lo manda por correo, la promesa de que
+# la foto no se guarda, y la casilla con la que alguien consiente que se use su
+# firma facial. Como CODEOWNERS no distingue una línea de otra (ver punto 3
+# arriba), hoy se restringe el archivo entero.
+#
+# El precio se paga en velocidad: es el archivo que más se toca del repo, así
+# que un arreglo de copy o de layout queda esperando a una persona sin
+# necesitarlo. Sumar un tercer revisor alivia la espera, pero NO paga la deuda:
+# la salida sigue siendo sacar esas cuatro piezas a su propio módulo y devolver
+# web.js a lo rutinario. Ese refactor no cambia comportamiento observable, así
+# que es rutinario y no necesita esperar a nadie.
+/src/routes/web.js           @torrenegra @ni500 @yesid-lopez
+
+
+# === Superficie pública y despliegue =======================================
+# El contrato del API del que dependen integradores externos, el webhook que
+# escribe sin sesión de usuario, y la configuración con la que Vercel sirve el
+# sitio. Un cambio acá se le rompe a alguien que no está en esta conversación,
+# así que sigue necesitando un portero — pero es una superficie técnica, no
+# datos de una familia.
+/src/routes/api.js           @torrenegra @ni500 @yesid-lopez
+/src/routes/webhooks.js      @torrenegra @ni500 @yesid-lopez
+/vercel.json                 @torrenegra @ni500 @yesid-lopez
+
+
+# === Autenticación =========================================================
+# La puerta de /admin, aparte del bloque de arriba a propósito: quien pueda
+# aprobar un cambio acá puede abrirle el panel a cualquiera, y eso no es una
+# superficie que se revierta mirando el sitio.
+/src/adminAuth.js            @torrenegra @ni500 @yesid-lopez
+
+
+# === Gobierno: lo que OTORGA permisos ======================================
+# Ojo a la distinción, que es la que ordena este bloque: se restringe lo que
+# CONCEDE O QUITA PODER, no lo que describe cómo trabajamos. Por eso agent.md y
+# README.md se quedan arriba, en lo rutinario, y esto no.
+#
+# Desde el 19-ago-2026 este bloque hace UNA sola cosa, y conviene decirla sin
+# rodeos: mantener afuera a @cris-pappcorn, que es un agente de IA. Los tres
+# mantenedores humanos son owners de todo; el agente no es owner de acá. Si lo
+# fuera podría aprobar por su cuenta el PR que le quita el freno, y todo lo de
+# arriba sería decorativo. Vale también para los workflows, donde vive el check
+# `npm test` que la regla de rama exige: quien pueda editarlo puede desactivar
+# la única prueba obligatoria.
+#
+# Se lleva de paso las plantillas de issue y de PR, que no conceden nada. Es
+# colateral y lo decimos: no hay forma de excluirlas sin negación (punto 3), y
+# no vale la pena mover archivos de sitio para ganar eso.
+#
+# Acá vivía una excepción dentro de la excepción —una línea aparte para este
+# mismo archivo, que lo dejaba solo en manos de los dos owners de la
+# organización— y se retiró el 19-ago-2026 al quedar con los mismos owners que
+# `/.github/`: una regla que repite a su padre no restringe nada, solo hace
+# creer que sí.
+/.github/                    @torrenegra @ni500 @yesid-lopez
+/CONTRIBUTING.md             @torrenegra @ni500 @yesid-lopez
+/SECURITY.md                 @torrenegra @ni500 @yesid-lopez
+/.coderabbit.yaml            @torrenegra @ni500 @yesid-lopez

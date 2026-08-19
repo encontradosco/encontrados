@@ -1,24 +1,25 @@
 const express = require('express');
 const env = require('../env');
 const {
-  notifySubscribers,
   sendVerificationEmail,
   notifyMode,
   relayEnabled,
   avisoEmail
 } = require('../notify');
-const { STATUSES, SOURCES } = require('../people');
+const { STATUSES } = require('../people');
 const {
   processPhoto,
+  forgetPersonFaces,
   backfillUnindexedPhotos,
   backfillPhotoDerivatives,
   computeMatchStats,
   MAX_QUERY_PHOTOS
 } = require('../facematch');
+const { backfillUnindexedPetPhotos } = require('../petmatch');
 const { publicUpdate } = require('../privacy');
-const { findDuplicateCandidates, duplicateWarning } = require('../duplicates');
 const gh = require('../github');
 const { sendReport } = require('../report');
+const { createReportAdmission } = require('../report-admission');
 
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
@@ -62,9 +63,11 @@ function emailVerdict(email) {
   return `SendGrid respondió ${t.status || 'sin estado'}: ${err.slice(0, 300)}`;
 }
 
-function apiRoutes(store, matcher) {
+function apiRoutes(store, matcher, petStore, petMatcher) {
   const router = express.Router();
   router.use(express.json({ limit: '16mb' }));
+
+  const admission = createReportAdmission({ store, matcher });
 
   // If API_KEY is set, writes require `Authorization: Bearer <key>`.
   // Reads stay open — emergency information wants to be found.
@@ -109,14 +112,23 @@ function apiRoutes(store, matcher) {
   );
 
   // POST /api/updates — report status by name (creates the person if new)
-  // { name, status, message?, location?, reporter?, source?, external_id?,
+  // { name, status, message?, location?, reporter?, source?, source_url?, external_id?,
   //   photo?: { base64, content_type } }
   // The photo is used ONLY for face matching; it is never displayed or shared.
   // - source: one of 'web'|'whatsapp'|'api'|'aggregator'; defaults to 'api' if
   //   omitted or not one of those values (e.g. an aggregator identifying itself).
+  // - source_url: public link backing this report — the news story saying the
+  //   person turned up. Rendered as a clickable link on the person's page, so
+  //   only http(s) is accepted; anything else is dropped with a log and the
+  //   report still goes through. The rule lives in the shared admission
+  //   service, not here (src/report-admission.js).
   // - external_id: the caller's own id for this update. When present, a repeat
   //   POST with the same external_id updates this same update idempotently
   //   instead of creating a duplicate — safe to retry or re-sync from upstream.
+  //   source_url is part of that upsert, so a re-push corrects a wrong link.
+  //   Si esa llave está suprimida —la ficha se borró a solicitud de la persona
+  //   (#191)— la respuesta es 409 con `suppressed: true` y no se crea nada.
+  //   Reintentar no la corrige: esa llave no vuelve a entrar.
   router.post(
     '/updates',
     requireKey,
@@ -126,68 +138,67 @@ function apiRoutes(store, matcher) {
       if (!STATUSES.includes(status)) {
         return res.status(400).json({ error: `status debe ser uno de: ${STATUSES.join(', ')}` });
       }
-      const source = SOURCES.includes(req.body.source) ? req.body.source : 'api';
       const externalId =
         req.body.external_id != null && String(req.body.external_id).trim()
           ? String(req.body.external_id).trim()
           : undefined;
-      const { person, created } = await store.findOrCreatePerson(name);
-      const update = await store.addUpdate(person.id, {
+      const photo = decodePhoto(req.body.photo);
+
+      // Thin adapter: the shared report-admission service owns the whole domain
+      // sequence (owner resolution after external_id upsert, photo indexing,
+      // subscriber notification, and — LAST, once the report is durable — the
+      // duplicate check). This route only decodes JSON in and shapes JSON out.
+      const result = await admission.admitReport({
+        name,
         status,
         message,
         location,
         lat: typeof req.body.lat === 'number' ? req.body.lat : parseFloat(req.body.lat),
         lng: typeof req.body.lng === 'number' ? req.body.lng : parseFloat(req.body.lng),
-        source,
+        source: req.body.source,
+        // Straight from the body, unvalidated on purpose: the service owns the
+        // http(s)-only rule, so it can't end up meaning one thing here and
+        // another one on the next entry point that starts accepting a link.
+        sourceUrl: req.body.source_url,
         reporter,
         contact,
-        externalId
+        externalId,
+        photos: photo ? [photo] : [],
+        checkDuplicates: true
       });
-      // With external_id, the upsert may have landed on a different person
-      // than the one just looked up (e.g. the aggregator's name for this
-      // external_id drifted). Resolve who actually owns the timeline row
-      // before notifying, so alerts never go to the wrong subscribers.
-      const owner = update.person_id === person.id ? person : (await store.getPerson(update.person_id)) || person;
-      await notifySubscribers(store, owner, update);
-      const photo = decodePhoto(req.body.photo);
-
-      // Duplicate check BEFORE the photo is indexed: afterwards it would match
-      // itself. Advisory only — the write above already happened and is never
-      // undone, so a caller re-syncing in bulk cannot lose a report to this.
-      const candidates = await findDuplicateCandidates(store, matcher, {
-        name,
-        photos: photo ? [photo.bytes] : [],
-        excludePersonId: owner.id
-      });
-
-      if (photo) {
-        await processPhoto(store, matcher, {
-          personId: owner.id,
-          kind: 'report',
-          updateId: update.id,
-          bytes: photo.bytes,
-          contentType: photo.contentType
+      // Una llave suprimida no es un cuerpo mal formado: es una decisión ya
+      // tomada sobre esa ficha (#191). Se responde aparte y explícito para que
+      // quien empuja pueda distinguirlas — un 400 se reintenta creyendo que hay
+      // algo que corregir, y este caso no se corrige nunca. Devuelve la llave
+      // que el propio llamador mandó, para que la marque en su registro y deje
+      // de mandarla.
+      if (!result.ok && result.suppressed) {
+        return res.status(409).json({
+          error: result.errors.join(' '),
+          suppressed: true,
+          external_id: externalId
         });
       }
-      // "This report was appended to a record that already existed." Read from
-      // where the update ACTUALLY landed, not from the name lookup: with
-      // external_id the upsert can keep its original person while
-      // findOrCreatePerson inserted a fresh row for the drifted name, and
-      // reporting `false` there would be exactly backwards — the caller is told
-      // "new person created" precisely when the report joined an old one.
-      const mergedIntoExisting = !created || String(owner.id) !== String(person.id);
+      // Unreachable today — the checks above already cover exactly what the
+      // service validates — but the service is the single source of truth for
+      // its own contract: a caller that stops prevalidating, or a validation
+      // rule that changes only on one side, must get a 400 with `errors` here
+      // instead of a TypeError on `result.person`.
+      if (!result.ok) {
+        return res.status(400).json({ error: result.errors.join(' ') });
+      }
 
       res.status(201).json({
-        person_id: owner.id,
-        person_created: created,
-        update,
+        person_id: result.person.id,
+        person_created: result.personCreated,
+        update: result.update,
         photo_stored: !!photo,
         // What the caller needs to reconcile on their side. `person_created:
         // false` already meant "appended to an existing record"; this spells
         // that out and adds the face-based collisions a name never sees.
         duplicate: {
-          merged_into_existing_person: mergedIntoExisting,
-          candidates: candidates.map((c) => ({
+          merged_into_existing_person: result.mergedIntoExisting,
+          candidates: result.candidates.map((c) => ({
             person_id: c.person.id,
             full_name: c.person.full_name,
             reason: c.reason,
@@ -200,7 +211,7 @@ function apiRoutes(store, matcher) {
             name_score: c.reason === 'name' ? c.similarity / 100 : null,
             url: `${env.BASE_URL}/person/${c.person.id}`
           })),
-          warning: duplicateWarning({ mergedIntoExisting, candidates })
+          warning: result.warning
         }
       });
     })
@@ -260,27 +271,60 @@ function apiRoutes(store, matcher) {
     'conteo prueba'
   ];
 
-  // POST /api/maintenance/purge-test-data — remove only the seeded test rows.
+  // POST /api/maintenance/purge-test-data — remove only the seeded test rows,
+  // y ahora también sus firmas faciales: un registro de prueba no tiene por qué
+  // dejar un dato biométrico en la colección después de que su ficha se fue.
+  //
+  // Sigue siendo segura sin llave, y el radio no cambió: solo puede tocar a
+  // quien tenga uno de los nombres de la lista fija de arriba, igual que antes.
+  // Y cuando no hay nada que purgar no gasta ni una llamada a Rekognition,
+  // porque el retiro va después del borrado y ese bucle no entra.
   router.post(
     '/maintenance/purge-test-data',
     wrap(async (req, res) => {
       const { normalize } = require('../names');
       const removed = [];
+      const firmas = { total: 0, deleted: 0, unconfirmed: [] };
       for (const name of TEST_RECORD_NAMES) {
         for (const p of await store.searchPeople(name, { limit: 20, minScore: 0.6 })) {
           const norm = normalize(p.full_name);
           // Only exact matches or the same name plus a trailing id.
           if (!TEST_RECORD_NAMES.some((t) => norm === t || norm.startsWith(t + ' '))) continue;
+          // Mismo orden que el DELETE del ARCO, y por la misma razón: los ids
+          // antes del borrado porque la cascada se los lleva, y las firmas
+          // después, cuando ya no hay ficha que dejar huérfana.
+          //
+          // Lo que este borrado NO hace, a propósito, es suprimir la llave
+          // externa (#191): eso es constancia de que alguien ejerció un
+          // derecho, y acá nadie pidió nada — se están limpiando filas que
+          // sembramos nosotros. Suprimirlas bloquearía para siempre una llave
+          // de prueba, que es un efecto que nadie pidió y que no se ve hasta
+          // que la ficha real no puede entrar.
+          const faceIds = await store.faceIdsForPerson(p.id);
           const deleted = await store.deletePerson(p.id);
-          if (deleted) removed.push({ id: p.id, name: p.full_name });
+          if (!deleted) continue;
+          removed.push({ id: p.id, name: p.full_name });
+          const faces = await forgetPersonFaces(matcher, faceIds, `persona ${p.id}`);
+          firmas.total += faces.total;
+          firmas.deleted += faces.deleted;
+          firmas.unconfirmed.push(...faces.unconfirmed);
         }
       }
-      res.json({ ok: true, removed_count: removed.length, removed });
+      res.json({ ok: true, removed_count: removed.length, removed, faces: firmas });
     })
   );
 
   // DELETE /api/people/:id — honours the deletion requests promised in the
   // privacy policy. Requires API_KEY; disabled entirely when it is unset.
+  //
+  // Borra las dos copias del rastro: la fila (y en cascada sus reportes,
+  // suscripciones y fotos) y las firmas faciales en la colección de
+  // Rekognition, que no viven en la base y por tanto la cascada no toca.
+  //
+  // Y deja constancia (#191): la fila se va, pero las llaves externas con las
+  // que esa ficha podría volver a entrar quedan suprimidas. Sin eso el borrado
+  // duraba hasta el siguiente re-envío del agregador, que insertaba la ficha de
+  // nuevo y le reindexaba la cara sin que nada lo registrara.
   router.delete(
     '/people/:id',
     wrap(async (req, res) => {
@@ -292,9 +336,38 @@ function apiRoutes(store, matcher) {
       if ((req.get('authorization') || '') !== `Bearer ${env.API_KEY}`) {
         return res.status(401).json({ error: 'API key inválida o ausente' });
       }
-      const deleted = await store.deletePerson(req.params.id);
+      // Los ids se leen ANTES del borrado: la cascada se lleva las filas de
+      // `photos` y con ellas la única forma de saber qué firmas retirar.
+      const faceIds = await store.faceIdsForPerson(req.params.id);
+      // `atSubjectRequest` es lo que separa este borrado del de registros de
+      // prueba: este es alguien ejerciendo un derecho, así que borrar ES
+      // suprimir, y las dos escrituras van juntas en la misma transacción del
+      // adaptador — la durabilidad no puede depender de que un handler se
+      // acuerde de un segundo paso.
+      const deleted = await store.deletePerson(req.params.id, { atSubjectRequest: true });
       if (!deleted) return res.status(404).json({ error: 'Persona no encontrada' });
-      res.json({ ok: true, deleted: { id: deleted.id, full_name: deleted.full_name } });
+      // Y las firmas DESPUÉS, ya sabiendo que la ficha se fue. Al revés —como
+      // abrió este PR— si la base fallaba en el medio quedaban las firmas
+      // borradas y la ficha viva: una persona listada como desaparecida y
+      // permanentemente invisible para el matcher, porque
+      // `backfillUnindexedPhotos` solo recoge fotos con `face_id` nulo y estas
+      // lo conservan. De las dos huérfanas posibles esa es la peor, porque le
+      // cuesta algo a quien está buscando a un familiar. Nunca lanza, así que
+      // un Rekognition caído tampoco deshace el borrado ya hecho.
+      const faces = await forgetPersonFaces(matcher, faceIds, `persona ${deleted.id}`);
+      res.json({
+        ok: true,
+        deleted: { id: deleted.id, full_name: deleted.full_name },
+        // Lo que quedó por retirar. Reintentar el DELETE ya no sirve —la
+        // persona no existe y sus ids se fueron con ella—, así que esta
+        // respuesta y el log son el único rastro para limpiarlo a mano.
+        faces,
+        // Cuántas llaves quedaron suprimidas. Va el CONTEO y no las llaves:
+        // quien atiende la solicitud necesita saber que la constancia se
+        // escribió, y la llave la elige quien empuja —puede traer un nombre
+        // adentro— así que no tiene por qué terminar en un log de respuesta.
+        suppressed_external_ids: deleted.suppressed_external_ids
+      });
     })
   );
 
@@ -311,7 +384,8 @@ function apiRoutes(store, matcher) {
       const limit = Math.min(parseInt(req.query.limit || '100', 10) || 100, 500);
       const indexed = await backfillUnindexedPhotos(store, matcher, limit);
       const derivatives = await backfillPhotoDerivatives(store, matcher, limit);
-      res.json({ ...indexed, derivatives });
+      const pets = petStore ? await backfillUnindexedPetPhotos(petStore, petMatcher, limit) : null;
+      res.json({ ...indexed, derivatives, pets });
     })
   );
 
@@ -482,6 +556,11 @@ function apiRoutes(store, matcher) {
           aws_region: process.env.AWS_REGION || '(sin definir → us-east-1)',
           matcher_enabled: !!matcher.enabled,
           status: matcher.status || 'desconocido'
+        },
+        pet_matching: {
+          api_url_present: !!process.env.PET_MATCH_API_URL,
+          enabled: !!(petMatcher && petMatcher.enabled),
+          status: (petMatcher && petMatcher.status) || 'sin inicializar'
         },
         // Same reasoning as aviso_email_present: without a token /ideas and
         // /bug keep working but quietly fall back to email, so the issue

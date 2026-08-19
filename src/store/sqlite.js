@@ -1,7 +1,33 @@
 // SQLite adapter — local development and tests. Zero setup, single file.
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const Database = require('better-sqlite3');
+
+// #78: the public-registry sweep (source='aggregator') used to push a person
+// already marked "Localizada" in the source as status='safe' here, even when
+// nobody had ever reported them missing through this app. That row would then
+// win "latest status" and count toward the public reunited counter — someone
+// who never passed through encontrados.co, inflating a number families and
+// rescuers read as this app's own signal.
+//
+// The feed no longer produces that row going forward (see toUpdate in
+// src/sources/colombiatebusca.js), but rows synced before that fix already
+// exist. Rather than delete history, "latest status" pretends they were never
+// written: whatever real status came before resurfaces, and a person with no
+// other update simply has none — neither missing nor reunited.
+const AGGREGATOR_SAFE_EXCLUSION = `WHERE NOT (u.source = 'aggregator' AND u.status = 'safe')`;
+
+// La llave que se guarda en suppressed_external_ids nunca es el valor crudo
+// (#192, revisión de cris-pappcorn, punto 2 — mismo comentario que en
+// src/store/postgres.js): la llave la elige quien empuja, y hay integradores
+// que usan el nombre completo de la persona como external_id cuando la
+// fuente no trae otro identificador. Guardar el hash mantiene la misma
+// garantía de bloqueo por igualdad exacta sin dejar un dato personal en la
+// única tabla del esquema que a propósito no se borra nunca.
+function hashExternalId(externalId) {
+  return crypto.createHash('sha256').update(String(externalId), 'utf8').digest('hex');
+}
 
 async function createSqliteAdapter(dbPath) {
   if (dbPath !== ':memory:') {
@@ -104,6 +130,71 @@ async function createSqliteAdapter(dbPath) {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_contact_log_external_ref
       ON contact_log(external_ref) WHERE external_ref IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_contact_log_source ON contact_log(source, created_at);
+
+    -- Constancia de un borrado pedido por la persona misma (#191). Mismas
+    -- reglas que en Postgres, y ahí está el comentario largo con el por qué:
+    -- es la única tabla que a propósito NO cuelga de people(id) —tiene que
+    -- sobrevivir a la fila—, guarda solo la llave y la fecha, y su alcance es
+    -- la misma llave externa y nada más.
+    CREATE TABLE IF NOT EXISTS suppressed_external_ids (
+      external_id TEXT PRIMARY KEY,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS pets (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      species TEXT NOT NULL CHECK (species IN ('dog','cat')),
+      pet_name TEXT,
+      description TEXT,
+      contact TEXT,
+      resolved_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS pet_subscriptions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      channel TEXT NOT NULL CHECK (channel IN ('email','whatsapp')),
+      address TEXT NOT NULL,
+      verified INTEGER NOT NULL DEFAULT 0,
+      verify_token TEXT,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS pet_photos (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      pet_id INTEGER REFERENCES pets(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL CHECK (kind IN ('report','query')),
+      species TEXT NOT NULL CHECK (species IN ('dog','cat')),
+      subscription_id INTEGER REFERENCES pet_subscriptions(id) ON DELETE CASCADE,
+      content BLOB NOT NULL,
+      content_type TEXT NOT NULL,
+      embedding TEXT,
+      embedding_model TEXT,
+      thumb BLOB,
+      thumb_type TEXT,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+      CHECK (kind <> 'report' OR pet_id IS NOT NULL)
+    );
+    CREATE INDEX IF NOT EXISTS idx_pet_photos_pet ON pet_photos(pet_id);
+    CREATE INDEX IF NOT EXISTS idx_pet_photos_kind_species ON pet_photos(kind, species);
+
+    -- Bitácora de auto-fusiones (#150): a diferencia de match_log/contact_log,
+    -- ACÁ SÍ guarda un nombre a propósito. findOrCreatePerson no persiste el
+    -- fullName del reporte que se fusiona en ningún otro lado (addUpdate no lo
+    -- recibe) — sin esta columna, el nombre original desaparece y una fusión
+    -- mala queda imposible de deshacer sin adivinar. Se acepta el desvío del
+    -- "sin nombres" de las bitácoras anteriores porque el nombre de una persona
+    -- reportada ya es dato público del producto (se muestra en /person/:id),
+    -- a diferencia de contact/reporter/message, que nunca lo son.
+    CREATE TABLE IF NOT EXISTS merge_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+      submitted_name TEXT NOT NULL,
+      score REAL NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_merge_log_person ON merge_log(person_id);
+    CREATE INDEX IF NOT EXISTS idx_merge_log_created ON merge_log(created_at);
   `);
 
   // Older dev databases: add the GPS columns if missing.
@@ -114,6 +205,12 @@ async function createSqliteAdapter(dbPath) {
   }
   try {
     db.exec('ALTER TABLE updates ADD COLUMN contact TEXT');
+  } catch { /* already exists */ }
+  // De dónde salió la afirmación: el enlace a la noticia que confirma que una
+  // persona apareció. Un `safe` con enlace carga su propia prueba; uno sin
+  // enlace es una afirmación que nadie puede verificar.
+  try {
+    db.exec('ALTER TABLE updates ADD COLUMN source_url TEXT');
   } catch { /* already exists */ }
   // Detection geometry (bounding box + landmarks) for the public overlay, and
   // the face thumbnail the public listing loads instead of the full photo.
@@ -187,7 +284,55 @@ async function createSqliteAdapter(dbPath) {
 
   const getPersonStmt = db.prepare('SELECT * FROM people WHERE id = ?');
 
+  // Serializa, por external_id, el chequeo-y-escritura de una admisión
+  // (src/report-admission.js) contra la ventana en la que `deletePerson`
+  // suprime esa misma llave (#192, condición de carrera señalada por
+  // coderabbitai). Un mutex en memoria alcanza acá porque este adaptador vive
+  // en UN solo proceso — SQLite es dev/tests, nunca varias instancias sobre el
+  // mismo archivo (a diferencia de Postgres en Vercel, que necesita un lock a
+  // nivel de base) — así que la garantía es la misma; solo la implementación
+  // no tiene por qué serlo. `externalIdLocks` guarda, por llave, la cola de lo
+  // que ya está encolado; se borra la entrada cuando nadie quedó esperando
+  // detrás, para no crecer para siempre en una instancia que vive días.
+  const externalIdLocks = new Map();
+  function lockExternalId(externalId, fn) {
+    const previous = externalIdLocks.get(externalId) || Promise.resolve();
+    const result = previous.then(fn, fn);
+    const marker = result.catch(() => {});
+    externalIdLocks.set(externalId, marker);
+    marker.finally(() => {
+      if (externalIdLocks.get(externalId) === marker) externalIdLocks.delete(externalId);
+    });
+    return result;
+  }
+  // Pide los locks de una lista de llaves, de una en una, y solo entonces
+  // corre `fn` — así dos borrados con llaves en común nunca se traban entre sí
+  // por pedirlas en órdenes distintos (acá siempre van ordenadas primero).
+  function lockExternalIds(keys, fn) {
+    if (!keys.length) return fn();
+    const [key, ...rest] = keys;
+    return lockExternalId(key, () => lockExternalIds(rest, fn));
+  }
+
+  // Las firmas faciales atadas a una o más suscripciones. Hay que leerlas
+  // ANTES de borrar la suscripción: `photos.subscription_id` también cascada
+  // (ver el esquema arriba), y con la suscripción se va la única fila que
+  // decía qué firma retirar de Rekognition — el mismo problema que
+  // `faceIdsForPerson` ya resuelve para el borrado de persona (#162).
+  function faceIdsForSubscriptionIds(subscriptionIds) {
+    if (!subscriptionIds.length) return [];
+    const marks = subscriptionIds.map(() => '?').join(',');
+    return db
+      .prepare(`SELECT face_id FROM photos WHERE subscription_id IN (${marks}) AND face_id IS NOT NULL`)
+      .all(...subscriptionIds)
+      .map((r) => r.face_id);
+  }
+
+
   return {
+    async withExternalIdLock(externalId, fn) {
+      return lockExternalId(externalId, fn);
+    },
     async insertPerson(fullName, normalized, phonetic) {
       const info = db
         .prepare('INSERT INTO people (full_name, normalized_name, phonetic_name) VALUES (?, ?, ?)')
@@ -215,18 +360,19 @@ async function createSqliteAdapter(dbPath) {
     // externalId updates the existing row's status/message/location/lat/lng/
     // reporter/contact instead of inserting a duplicate. Without externalId,
     // behavior is unchanged.
-    async insertUpdate(personId, { status, message, location, lat, lng, source, reporter, contact, externalId }) {
+    async insertUpdate(personId, { status, message, location, lat, lng, source, sourceUrl, reporter, contact, externalId }) {
       const extId = externalId || null;
       const info = db
         .prepare(
-          `INSERT INTO updates (person_id, status, message, location, lat, lng, source, reporter, contact, external_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO updates (person_id, status, message, location, lat, lng, source, source_url, reporter, contact, external_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT (external_id) WHERE external_id IS NOT NULL DO UPDATE SET
              status = excluded.status,
              message = excluded.message,
              location = excluded.location,
              lat = excluded.lat,
              lng = excluded.lng,
+             source_url = excluded.source_url,
              reporter = excluded.reporter,
              contact = excluded.contact`
         )
@@ -238,6 +384,7 @@ async function createSqliteAdapter(dbPath) {
           Number.isFinite(lat) ? lat : null,
           Number.isFinite(lng) ? lng : null,
           source,
+          sourceUrl || null,
           reporter || null,
           contact || null,
           extId
@@ -254,9 +401,17 @@ async function createSqliteAdapter(dbPath) {
         .prepare('SELECT * FROM updates WHERE person_id = ? ORDER BY created_at DESC, id DESC')
         .all(personId);
     },
+    // "El estado actual de una persona es el de su update más reciente" (ver
+    // POST /rescate/aviso en src/routes/web.js) es la regla que lee el bot de
+    // WhatsApp, GET /api/people y las tarjetas de duplicados — no solo el
+    // home. Sin el mismo filtro, esas tres superficies seguirían anunciando
+    // "Localizada" por una fila del agregador que el home ya ignora.
     async latestUpdate(personId) {
       return db
-        .prepare('SELECT * FROM updates WHERE person_id = ? ORDER BY created_at DESC, id DESC LIMIT 1')
+        .prepare(
+          `SELECT * FROM updates WHERE person_id = ? AND NOT (source = 'aggregator' AND status = 'safe')
+           ORDER BY created_at DESC, id DESC LIMIT 1`
+        )
         .get(personId);
     },
     // Everyone currently reported missing, most recent report first.
@@ -275,6 +430,7 @@ async function createSqliteAdapter(dbPath) {
              SELECT u.person_id, u.status, u.created_at,
                     ROW_NUMBER() OVER (PARTITION BY u.person_id ORDER BY u.created_at DESC, u.id DESC) AS rn
              FROM updates u
+             ${AGGREGATOR_SAFE_EXCLUSION}
            )
            SELECT p.id, p.full_name, l.status, l.created_at AS last_report
            FROM people p
@@ -294,6 +450,7 @@ async function createSqliteAdapter(dbPath) {
              SELECT u.person_id, u.status,
                     ROW_NUMBER() OVER (PARTITION BY u.person_id ORDER BY u.created_at DESC, u.id DESC) AS rn
              FROM updates u
+             ${AGGREGATOR_SAFE_EXCLUSION}
            )
            SELECT COUNT(*) AS n FROM latest WHERE rn = 1 AND status = 'safe'`
         )
@@ -339,21 +496,38 @@ async function createSqliteAdapter(dbPath) {
       db.prepare('UPDATE subscriptions SET verified = 1 WHERE id = ?').run(sub.id);
       return { ...sub, verified: 1 };
     },
+    // Igual que deletePerson en src/routes/api.js: los face_id se leen ANTES
+    // de borrar la fila, porque la cascada de subscription_id se la lleva
+    // junto con la única forma de saber qué firma retirar (#162).
     async deleteSubscriptionByToken(token) {
       const sub = db.prepare('SELECT * FROM subscriptions WHERE verify_token = ?').get(token);
       if (!sub) return null;
+      const faceIds = faceIdsForSubscriptionIds([sub.id]);
       db.prepare('DELETE FROM subscriptions WHERE id = ?').run(sub.id);
-      return sub;
+      return { ...sub, faceIds };
     },
     async deleteSubscription(personId, channel, address) {
-      return db
-        .prepare('DELETE FROM subscriptions WHERE person_id = ? AND channel = ? AND address = ?')
-        .run(personId, channel, address).changes;
+      const sub = db
+        .prepare('SELECT id FROM subscriptions WHERE person_id = ? AND channel = ? AND address = ?')
+        .get(personId, channel, address);
+      if (!sub) return { count: 0, faceIds: [] };
+      const faceIds = faceIdsForSubscriptionIds([sub.id]);
+      const info = db.prepare('DELETE FROM subscriptions WHERE id = ?').run(sub.id);
+      return { count: info.changes, faceIds };
     },
     async deleteSubscriptionsForAddress(channel, address) {
-      return db
-        .prepare('DELETE FROM subscriptions WHERE channel = ? AND address = ?')
-        .run(channel, address).changes;
+      const subs = db
+        .prepare('SELECT id FROM subscriptions WHERE channel = ? AND address = ?')
+        .all(channel, address);
+      if (!subs.length) return { count: 0, faceIds: [] };
+      const ids = subs.map((s) => s.id);
+      const faceIds = faceIdsForSubscriptionIds(ids);
+      // Por id, no por (channel, address): ver el comentario equivalente en
+      // postgres.js — una suscripción creada entre el SELECT y este DELETE no
+      // debe quedar alcanzada por él (#162).
+      const marks = ids.map(() => '?').join(',');
+      const info = db.prepare(`DELETE FROM subscriptions WHERE id IN (${marks})`).run(...ids);
+      return { count: info.changes, faceIds };
     },
     async subscriptionsForPerson(personId) {
       return db.prepare('SELECT * FROM subscriptions WHERE person_id = ?').all(personId);
@@ -437,6 +611,21 @@ async function createSqliteAdapter(dbPath) {
     async clearPhotoContent(photoId) {
       db.prepare('UPDATE photos SET content = ? WHERE id = ?').run(Buffer.alloc(0), photoId);
     },
+    // La misma foto exacta ya indexada para esta persona: su face_id, para
+    // reusarlo en vez de sumar una firma nueva por la misma cara (#160 — un
+    // reporte re-empujado con la misma foto multiplicaba firmas). face_id
+    // IS NOT NULL ya excluye a la fila que se está procesando ahora mismo,
+    // que todavía no tiene el suyo escrito.
+    async photoFaceIdForContent(personId, kind, content) {
+      const row = db
+        .prepare(
+          `SELECT face_id FROM photos
+           WHERE person_id = ? AND kind = ? AND face_id IS NOT NULL AND content = ?
+           LIMIT 1`
+        )
+        .get(personId, kind, content);
+      return row ? row.face_id : null;
+    },
     async photosByFaceIds(faceIds) {
       if (!faceIds.length) return [];
       const marks = faceIds.map(() => '?').join(',');
@@ -453,11 +642,70 @@ async function createSqliteAdapter(dbPath) {
         .prepare('SELECT id, person_id, kind, face_id FROM photos WHERE face_id IS NOT NULL ORDER BY id')
         .all();
     },
-    async deletePerson(id) {
-      const person = getPersonStmt.get(id);
-      if (!person) return null;
-      db.prepare('DELETE FROM people WHERE id = ?').run(id);
-      return person;
+    // Las firmas faciales de las fotos de una persona. Hay que leerlas ANTES de
+    // borrarla: la cascada se lleva las filas de `photos` y con ellas el único
+    // registro de qué retirar de la colección de Rekognition.
+    async faceIdsForPerson(personId) {
+      return db
+        .prepare('SELECT face_id FROM photos WHERE person_id = ? AND face_id IS NOT NULL')
+        .all(personId)
+        .map((r) => r.face_id);
+    },
+    // Mismo contrato que en Postgres (ver el comentario ahí): `atSubjectRequest`
+    // marca el borrado del ARCO, el único que deja constancia, y las dos
+    // escrituras van en una transacción para que no exista el estado
+    // intermedio. Las llaves se leen ANTES del DELETE porque la cascada se
+    // lleva las filas de `updates` y con ellas la única copia.
+    async deletePerson(id, { atSubjectRequest = false } = {}) {
+      const suppress = db.prepare(
+        'INSERT OR IGNORE INTO suppressed_external_ids (external_id) VALUES (?)'
+      );
+      const externalIdsStmt = db.prepare(
+        'SELECT DISTINCT external_id FROM updates WHERE person_id = ? AND external_id IS NOT NULL'
+      );
+      const remove = db.prepare('DELETE FROM people WHERE id = ?');
+      const run = db.transaction(() => {
+        const person = getPersonStmt.get(id);
+        if (!person) return null;
+        let suppressed = 0;
+        if (atSubjectRequest) {
+          // Se guarda el hash, nunca la llave cruda (#192, revisión de
+          // cris-pappcorn, punto 2) — ver el comentario de hashExternalId,
+          // arriba.
+          for (const row of externalIdsStmt.all(id)) {
+            suppressed += suppress.run(hashExternalId(row.external_id)).changes;
+          }
+        }
+        remove.run(id);
+        return { ...person, suppressed_external_ids: suppressed };
+      });
+
+      // Instantánea de qué llaves podría suprimir este borrado — solo para
+      // saber CUÁLES pedir; no es garantía de que sigan siendo las mismas para
+      // cuando la transacción de arriba corra. Una llave que aparezca después
+      // de esta foto no tiene lock que la proteja todavía, pero la relectura
+      // de `externalIdsStmt` YA ADENTRO de la transacción la encuentra y la
+      // suprime igual. Lo que eso no cierra —más angosto que la condición de
+      // carrera de #192— es una admisión que en ese mismo instante le agrega a
+      // ESTA MISMA persona una llave que nadie pidió suprimir todavía.
+      const snapshot = atSubjectRequest
+        ? externalIdsStmt.all(id).map((r) => r.external_id).sort()
+        : [];
+
+      // El MISMO lock que sostiene la admisión entre su chequeo y su escritura
+      // (#192) — si el borrado no lo pide antes de escribir, un re-envío que
+      // ya pasó el chequeo puede quedar en el aire mientras este borrado
+      // suprime y se va, y terminar escribiendo igual: la ficha revive.
+      return lockExternalIds(snapshot, () => run());
+    },
+    // La consulta que hace valer la constancia, en el ingreso. Por llave
+    // exacta sobre el hash (#192, revisión de cris-pappcorn, punto 2): una
+    // llave distinta para la misma persona no está suprimida, y ese es el
+    // límite honesto del mecanismo.
+    async isExternalIdSuppressed(externalId) {
+      return !!db
+        .prepare('SELECT 1 AS uno FROM suppressed_external_ids WHERE external_id = ?')
+        .get(hashExternalId(externalId));
     },
     async counts() {
       const n = (sql) => db.prepare(sql).get().n;
@@ -521,6 +769,13 @@ async function createSqliteAdapter(dbPath) {
            ORDER BY created_at ASC, id ASC`
         )
         .all(personId);
+    },
+    // #150: registro de cada auto-fusión por nombre — ver el comentario del
+    // esquema sobre por qué esta tabla sí guarda un nombre.
+    async insertMergeLog({ personId, submittedName, score }) {
+      db.prepare(
+        'INSERT INTO merge_log (person_id, submitted_name, score) VALUES (?, ?, ?)'
+      ).run(personId, submittedName, score);
     },
     // Cuenta total y por superficie. `since` (ISO) filtra a lo escrito desde
     // ahí — se usa para la línea de "cambio desde el reporte anterior" del
@@ -621,6 +876,105 @@ async function createSqliteAdapter(dbPath) {
     },
     async matchLogSimilarityRows() {
       return db.prepare('SELECT similarity, surface FROM match_log').all();
+    },
+
+    async insertPet({ species, petName, description, contact }) {
+      const info = db
+        .prepare('INSERT INTO pets (species, pet_name, description, contact) VALUES (?, ?, ?, ?)')
+        .run(species, petName || null, description || null, contact || null);
+      return db.prepare('SELECT * FROM pets WHERE id = ?').get(info.lastInsertRowid);
+    },
+    async getPet(id) {
+      return db.prepare('SELECT * FROM pets WHERE id = ?').get(id);
+    },
+    async markPetResolved(id) {
+      db.prepare("UPDATE pets SET resolved_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?").run(id);
+      return db.prepare('SELECT * FROM pets WHERE id = ?').get(id);
+    },
+    async insertPetPhoto({ petId, kind, species, subscriptionId, content, contentType }) {
+      const info = db
+        .prepare(
+          'INSERT INTO pet_photos (pet_id, kind, species, subscription_id, content, content_type) VALUES (?, ?, ?, ?, ?, ?)'
+        )
+        .run(petId || null, kind, species, subscriptionId || null, content, contentType);
+      return db
+        .prepare('SELECT id, pet_id, kind, species, content_type, created_at FROM pet_photos WHERE id = ?')
+        .get(info.lastInsertRowid);
+    },
+    async getPetPhoto(id) {
+      return db.prepare('SELECT * FROM pet_photos WHERE id = ?').get(id);
+    },
+    async setPetPhotoEmbedding(photoId, embedding, model) {
+      db.prepare('UPDATE pet_photos SET embedding = ?, embedding_model = ? WHERE id = ?').run(
+        JSON.stringify(embedding),
+        model || null,
+        photoId
+      );
+    },
+    async setPetPhotoThumbnail(photoId, { small, contentType }) {
+      db.prepare('UPDATE pet_photos SET thumb = ?, thumb_type = ? WHERE id = ?').run(small, contentType, photoId);
+    },
+    async clearPetPhotoContent(photoId) {
+      db.prepare('UPDATE pet_photos SET content = ? WHERE id = ?').run(Buffer.alloc(0), photoId);
+    },
+    // LEFT JOIN porque una foto 'query' no tiene pet_id (nadie sabe todavía de
+    // qué mascota es) — el filtro de resuelta solo debe aplicar cuando SÍ hay
+    // una mascota asociada (siempre el caso para 'report', nunca para
+    // 'query'). Mostrar como "posible avistamiento" a una mascota que ya se
+    // marcó como encontrada no ayuda a nadie.
+    async petPhotosForMatching(kind, species) {
+      return db
+        .prepare(
+          `SELECT pet_photos.id, pet_photos.pet_id, pet_photos.embedding, pet_photos.embedding_model
+           FROM pet_photos
+           LEFT JOIN pets ON pets.id = pet_photos.pet_id
+           WHERE pet_photos.kind = ? AND pet_photos.species = ? AND pet_photos.embedding IS NOT NULL
+             AND (pet_photos.pet_id IS NULL OR pets.resolved_at IS NULL)`
+        )
+        .all(kind, species);
+    },
+    // Mismo patrón que photosMissingDerivatives (personas): sin el filtro de
+    // contenido no vacío, una foto 'query' que ya se procesó y se le borraron
+    // los bytes (nunca va a tener embedding si el matcher estaba caído en su
+    // momento y nadie corrió el backfill mientras tanto) queda "pendiente"
+    // para siempre y ahoga la red de seguridad con filas que ya no se pueden
+    // comparar.
+    async petPhotosMissingEmbedding(limit) {
+      return db
+        .prepare('SELECT * FROM pet_photos WHERE embedding IS NULL AND length(content) > 0 ORDER BY id LIMIT ?')
+        .all(limit);
+    },
+    async petPhotosForPet(petId) {
+      return db
+        .prepare(
+          "SELECT id, pet_id, content_type, thumb_type FROM pet_photos WHERE kind = 'report' AND pet_id = ? ORDER BY id"
+        )
+        .all(petId);
+    },
+    // El listado público — espejo de missingPeople: toda mascota sin
+    // resolved_at, más reciente primero.
+    async lostPets(limit) {
+      return db
+        .prepare('SELECT * FROM pets WHERE resolved_at IS NULL ORDER BY created_at DESC LIMIT ?')
+        .all(limit);
+    },
+    // Espejo de reunitedCount — el contador de buenas noticias.
+    async reunitedPetsCount() {
+      return db.prepare('SELECT COUNT(*) AS n FROM pets WHERE resolved_at IS NOT NULL').get().n;
+    },
+    // Una foto por mascota para el listado — espejo de reportPhotosForPeople:
+    // la primera foto 'report' que además tenga miniatura gana, para no
+    // repetir en el listado el problema de una foto ilegible sin thumb.
+    async petPhotosForPets(petIds) {
+      if (!petIds.length) return [];
+      const marks = petIds.map(() => '?').join(',');
+      return db
+        .prepare(
+          `SELECT id, pet_id, content_type, thumb_type FROM pet_photos
+           WHERE kind = 'report' AND pet_id IN (${marks})
+           ORDER BY pet_id, (thumb_type IS NULL), id`
+        )
+        .all(...petIds);
     },
 
     async close() {

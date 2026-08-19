@@ -1,0 +1,350 @@
+# Cuando un mantenedor pone `ready-to-merge`, el agente revisa el gate objetivo
+# y decide si puede aprobar y mergear, o si esto lo tiene que ver una persona.
+#
+# ── Por qué existe ──
+#
+# `main` es producción: Vercel despliega cada merge. La regla del proyecto
+# (CONTRIBUTING.md) dice que lo rutinario avanza con la revisión de un solo
+# mantenedor, y que lo que cambia el comportamiento de cara al usuario, el
+# esquema de la base o la privacidad lo decide una persona. Este workflow deja
+# que la mitad rutinaria avance sin esperar a que alguien tenga un rato, y le
+# cierra la puerta a la otra mitad.
+#
+# La lógica vive en `.github/scripts/cris-decide.cjs` y está probada en
+# `test/cris-decide.test.js`, que corre en el check obligatorio `npm test`. Acá
+# solo está la plomería.
+#
+# ── Modelo de confianza, que en un repo público importa el doble ──
+#
+# 1. El trigger es `pull_request_target`, y eso va contra el consejo habitual.
+#    Vale explicar por qué, porque leído rápido parece el error clásico.
+#
+#    Con `pull_request`, el archivo de workflow que CORRE es el del commit de
+#    merge del PR — o sea, el de la rama del PR. Un PR puede entonces
+#    reescribir su propio aprobador: quitarle el chequeo de CODEOWNERS,
+#    cambiar quién es el agente, o apuntar el `require` a un archivo suyo. Y
+#    en un PR de la misma rama los secretos SÍ están disponibles, así que ese
+#    workflow modificado correría con el token. La restricción de `.github/`
+#    en CODEOWNERS no ayuda: protege el MERGE, no la corrida.
+#
+#    `pull_request_target` toma el workflow de la rama por defecto, siempre.
+#    Un PR no puede alterar lo que corre. Eso es justo lo que un workflow que
+#    carga un PAT necesita.
+#
+#    El peligro conocido de `pull_request_target` es otro: correr con secretos
+#    sobre código de un fork. Acá está cerrado por dos vías, y hacen falta las
+#    dos: el job se salta si el PR viene de un fork (ver la condición abajo),
+#    y este workflow NO EJECUTA CÓDIGO DEL PR en ningún momento — no hace
+#    checkout de su rama, no instala sus dependencias, no corre sus scripts.
+#
+#    Si algún día alguien agrega acá un `npm ci`, un `npm test`, o un checkout
+#    de `head.sha`, esa combinación sí sería explotable. No lo hagas: para eso
+#    está `ci.yml`, que corre con `pull_request` y sin secretos.
+#
+# 2. El módulo de decisión y el CODEOWNERS se leen de la RAMA BASE, nunca del
+#    PR. El `sparse-checkout` trae solo `.github/scripts`, y
+#    `persist-credentials: false` no deja el token de git en el runner.
+#
+# 3. Quien pone la etiqueta tiene que ser code owner, y no puede ser el propio
+#    agente. La etiqueta es una orden humana; si el agente pudiera ponérsela,
+#    sería una nota que se escribe a sí mismo.
+
+name: Aprobación de Cris
+
+on:
+  pull_request_target:
+    types: [labeled]
+
+permissions:
+  contents: write # armar el auto-merge nativo
+  checks: read
+  pull-requests: write
+
+env:
+  CRIS_LOGIN: cris-pappcorn
+
+jobs:
+  approve:
+    name: Cris revisa y decide
+    # Dos condiciones, y la segunda es LOAD-BEARING para la seguridad.
+    #
+    # Con `pull_request_target` los secretos SÍ están disponibles en un PR de
+    # fork. Esta condición es lo que impide que este job corra sobre uno de
+    # ellos — es la mitad del cierre que describe la nota 1 de arriba (la otra
+    # mitad es no ejecutar nunca código del PR). No la quites.
+    #
+    # Y no se pierde nada al saltarlos: el agente no aprueba PRs de la
+    # comunidad de todos modos, los mira una persona, que es lo que el
+    # CONTRIBUTING ya promete.
+    if: >-
+      github.event.label.name == 'ready-to-merge' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      # El contexto `secrets` NO existe en un `if:` de paso — solo en `env` de
+      # job. Así que la presencia del token se resuelve acá, una vez, y los
+      # pasos preguntan por `env.HAS_PAT`. El valor es un booleano como TEXTO
+      # ('true'/'false'); compararlo contra el string es intencional.
+      HAS_PAT: ${{ secrets.CRIS_APPROVE_PAT != '' }}
+    steps:
+      # ── El módulo de decisión, traído de la BASE ──
+      - name: Traer el módulo de decisión (de la rama base)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+
+      # ── Decidir, con el GITHUB_TOKEN (alcanza para leer) ──
+      #
+      # El `require` va envuelto a propósito. El módulo viene de la base, y una
+      # base puede no tenerlo: un sparse-checkout de una ruta inexistente NO
+      # falla, deja el cono vacío, y el require revienta con MODULE_NOT_FOUND.
+      # Sin la envoltura eso falla cerrado pero MUDO — el PR se queda con la X
+      # roja, sin comentario que explique nada y con la etiqueta puesta, que es
+      # lo peor de los dos mundos. Así que el desenlace de un require que no
+      # resuelve tiene que ser el mismo que el de un abort, y no puede depender
+      # de nada que viva dentro del módulo que no cargó.
+      - name: Resolver CODEOWNERS y decidir
+        id: gate
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const { owner, repo } = context.repo;
+            const pr = context.payload.pull_request;
+            const crisLogin = process.env.CRIS_LOGIN.toLowerCase();
+
+            const quitarEtiquetaYExplicar = async (motivo) => {
+              try {
+                await github.rest.issues.removeLabel({
+                  owner, repo, issue_number: pr.number, name: 'ready-to-merge',
+                });
+              } catch (e) {
+                core.warning(`No pude quitar la etiqueta: ${e.message}`);
+              }
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: pr.number,
+                body: `### No apruebo todavía\n\n${motivo}\n\nQuité \`ready-to-merge\`. Cuando esto se resuelva, vuélvela a poner.`,
+              });
+              core.setFailed(motivo);
+            };
+
+            let decide;
+            try {
+              ({ decide } = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/cris-decide.cjs`));
+            } catch (e) {
+              await quitarEtiquetaYExplicar(
+                `no pude cargar el módulo de decisión desde la rama base ` +
+                `(\`${pr.base.ref}\`): ${e.message}. No decido a ojo.`
+              );
+              return;
+            }
+
+            // El CODEOWNERS de la BASE es el que rige, no el del PR.
+            let codeowners = '';
+            try {
+              const { data } = await github.rest.repos.getContent({
+                owner, repo, path: '.github/CODEOWNERS', ref: pr.base.ref,
+              });
+              codeowners = Buffer.from(data.content, 'base64').toString('utf8');
+            } catch (e) {
+              await quitarEtiquetaYExplicar(
+                `no pude leer \`.github/CODEOWNERS\` de la rama base (\`${pr.base.ref}\`): ${e.message}.`
+              );
+              return;
+            }
+
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner, repo, pull_number: pr.number, per_page: 100,
+            });
+            const reviews = await github.paginate(github.rest.pulls.listReviews, {
+              owner, repo, pull_number: pr.number, per_page: 100,
+            });
+            // Los checks vienen de DOS fuentes que la API mantiene separadas, y
+            // hay que mezclarlas: los check runs (`npm test`) y los commit
+            // statuses (`CodeRabbit`, que es un `context`, no un check run).
+            // Mirar solo la primera hace que el gate aborte en TODOS los PRs
+            // por un check que sí corrió pero vive en la otra lista.
+            //
+            // Van paginadas: con más de 100 entradas, un check obligatorio
+            // puede quedar fuera de la primera página y leerse como "no
+            // corrió".
+            const checkRuns = await github.paginate(github.rest.checks.listForRef, {
+              owner, repo, ref: pr.head.sha, per_page: 100,
+            });
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              owner, repo, ref: pr.head.sha, per_page: 100,
+            });
+            // Un status se normaliza a la forma de un check run para que el
+            // módulo de decisión no tenga que conocer las dos formas. `pending`
+            // se traduce a "todavía no concluyó", que es justo lo que significa.
+            const statusesComoChecks = statuses.map((s) => ({
+              name: s.context,
+              status: s.state === 'pending' ? 'in_progress' : 'completed',
+              conclusion: s.state === 'pending' ? null : s.state === 'success' ? 'success' : s.state,
+              started_at: s.created_at,
+              completed_at: s.updated_at,
+            }));
+            // El head al MOMENTO de decidir, no el congelado del payload.
+            const { data: fresco } = await github.rest.pulls.get({
+              owner, repo, pull_number: pr.number,
+            });
+
+            const resultado = decide({
+              crisLogin,
+              author: pr.user.login,
+              authorDisplay: pr.user.login,
+              labeler: (context.payload.sender || {}).login,
+              headSha: pr.head.sha,
+              currentHeadSha: fresco.head.sha,
+              baseRef: pr.base.ref,
+              draft: !!fresco.draft,
+              codeowners,
+              labels: (fresco.labels || []).map((l) => l.name),
+              files: files.map((f) => f.filename),
+              reviews,
+              checkRuns: [...checkRuns, ...statusesComoChecks],
+            });
+
+            core.info(`Decisión: ${resultado.decision}`);
+
+            if (resultado.decision === 'abort') {
+              await quitarEtiquetaYExplicar(resultado.reason);
+              return;
+            }
+
+            if (resultado.decision === 'abstain') {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: pr.number,
+                body: `### No apruebo\n\n${resultado.reason}`,
+              });
+              core.setOutput('decision', 'abstain');
+              return;
+            }
+
+            core.setOutput('decision', resultado.decision);
+            core.setOutput('note', resultado.note);
+
+      # ── Firmar, con el token del agente ──
+      #
+      # El GITHUB_TOKEN no sirve acá: una aprobación suya viene de
+      # `github-actions[bot]`, que no está en CODEOWNERS y por lo tanto no
+      # satisface nada. Tiene que ser la cuenta del agente, que sí es
+      # mantenedora del repo.
+      #
+      # Si el secreto no está configurado, este paso no corre y el siguiente lo
+      # dice en voz alta. Nunca se finge una firma.
+      # Si el secreto no está configurado, este paso NO corre: sin él,
+      # `github-token` iría vacío y github-script fallaría con un 401 que no le
+      # dice nada a nadie. El paso siguiente lo dice con todas las letras.
+      - name: Aprobar
+        if: |
+          (steps.gate.outputs.decision == 'approve' ||
+           steps.gate.outputs.decision == 'approve_and_merge') &&
+          env.HAS_PAT == 'true'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          github-token: ${{ secrets.CRIS_APPROVE_PAT }}
+          script: |
+            const { owner, repo } = context.repo;
+            await github.rest.pulls.createReview({
+              owner, repo,
+              pull_number: context.payload.pull_request.number,
+              event: 'APPROVE',
+              body: `### Aprobado\n\n${process.env.NOTE}`,
+            });
+        env:
+          NOTE: ${{ steps.gate.outputs.note }}
+
+      - name: Explicar por qué no firmo
+        if: |
+          steps.gate.outputs.decision == 'comment_only'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const { owner, repo } = context.repo;
+            await github.rest.issues.createComment({
+              owner, repo,
+              issue_number: context.payload.pull_request.number,
+              body: `### No apruebo\n\n${process.env.NOTE}`,
+            });
+        env:
+          NOTE: ${{ steps.gate.outputs.note }}
+
+      # Sin el secreto no hubo firma, y decirlo en voz alta es lo único que
+      # evita que alguien lea el job verde y crea que el PR quedó aprobado.
+      - name: Avisar que falta el token
+        if: |
+          (steps.gate.outputs.decision == 'approve' ||
+           steps.gate.outputs.decision == 'approve_and_merge') &&
+          env.HAS_PAT != 'true'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const { owner, repo } = context.repo;
+            const numero = context.payload.pull_request.number;
+            // La etiqueta se QUITA, y no es cosmética: aplicar una etiqueta que
+            // ya está puesta no genera un evento `labeled` nuevo. Si se quedara
+            // pegada, "vuelve a ponerla" sería un consejo imposible de seguir y
+            // el PR quedaría atascado después de configurar el secreto.
+            try {
+              await github.rest.issues.removeLabel({ owner, repo, issue_number: numero, name: 'ready-to-merge' });
+            } catch (e) {
+              core.warning(`No pude quitar la etiqueta: ${e.message}`);
+            }
+            const motivo =
+              'Decidí que puedo aprobar, pero **no hay firma**: falta el secreto `CRIS_APPROVE_PAT`. ' +
+              'Sin él no puedo dejar una reseña con mi cuenta, y una aprobación del `GITHUB_TOKEN` ' +
+              'vendría de `github-actions[bot]`, que no está en CODEOWNERS y no satisface nada. ' +
+              'Configúralo en Settings → Secrets y vuelve a poner `ready-to-merge` (la quité para que ' +
+              'volver a ponerla dispare de nuevo el flujo).';
+            await github.rest.issues.createComment({
+              owner, repo, issue_number: numero,
+              body: `### No pude firmar\n\n${motivo}`,
+            });
+            core.setFailed('Falta CRIS_APPROVE_PAT.');
+
+      # ── Armar el auto-merge NATIVO de GitHub ──
+      #
+      # No mergea este workflow: le pide a GitHub que mergee cuando TODAS las
+      # protecciones estén satisfechas. La diferencia importa — el auto-merge
+      # espera, nunca sobrepasa. Si falta una aprobación, se queda armado sin
+      # hacer nada, que es exactamente lo que debe pasar.
+      - name: Armar el auto-merge
+        if: steps.gate.outputs.decision == 'approve_and_merge'
+        env:
+          GH_TOKEN: ${{ secrets.CRIS_APPROVE_PAT }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+
+          if [ "$HAS_PAT" != "true" ]; then
+            echo "::error::Falta el secreto CRIS_APPROVE_PAT. Sin él no hay firma ni auto-merge."
+            exit 1
+          fi
+
+          if gh pr merge "$PR" --repo "$REPO" --auto --squash; then
+            echo "Auto-merge armado."
+            exit 0
+          fi
+
+          # Este paso lleva el mundo a un estado deseado. Si ese estado YA
+          # existe —alguien lo armó antes, o el PR alcanzó a mergearse porque
+          # la aprobación de arriba destrabó el gate— entonces no es un fallo.
+          # Se relee antes de darlo por perdido.
+          ESTADO=$(gh pr view "$PR" --repo "$REPO" --json state --jq .state 2>/dev/null || echo "?")
+          ARMADO=$(gh pr view "$PR" --repo "$REPO" --json autoMergeRequest --jq '.autoMergeRequest != null' 2>/dev/null || echo "?")
+
+          if [ "$ESTADO" = "MERGED" ] || [ "$ARMADO" = "true" ]; then
+            echo "El estado deseado ya existe (state=$ESTADO, auto-merge=$ARMADO) — la carrera la ganó el merge, no es un fallo."
+            exit 0
+          fi
+
+          echo "::error::No pude armar el auto-merge del PR #$PR y el estado deseado NO existe (state=$ESTADO, auto-merge=$ARMADO)."
+          echo "::error::Si el repo tiene 'Allow auto-merge' desactivado en Settings, esta es la causa."
+          exit 1

@@ -451,7 +451,34 @@ async function matchStoredPhoto(store, matcher, photo, bytes) {
   // Search BEFORE indexing so the photo never matches itself.
   const matches = await matcher.searchByImage(bytes);
   console.log(`[facematch] photo ${id} (${kind}) → ${matches.length} raw match(es)`);
-  const { faceId, geometry } = await matcher.indexFace(bytes, id);
+
+  // Esta misma persona ya tiene esta foto exacta indexada — un reporte
+  // re-empujado por el agregador trae los mismos bytes cada vez (#160). Sin
+  // esto, cada re-empuje sumaba una firma nueva por la misma cara: hasta 118
+  // para una sola persona, medido en producción. Reusar el face_id evita la
+  // llamada a IndexFaces; detectFace da la geometría para la miniatura sin
+  // volver a indexar (mismo patrón que ya usa backfillPhotoDerivatives para
+  // no duplicar una cara que ya está en la colección).
+  //
+  // Best effort, no atómico a propósito: leer photoFaceIdForContent y llamar
+  // indexFace son dos pasos separados por una llamada de red a Rekognition, y
+  // esta app corre en varias instancias serverless sin estado compartido para
+  // serializarlos. Dos re-empujes de la MISMA foto llegando casi al mismo
+  // instante podrían leer null los dos y sumar dos firmas en vez de una — una
+  // ventana angosta (el caso real del issue es un re-crawl días después, no
+  // dos empujes simultáneos) que reduce el problema de "cada re-empuje" a
+  // "una carrera puntual", no lo cierra del todo. Cerrarla exigiría una
+  // reclamación atómica entre instancias, que es una decisión de arquitectura
+  // aparte y no cabe en este PR.
+  const reusedFaceId = await store.photoFaceIdForContent(personId, kind, bytes);
+  let faceId, geometry;
+  if (reusedFaceId) {
+    faceId = reusedFaceId;
+    geometry = await matcher.detectFace(bytes);
+    console.log(`[facematch] photo ${id} (${kind}) usa una firma existente`);
+  } else {
+    ({ faceId, geometry } = await matcher.indexFace(bytes, id));
+  }
   if (faceId) await store.setPhotoFaceId(id, faceId);
   // Report photos are shown publicly: they get the geometry to draw and the
   // face thumbnail the listing loads instead of the full image.
@@ -733,10 +760,25 @@ async function identifyRescuedPerson(
     const person = await store.getPerson(mp.person_id);
     if (!person) continue;
     const latest = await store.getLatestUpdate(mp.person_id);
+    // El teléfono al que hay que llamar puede NO estar en el último update, y
+    // eso no es un borde: un aviso de rescatista queda como el más reciente y
+    // su `contact` es de un tercero, así que filtrarlo (#120) tapaba también el
+    // contacto que la familia sí había dejado en un reporte anterior. Que una
+    // familia no reciba la llamada es exactamente el daño que esto existe para
+    // evitar, así que la pantalla busca el contacto más reciente que de verdad
+    // sea de quien la busca, no el del update más nuevo.
+    //
+    // `updatesForPerson` viene ordenado por fecha descendente en los dos
+    // adaptadores, así que el primero que cumple es el más reciente.
+    const contactUpdate =
+      latest && latest.contact && latest.source !== 'rescate'
+        ? latest
+        : (await store.getUpdates(mp.person_id)).find((u) => u.contact && u.source !== 'rescate') || null;
     found.push({
       person,
       similarity: bySimilarity.get(mp.face_id) || 0,
-      update: latest
+      update: latest,
+      contactUpdate
     });
   }
   found.sort((a, b) => b.similarity - a.similarity);
@@ -873,9 +915,68 @@ async function computeMatchStats(store, matcher) {
   return stats;
 }
 
+// Retira de la colección las firmas faciales que ya perdieron su ficha. La
+// firma no vive en la base: vive en Rekognition, así que ninguna cascada la
+// toca, y sin esto sobrevivía al borrado para siempre — una foto de rescatista
+// seguiría coincidiendo con alguien cuya ficha ya no existe, y quedaría un dato
+// biométrico retenido sin el registro que lo justificaba.
+//
+// Recibe los ids en vez de ir a buscarlos: para cuando esto corre, la cascada
+// ya se llevó las filas de `photos`, así que hay que leerlos ANTES del borrado
+// y pasarlos acá (ver la ruta DELETE en src/routes/api.js, y el mismo patrón
+// para bajas de suscripción en src/routes/web.js y src/bot.js — #162).
+//
+// Best effort a propósito: la política de privacidad promete el borrado, así
+// que un Rekognition caído NO puede bloquearlo. Lo que no se pudo confirmar se
+// devuelve y se loguea, porque los ids ya no están en ninguna parte de donde
+// volver a leerlos.
+//
+// `label` es solo para ese log: quien llama identifica lo que se borró
+// ("persona 91", "suscripción 44") sin que acá haya que saber de qué se trata.
+async function forgetPersonFaces(matcher, faceIds, label) {
+  // Se despierta el matcher primero y en los DOS caminos. El corto también
+  // reporta `face_matching`, y leerlo sin haber inicializado devolvía `false`
+  // con Rekognition perfectamente disponible: cosmético acá, pero es la misma
+  // clase de bug que el #89 y no vale dejarlo sembrado.
+  if (typeof matcher.ensureReady === 'function') await matcher.ensureReady();
+  const faceMatching = !!matcher.enabled;
+
+  const ids = (faceIds || []).filter(Boolean);
+  if (!ids.length) {
+    return { total: 0, deleted: 0, unconfirmed: [], face_matching: faceMatching };
+  }
+
+  let result;
+  try {
+    result = await matcher.deleteFaces(ids);
+  } catch (e) {
+    // El proveedor no debería lanzar (el suyo atrapa por lote), pero la
+    // garantía tiene que ser estructural y no depender de que se porte bien.
+    console.error('[facematch:olvido] DeleteFaces falló:', e.name, e.message);
+    result = { deleted: [], unconfirmed: ids };
+  }
+
+  const unconfirmed = result.unconfirmed || [];
+  if (unconfirmed.length) {
+    // El único rastro duradero: la respuesta HTTP se la lleva quien llamó, y
+    // los ids ya no están en la base para reintentarlo desde ahí.
+    console.error(
+      `[facematch:olvido] ${label}: ${unconfirmed.length} firma(s) sin retirar de la colección —`,
+      unconfirmed.join(', ')
+    );
+  }
+  return {
+    total: ids.length,
+    deleted: (result.deleted || []).length,
+    unconfirmed,
+    face_matching: faceMatching
+  };
+}
+
 module.exports = {
   processPhoto,
   identifyRescuedPerson,
+  forgetPersonFaces,
   notifyRescuerOfMatches,
   requestRescueConfirmation,
   resolveRescueAnswer,

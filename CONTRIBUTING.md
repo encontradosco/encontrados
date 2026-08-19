@@ -136,17 +136,30 @@ tu cambio toca cualquiera de las dos, dilo explícitamente en el PR.
 ## La revisión
 
 Revisan los mantenedores core: [@torrenegra](https://github.com/torrenegra),
-[@ni500](https://github.com/ni500) y [@cris-pappcorn](https://github.com/cris-pappcorn)
-— este último es un agente de IA, y lo decimos de frente porque vas a
-interactuar con él. Buscamos tres cosas, en este orden: que resuelva un problema
-real, que no rompa a nadie más, y que sea lo más pequeño que puede ser para
-lograrlo. Vas a recibir preguntas — son sobre el código, no sobre ti.
+[@ni500](https://github.com/ni500), [@yesid-lopez](https://github.com/yesid-lopez)
+y [@cris-pappcorn](https://github.com/cris-pappcorn) — este último es un agente
+de IA, y lo decimos de frente porque vas a interactuar con él. Buscamos tres
+cosas, en este orden: que resuelva un problema real, que no rompa a nadie más, y
+que sea lo más pequeño que puede ser para lograrlo. Vas a recibir preguntas —
+son sobre el código, no sobre ti.
 
 `main` está protegida: todo entra por PR, con los tests en verde y la aprobación
-de uno de los tres. **Nadie aprueba su propio PR** — GitHub no lo permite, y
-está bien que no lo permita: todo cambio lo mira alguien distinto de quien lo
-escribió, incluido el de un mantenedor. Esa es la mitad que sostiene la de
-abajo.
+de uno de los cuatro. **Nadie aprueba su propio PR** — GitHub no lo permite.
+
+Hay una excepción y preferimos escribirla a que la descubras: **un mantenedor
+puede despachar solo un cambio rutinario**. Abre el PR y lo autoriza poniendo
+**dos** etiquetas —`ready-to-merge`, que es la orden, y `efecto-usuario:ninguno`,
+que afirma que nada cambia para quien usa la app—, y entonces el agente firma
+(ver más abajo). Las dos las pone un code owner humano; el agente no puede
+ponérselas a sí mismo. En ese caso quien lee el diff y quien lo escribe pueden
+ser la misma persona.
+
+La aceptamos porque esto es un proyecto de emergencia y lo rutinario no debería
+esperar a que coincidan dos husos horarios — pero **solo se sostiene por lo que
+la rodea**: no aplica en las rutas restringidas (esquema, biometría, privacidad,
+autenticación, `.github/`), donde la firma del agente no sirve y sigue haciendo
+falta otra persona; no aplica a nada que caiga en las tres categorías de abajo;
+y no aplica a los PRs que llegan desde un fork, que mira siempre una persona.
 
 ### Qué entra con una revisión y qué espera a una persona
 
@@ -171,6 +184,40 @@ El corte es **por consecuencia, no por tamaño ni por tipo de archivo**. Un PR d
 una línea que cambia lo que lee una familia espera; un refactor de trescientas
 líneas que no cambia nada observable, no. Lo que no puede hacerle daño a alguien
 que está buscando a un familiar no tiene por qué esperar a que alguien despierte.
+
+### Cuando la aprobación la firma el agente
+
+Parte de eso está automatizado, y preferimos decirlo a que lo descubras viendo
+un bot aprobar tu PR.
+
+Cuando un mantenedor humano le pone la etiqueta `ready-to-merge` a un PR,
+[@cris-pappcorn](https://github.com/cris-pappcorn) revisa el gate objetivo y
+decide si puede aprobar. Solo lo hace si se cumple **todo** lo siguiente:
+
+- Los checks obligatorios están verdes **en ese mismo commit**.
+- Es code owner de **todas** las rutas que el PR toca. Las rutas restringidas
+  —esquema de la base, biometría, privacidad, autenticación, y el propio
+  `.github/`— lo excluyen a propósito, así que ahí nunca alcanza su firma.
+- Toda ruta con owner ya tiene juicio humano: o la escribió alguien que la
+  posee, o un owner humano de esa misma ruta ya aprobó **este** commit.
+- Existe la etiqueta `efecto-usuario:ninguno`, que afirma un hecho concreto:
+  *nadie que use la app recibiría, vería ni haría algo distinto*. El reparto por
+  rutas no puede ver un cambio de cara al usuario que viva en un archivo
+  rutinario, así que esa parte se declara a mano. **Si la etiqueta no está, no
+  firma** — su ausencia no se interpreta, se espera.
+- La etiqueta la puso un code owner humano. El agente no puede autorizarse a sí
+  mismo, y nunca aprueba un PR suyo.
+
+Cuando no se cumple algo, lo dice en un comentario con el motivo concreto en vez
+de quedarse callado. Y no mergea él: le pide a GitHub que mergee cuando **todas**
+las protecciones estén satisfechas, así que espera, no sobrepasa.
+
+Dos cosas que te tocan a ti como contribuidor de afuera: **un PR desde un fork
+nunca lo aprueba el agente** (corre sin acceso a sus credenciales, por diseño),
+así que el tuyo lo mira una persona; y la lógica completa está en
+[`.github/scripts/cris-decide.cjs`](.github/scripts/cris-decide.cjs) con sus
+pruebas en [`test/cris-decide.test.js`](test/cris-decide.test.js) — es
+auditable, y si encuentras un hueco, ese es un issue que queremos recibir.
 
 ### Qué puedes esperar de nosotros
 

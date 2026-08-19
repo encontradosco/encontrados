@@ -31,11 +31,12 @@ const MAX_CANDIDATES = 4;
 // Returns [{ person, photo, update, reason: 'face'|'name', similarity }],
 // strongest first. Empty when nothing looks like a duplicate.
 //
-// NOTHING in here is allowed to throw. The web caller runs this BEFORE the
-// report is written, so an exception escaping this function would 500 the
-// request and discard the report — photos, name, location and contact — which
-// is the one outcome an emergency service must never produce. Every failure
-// degrades to "no candidates found" and a log line.
+// NOTHING in here is allowed to throw. report-admission.js runs this LAST,
+// once the report is already written, indexed and notified — but an
+// exception escaping this function would still turn an already-successful
+// report into a 500 for the family waiting on the response, over a courtesy
+// feature that was never allowed to matter that much. Every failure degrades
+// to "no candidates found" and a log line.
 async function findDuplicateCandidates(
   store,
   matcher,
@@ -49,11 +50,14 @@ async function findDuplicateCandidates(
     // leads with a group shot where no face is usable, and the portrait that
     // would have matched an existing report sits at #2.
     const usable = (photoBuffers || []).filter((b) => b && b.length);
-    // Wake the lazy matcher before reading `enabled`: POST /api/updates runs
-    // this check BEFORE processPhoto (afterwards the photo would match
-    // itself), so on a cold invocation this is the first face call of the
-    // request. Inside the try on purpose — a failed wake-up degrades to
-    // "no candidates", never a broken report.
+    // Wake the lazy matcher before reading `enabled`. In the current
+    // report-admission.js flow this runs LAST, after processPhoto already
+    // indexed (and woke) the matcher for the same photos — so this is
+    // usually a no-op by the time it gets here. It stays because this
+    // function is also called directly (tests, and any future caller that
+    // checks for duplicates without indexing first), and it must not assume
+    // someone else already woke the matcher. Inside the try on purpose — a
+    // failed wake-up degrades to "no candidates", never a broken report.
     if (matcher && usable.length && typeof matcher.ensureReady === 'function') {
       await matcher.ensureReady();
     }

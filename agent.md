@@ -81,20 +81,20 @@ persona** — ver [`CONTRIBUTING.md`](CONTRIBUTING.md) y [`CLAUDE.md`](CLAUDE.md
     les falta algo: cuando no falta nada no hace ni cuesta nada.
   - **`POST /api/reindex`**: reindexa además las fotos sin firma facial y
     manda los avisos pendientes; por eso esa sí exige la API key.
-- Colombia Te Busca: el formulario de reporte trae una casilla «Reportar también
-  en ColombiaTeBusca.com». Va SIN marcar por defecto — es el consentimiento de
-  la familia para publicar sus datos en un registro de terceros, y eso no se da
-  por omisión. Marcarla manda el reporte completo a `AVISO_EMAIL` (mismo buzón
-  que los avisos de rescatista) para que un operador llene su formulario a mano:
-  no tienen API. El correo es «best effort»: si falla, el reporte ya está vivo.
-  Marcarla también despliega —con CSS, sin JavaScript— las casillas que su
-  formulario exige y el nuestro no pedía: nombre de quien reporta, departamento,
-  municipio y lugar. **Todas opcionales**, y nada se rellena por nosotros: el
-  correo de relevo enumera las seis casillas aunque estén vacías, con el nombre
-  del campo entre paréntesis, para que el operador vea de un vistazo qué falta.
-  Solo el nombre de quien reporta se guarda (en `reporter`, que sale público
-  reducido por `maskReporter()`); el desglose de ubicación no tiene columna
-  porque su único consumidor es ese correo.
+- Colombia Te Busca: el formulario de reporte **ya no** ofrece «Reportar también
+  en ColombiaTeBusca.com». La casilla existió hasta agosto de 2026 y mandaba el
+  reporte a `AVISO_EMAIL` para que un operador llenara su formulario a mano —
+  ese registro no tiene forma programática de recibir un reporte—. El paso
+  humano nunca se cerró: 119 familias la marcaron y ninguna se publicó, así que
+  se retiró la casilla en vez de sostener una promesa que no se cumplía
+  ([#84](https://github.com/encontradosco/encontrados/issues/84)). Con ella se
+  fueron las casillas que solo servían a su formulario (nombre de quien
+  reporta, departamento, municipio y lugar), y con eso **un reporte web ya no
+  guarda `reporter`** — la columna sigue viva y la siguen llenando el API y los
+  agregadores, y `maskReporter()` la sigue publicando reducida. Nada se borró:
+  las solicitudes ya recibidas siguen en el buzón y en `contact_log` bajo el
+  canal `relevo`. Si su equipo abre una vía programática, la casilla vuelve;
+  la invitación a integrarse sigue al pie de cada página (`src/html.js`).
 - **Aviso de rescatista** (`matchContactBlock()` + `POST /rescate/aviso`): cuando
   la ficha que coincide no trae contacto de la familia —las importadas de
   registros públicos no lo traen— el rescatista deja su teléfono y dónde está la
@@ -158,7 +158,18 @@ hay framework de frontend ni paso de build: lo que se lee es lo que corre.
   sobre `people(id)` (misma retención que el resto del esquema). Desde PR 4
   tienen escritor: `insertMatchLog`/`insertContactLog` (escritura) y
   `matchLogCounts`/`contactLogCounts` (agregados, con `since` opcional para
-  ventanas — los usa el reporte por correo).
+  ventanas — los usa el reporte por correo). Desde #191 vive ahí también
+  `suppressed_external_ids`, la constancia de un borrado pedido por la persona
+  misma: guarda solo el **hash sha256** de la llave externa (nunca el valor
+  crudo — la llave la elige quien empuja, y puede traer un nombre) y la
+  fecha, y es **la única tabla que a propósito NO cuelga de `people(id)`** —
+  tiene que sobrevivir a la fila, porque su trabajo es impedir que la ficha
+  vuelva a entrar sola. La admisión y el borrado a solicitud serializan el
+  chequeo-y-escritura de una misma llave con un advisory lock **transaccional**
+  por `external_id` (`withExternalIdLock` en los dos adaptadores) — no de
+  sesión: bajo el endpoint pooled de Neon, que es el único que
+  `findPostgresUrl()` puede resolver, un lock de sesión y su unlock pueden
+  caer en backends distintos y quedar tomado para siempre.
   `contact_log` distingue además **quién** contactó: `source` es `'app'` (lo
   que mandó el software) u `'operador'` (lo que una persona del equipo mandó
   por fuera de la app y registró después). **Los tres agregados de
@@ -183,11 +194,12 @@ hay framework de frontend ni paso de build: lo que se lee es lo que corre.
 - `src/faces.js` — el proveedor de reconocimiento: Rekognition, o `nullMatcher`
   cuando no hay credenciales. Nunca tumba la app; degrada.
 - `src/facematch.js` — la orquestación encima del proveedor: `processPhoto`,
-  `identifyRescuedPerson` (el flujo del rescatista) y los dos barridos,
-  `backfillUnindexedPhotos` y `backfillPhotoDerivatives`. Cada camino que
-  produce una coincidencia real (`matchStoredPhoto`, `identifyRescuedPerson`)
-  y cada intento de aviso (`notifyFaceMatch`, `requestRescueConfirmation`,
-  `resolveRescueAnswer`) llama a `src/logbook.js` (#116, PR 4).
+  `identifyRescuedPerson` (el flujo del rescatista), `forgetPersonFaces` (el
+  borrado) y los dos barridos, `backfillUnindexedPhotos` y
+  `backfillPhotoDerivatives`. Cada camino que produce una coincidencia real
+  (`matchStoredPhoto`, `identifyRescuedPerson`) y cada intento de aviso
+  (`notifyFaceMatch`, `requestRescueConfirmation`, `resolveRescueAnswer`) llama
+  a `src/logbook.js` (#116, PR 4).
 - `src/thumbs.js` — el recorte cuadrado sobre el rostro, con `sharp`, en dos
   tamaños (240 para la lista, 480 para la ficha).
 - `src/html.js` — `layout()`, `esc()`, `facePlate()`, `statusBadge()` y los
@@ -308,6 +320,13 @@ Trampas al editar, todas con cicatriz:
   reintento es idempotente — y por eso la fila puede terminar en una persona
   distinta a la que devolvió `findOrCreatePerson`; hay que resolver el dueño
   real antes de notificar (está comentado en `POST /api/updates`).
+- Ese upsert es idempotente **mientras la fila exista**. Si la ficha se borró,
+  el `ON CONFLICT` no tiene con qué chocar y un re-envío insertaba de nuevo, con
+  la cara reindexada y sin dejar rastro. Por eso el ingreso consulta
+  `suppressed_external_ids` **antes de crear nada**, y vive en
+  `src/report-admission.js` y no en el handler del API: ahí protege a las tres
+  puertas y a la que se agregue mañana. El alcance es la misma llave y nada más
+  — un reporte sin `external_id` no se bloquea nunca (#191).
 
 ## Correr y probar
 
@@ -396,7 +415,7 @@ presencia y huella, nunca el valor).
 | `API_KEY` | Los `POST` del API quedan **abiertos** y `DELETE /api/people/:id` responde 503. Las lecturas de información de personas son públicas siempre, con o sin llave; la excepción es `GET /api/match-stats`, que es operativa y dispara búsquedas en Rekognition, así que pide llave. |
 | `SENDGRID_API_KEY` | No sale ningún correo: ni verificación de suscripción, ni alertas, ni avisos. Se le hace `trim()` porque un salto de línea pegado sin querer devuelve 401. |
 | `EMAIL_FROM` | `a@torrenegra.com`. Tiene que ser un remitente verificado en SendGrid o SendGrid responde 403. |
-| `AVISO_EMAIL` | El aviso del rescatista y el relevo a Colombia Te Busca no se mandan. Falla en silencio: quien reportó ve su página de éxito igual. Y con `NOTIFY_MODE=relay` (el modo por omisión) tampoco sale ningún aviso a terceros: quedan en el log como `[notify:relevo] PERDIDO`. |
+| `AVISO_EMAIL` | El aviso del rescatista no se manda. Falla en silencio: quien reportó ve su página de éxito igual. Y con `NOTIFY_MODE=relay` (el modo por omisión) tampoco sale ningún aviso a terceros: quedan en el log como `[notify:relevo] PERDIDO`. |
 | `NOTIFY_MODE` | `relay`. Los avisos a terceros se retienen y se relevan a `AVISO_EMAIL`; `direct` los manda derecho al destinatario. Cualquier otro valor cae a `relay`: el interruptor falla cerrado. |
 | `GITHUB_TOKEN` | `/ideas` y `/bug` siguen funcionando pero caen a correo a `AVISO_EMAIL`. El síntoma es un tracker vacío, que se parece mucho a que nadie escribió. |
 | `GITHUB_REPO` | `encontradosco/encontrados`. |
@@ -411,6 +430,9 @@ presencia y huella, nunca el valor).
 | `ADMIN_SESSION_SECRET` | Mismo 503 que arriba — firma la cookie de sesión propia de `/admin` (nada que ver con el client secret de Vercel). Rotarla cierra todas las sesiones activas de golpe. |
 | `ADMIN_EMAILS` | `/admin` queda **cerrada para todos**, incluso para quien complete un login real y válido en Vercel — otra que falla cerrado, no abierto. Correos separados por coma, nunca hardcodeados (repo público). |
 | `PUBLIC_STATS` | `GET /admin/stats` sigue **detrás de sesión** (el default). Solo el valor exacto `1` la abre sin sesión — ventana temporal mientras el auth de Vercel termina de configurarse (#116, PR 6). Cerrarla es borrar la variable, no un PR. El drill-down por ID (`/api/admin/*`) nunca lee esta variable. |
+| `PET_MATCH_API_URL` | Matching de mascotas apagado; las fotos se guardan igual. El servicio (pet-matcher) vive en un repo separado, no en este monorepo — [`github.com/encontradosco/pet-matcher`](https://github.com/encontradosco/pet-matcher) (privado). Ya desplegado en Fly.io (`pet-matcher.fly.dev`, org `encontrados`, cuenta de pago — siempre prendido, sin el límite de 5 minutos del trial). En Vercel, esta variable todavía no está puesta. |
+| `PET_MATCH_THRESHOLD` | `80`. Sin calibrar todavía con fotos reales — ver el documento de diseño. |
+| `PET_MATCH_SHARED_SECRET` | No se manda el header `x-pet-matcher-secret` en `/embed`; si `PET_MATCH_API_URL` sí está puesta, el servicio de mascotas responde 503 (falla cerrado del lado de pet-matcher) y el matching queda igual de apagado que sin `PET_MATCH_API_URL`. Mismo patrón que `WHATSAPP_RELAY_SECRET`: se genera con `openssl rand -hex 32` y tiene que ser idéntica en los dos lados. |
 
 `SENDGRID_API_BASE`, `GITHUB_API_BASE`, `WHATSAPP_API_BASE`,
 `VERCEL_OAUTH_API_BASE` y `VERCEL_OAUTH_AUTHORIZE_URL` existen solo para que
@@ -445,10 +467,34 @@ alguien, sí:
   [`docs/contactos-fuera-de-la-app.md`](docs/contactos-fuera-de-la-app.md).
 - `POST /api/maintenance/purge-test-data` — **sin llave**, y es seguro sin ella
   porque solo puede tocar una lista fija de nombres de prueba que está en el
-  código. Cualquier otra cosa la ignora.
+  código. Cualquier otra cosa la ignora. Retira también las firmas faciales de
+  lo que borra, con el mismo orden que el DELETE del ARCO; el radio no cambia,
+  y cuando no hay nada que purgar no gasta ni una llamada a Rekognition.
 - `DELETE /api/people/:id` — **con llave**, y deshabilitado (503) si no hay
-  `API_KEY`. Cumple el borrado que promete la política de privacidad. Ojo: la
-  fila se va en cascada, pero el rostro **sigue en la colección de Rekognition**.
+  `API_KEY`. Cumple el borrado que promete la política de privacidad, y se lleva
+  las dos copias del rastro: la fila (en cascada) y las firmas faciales de sus
+  fotos, que viven en la colección de Rekognition y a las que la cascada no
+  llega. **El orden importa y está elegido:** los `face_id` se leen antes del
+  borrado (después la cascada ya se los llevó) pero las firmas se retiran
+  *después*, ya sabiendo que la ficha se fue — al revés, un fallo de base en el
+  medio dejaba una persona listada como desaparecida y permanentemente
+  invisible para el matcher, que es la huérfana que sí le cuesta algo a
+  alguien. Es **best effort a propósito**: un Rekognition caído no puede
+  bloquear un borrado ya prometido, así que la fila se va igual y la respuesta
+  trae `faces.unconfirmed` con lo que quedó, más `faces.face_matching` en
+  `false` si el matcher estaba apagado. Reintentar el DELETE ya no sirve —la
+  persona no existe y sus ids se fueron con ella—, así que esa respuesta y la
+  línea `[facematch:olvido]` del log son el único rastro para limpiarlo a mano.
+  Desde #191 este borrado además **deja constancia**: en la misma transacción
+  del adaptador escribe en `suppressed_external_ids` el **hash sha256** de las
+  llaves externas con las que esa ficha podría volver a entrar (nunca la
+  llave cruda), y la respuesta trae cuántas fueron en `suppressed_external_ids`
+  (el conteo, no las llaves). Sin eso el borrado duraba hasta el siguiente
+  re-envío del agregador.
+  `POST /api/maintenance/purge-test-data` usa el mismo orden y también retira
+  firmas, pero **no suprime llaves**, y esa es la única diferencia entre los dos
+  caminos de borrado: la supresión es constancia de que alguien ejerció un
+  derecho, y un registro de prueba lo sembramos nosotros.
 - `GET /api/match-stats` — **con llave.** Recomputa el cruce facial histórico
   buscando por `face_id` contra la colección (las firmas sobreviven aunque la
   foto del rescatista se haya borrado) y devuelve solo cifras agregadas: fotos

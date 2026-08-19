@@ -523,6 +523,85 @@ function buildStatsPageHtml({ generatedAt, counts, activity, matcherStatus, extr
     return [CHANNEL_LABEL[ch], c.fallido.display, c.rechazado.display, c.enviado.display];
   });
 
+  // Qué SABEMOS de cada coincidencia, y qué solo podemos acotar.
+  //
+  // Esta sección no trae ninguna cifra nueva: reparte las que ya están arriba
+  // en esta misma página, con un criterio distinto. La razón de existir es que
+  // el panel podía leerse como si "225 coincidencias" fueran 225 sucesos con
+  // desenlace, y no lo son — la única coincidencia cuyo desenlace esta base
+  // puede PROBAR es la que se mostró en una pantalla (superficie rescate).
+  // Todo lo demás se acota, no se sabe, y acá se dice con esas palabras.
+  //
+  // Las dos particiones son por ejes DISTINTOS y se cruzan entre sí (una
+  // coincidencia de rescate puede además ser del tramo 100%). Por eso se
+  // presentan como dos lentes sobre el mismo total y NUNCA se suman ni se
+  // restan entre ellas: hacerlo fabricaría un número que la base no sostiene,
+  // que es exactamente el error que este panel viene evitando desde #132.
+  // Mismo `matchPivot` que alimenta la tarjeta de arriba: una sola fuente de
+  // verdad para el total y por superficie, agrupado acá en otras dos casillas.
+  const screenSuppression = suppressBreakdown(
+    [
+      { key: 'enPantalla', value: matchPivot.rescate || 0 },
+      { key: 'sinPantalla', value: (matchPivot.report || 0) + (matchPivot.api || 0) }
+    ],
+    matchPivot.total || 0
+  );
+  const screenByKey = Object.fromEntries(screenSuppression.cells.map((c) => [c.key, c]));
+
+  const knownRows = [
+    [
+      'Se mostraron en una pantalla',
+      screenByKey.enPantalla.display,
+      'Superficie <code>/rescate</code>: un rescatista vio a quién tenía enfrente y cómo contactar a su familia. <strong>Es el único desenlace que esta base puede probar.</strong>'
+    ],
+    [
+      'No tuvieron pantalla',
+      screenByKey.sinPantalla.display,
+      'Superficie reporte o API: no hay un paso intermedio que alguien mire. Dispararon el camino de aviso, y ese aviso ya no se puede atar de vuelta a esta coincidencia.'
+    ],
+    [
+      'Casi con seguridad son la misma foto dos veces',
+      tier100.display,
+      'Similitud 100 %: la misma firma facial. Alguien usó el formulario equivocado. <strong>No es un encuentro: es un dato para corregir.</strong>'
+    ]
+  ];
+
+  const unknownRows = [
+    [
+      'Cuál aviso salió de cuál coincidencia',
+      '<code>contact_log</code> no guarda <code>match_id</code> — no hay ninguna columna que ate las dos bitácoras.'
+    ],
+    [
+      'Si el aviso que llegó al buzón del equipo se atendió',
+      'Ese estado vive en las etiquetas del correo del equipo, un sistema aparte de esta base.'
+    ],
+    [
+      'Si una coincidencia era verdadera o un falso positivo',
+      'Nadie registra un veredicto humano sobre una coincidencia. El porcentaje de similitud es una medida de parecido, no un fallo sobre si es la persona.'
+    ],
+    [
+      'Si hubo reencuentro',
+      'La app no puede verlo. Nadie vuelve a la web a contar que encontró a su familiar.'
+    ]
+  ];
+
+  const matchKnowledgeSection = `<div class="stats-section">
+    ${section('Qué sabemos de cada coincidencia — y qué pudo haber pasado')}
+    ${instrumentedSinceNote(activity.instrumentedSince)}
+    <p class="stats-note">Una coincidencia significa que el reconocimiento facial encontró un parecido por encima de su umbral. <strong>No prueba que sean la misma persona</strong>, y es todo lo que el sistema sabe por sí solo. Lo que pasó después casi nunca queda escrito acá, así que estas cifras separan lo comprobable de lo que solo se puede acotar — y no se suman entre sí: son dos formas distintas de mirar las mismas ${screenSuppression.total.display} coincidencias.</p>
+    ${table(['Lo que sí sabemos', 'Cuántas', 'Cómo lo sabemos'], knownRows)}
+    ${table(['Lo que no sabemos', 'Por qué'], unknownRows)}
+    <p class="stats-note"><strong>Entonces, ¿qué pudo haber pasado con una coincidencia que no podemos trazar?</strong> Una de estas cinco cosas. Con los datos de hoy, las tres últimas son <strong>indistinguibles entre sí</strong>:</p>
+    <ol class="stats-note">
+      <li><strong>Era un duplicado y no había nada que hacer.</strong> Es lo más probable en el tramo del 100 % (${tier100.display} coincidencias).</li>
+      <li><strong>Era real y disparó un aviso que llegó al buzón del equipo</strong>, donde queda a la espera de que una persona lo revise. Si esa revisión ocurrió, y con qué desenlace, no se puede ver desde acá. (En total han llegado ${outcomeByKey.relevo.display} avisos a ese buzón, sumando todas las coincidencias — ese número es contexto global y no se puede repartir entre ellas.)</li>
+      <li><strong>Era real pero no había a quién avisar</strong>, porque el rescatista no dejó contacto — le pasó a ${rescueContactByKey.sinContacto.display} de ${rescueContactSuppression.total.display} consultas.</li>
+      <li><strong>Era un falso positivo</strong> y el aviso fue ruido.</li>
+      <li><strong>Era real, se avisó, y nadie alcanzó a actuar.</strong></li>
+    </ol>
+    <p class="stats-note">Para poder distinguirlas harían falta dos cosas que hoy no existen: una columna que ate el aviso a la coincidencia que lo originó, y un veredicto humano por coincidencia. Las dos son cambios de esquema — <strong>una decisión de una persona, no de este panel</strong>.</p>
+  </div>`;
+
   const matchOutcomeSection = `<div class="stats-section">
     ${section('Qué pasó después de cada coincidencia')}
     <p class="stats-note">Ni la bitácora de coincidencias ni la de avisos guardan qué aviso salió de cuál coincidencia puntual — no hay ninguna columna que las ate. Por eso esta sección responde en dos piezas medibles, no en un solo número por coincidencia.</p>
@@ -628,6 +707,7 @@ function buildStatsPageHtml({ generatedAt, counts, activity, matcherStatus, extr
     ${channelSection}
     ${outreachSection}
     ${similaritySection}
+    ${matchKnowledgeSection}
     ${matchOutcomeSection}
     ${reunionSection}
     ${funnelPlaceholder}

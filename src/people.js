@@ -2,6 +2,7 @@
 // All fuzzy-matching decisions live here so both backends behave identically.
 const crypto = require('crypto');
 const { normalize, phoneticKey, titleCaseName, matchScore } = require('./names');
+const { logMerge } = require('./logbook');
 
 const STATUSES = ['safe', 'injured', 'missing', 'deceased', 'unknown'];
 // 'aggregator': updates pushed by an external data aggregator, distinct from
@@ -54,14 +55,19 @@ function createStore(adapter) {
     const exact = await adapter.exactByNormalized(norm);
     if (exact) return { person: isoRow(exact), created: false };
     const [best] = await searchPeople(fullName, { limit: 1, minScore: 0.85 });
-    if (best) return { person: await getPerson(best.id), created: false };
+    if (best) {
+      // #150: solo la fusión difusa (por score) se registra — un match exacto
+      // sobre el mismo normalized_name no es una decisión discutible.
+      await logMerge(adapter, { personId: best.id, submittedName: fullName, score: best.score });
+      return { person: await getPerson(best.id), created: false };
+    }
     // Only new people are re-cased: an existing row keeps whatever it has, so
     // a correction made by hand isn't undone by the next report.
     const person = await adapter.insertPerson(titleCaseName(fullName), norm, phoneticKey(fullName));
     return { person: isoRow(person), created: true };
   }
 
-  async function addUpdate(personId, { status, message, location, lat, lng, source, reporter, contact, externalId }) {
+  async function addUpdate(personId, { status, message, location, lat, lng, source, sourceUrl, reporter, contact, externalId }) {
     if (!STATUSES.includes(status)) throw new Error(`Invalid status: ${status}`);
     return isoRow(
       await adapter.insertUpdate(personId, {
@@ -71,6 +77,7 @@ function createStore(adapter) {
         lat,
         lng,
         source,
+        sourceUrl,
         reporter,
         contact,
         externalId
@@ -256,6 +263,10 @@ function createStore(adapter) {
     return adapter.photosByFaceIds(faceIds);
   }
 
+  async function photoFaceIdForContent(personId, kind, content) {
+    return adapter.photoFaceIdForContent(personId, kind, content);
+  }
+
   async function indexedPhotos() {
     return adapter.indexedPhotos();
   }
@@ -272,9 +283,37 @@ function createStore(adapter) {
     return adapter.counts();
   }
 
+  // Face signatures of every photo anchored to this person — the report photos
+  // AND any rescuer 'query' rows attached to a subscription on them. Read this
+  // before deletePerson: the cascade takes the photo rows with it.
+  async function faceIdsForPerson(personId) {
+    return adapter.faceIdsForPerson(personId);
+  }
+
   // Deletes the person and, by cascade, their reports, subscriptions and photos.
-  async function deletePerson(id) {
-    return isoRow(await adapter.deletePerson(id));
+  //
+  // `options` viaja tal cual al adaptador. El único que existe hoy es
+  // `atSubjectRequest`, que marca el borrado del ARCO — el que además deja
+  // constancia de las llaves externas con las que la ficha podría volver a
+  // entrar (#191). Sin esa constancia el borrado se deshace con un re-envío.
+  async function deletePerson(id, options) {
+    return isoRow(await adapter.deletePerson(id, options));
+  }
+
+  // ¿Esta llave externa es de una ficha que se borró a solicitud de su titular?
+  // La consulta el ingreso ANTES de crear (src/report-admission.js), que es el
+  // único lugar donde alcanza a impedir que la ficha vuelva.
+  async function isExternalIdSuppressed(externalId) {
+    return adapter.isExternalIdSuppressed(externalId);
+  }
+
+  // Serializa, por external_id, el chequeo-y-escritura de una admisión contra
+  // la ventana en la que `deletePerson({ atSubjectRequest: true })` suprime esa
+  // misma llave (#192). Pass-through directo: cada adaptador implementa el
+  // lock con lo que tiene — advisory lock de sesión en Postgres, mutex en
+  // memoria en SQLite — pero el contrato es el mismo para quien lo llama.
+  async function withExternalIdLock(externalId, fn) {
+    return adapter.withExternalIdLock(externalId, fn);
   }
 
   // Bitácora de coincidencias y envíos (#116, PR 4). Pass-through directo:
@@ -285,6 +324,10 @@ function createStore(adapter) {
 
   async function insertContactLog(fields) {
     return adapter.insertContactLog(fields);
+  }
+
+  async function insertMergeLog(fields) {
+    return adapter.insertMergeLog(fields);
   }
 
   async function matchLogCounts(opts) {
@@ -365,14 +408,19 @@ function createStore(adapter) {
     reportPhotoByPerson,
     clearPhotoContent,
     photosByFaceIds,
+    photoFaceIdForContent,
     indexedPhotos,
     countQueryPhotos,
     photosMissingFaceId,
     photosMissingDerivatives,
     counts,
+    faceIdsForPerson,
     deletePerson,
+    isExternalIdSuppressed,
+    withExternalIdLock,
     insertMatchLog,
     insertContactLog,
+    insertMergeLog,
     matchLogCounts,
     contactLogCounts,
     matchLogDaily,

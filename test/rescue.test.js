@@ -134,6 +134,72 @@ test('no match tells the rescuer nobody is looking yet', async (t) => {
   fd.set('photo', new File([await photoBytes('nadie')], 'r.jpg', { type: 'image/jpeg' }));
   const html = await (await fetch(`${base}/rescate`, { method: 'POST', body: fd })).text();
   assert.match(html, /Nadie ha reportado a esta persona/);
+
+  // …y no es un callejón sin salida. Quien llega acá buscando a alguien —el
+  // caso más común de esta pantalla— tiene el formulario de reporte enfrente.
+  // La acción va DETRÁS de la pregunta, no suelta: un rescatista con una
+  // persona sin identificar al lado no debe reportarla como desaparecida, y si
+  // responde «no» no llega a ver el botón.
+  assert.match(html, /¿Eres tú quien está buscando a esta persona\?/);
+  assert.match(html, /<summary class="big-btn secondary">🙋 Sí, la estoy buscando<\/summary>/);
+  assert.match(html, /class="big-btn search" href="\/report">📢 Reportar a la persona que busco/);
+  // Y la instrucción para el rescatista, que hasta acá no existía en ninguna
+  // parte del sitio.
+  assert.match(html, /Si la tienes contigo y no sabes quién es, no la reportes como desaparecida/);
+});
+
+// El pie de estas pantallas NO puede llevar la salida a reportar: sale también
+// en «Aviso enviado» y en la pantalla con coincidencia, o sea justo donde la
+// persona acaba de decirnos que tiene a alguien consigo. Un botón de reportar
+// ahí, sin pregunta delante, es la ficha equivocada como última cosa que se ve.
+//
+// Este test existe porque la versión anterior mentía: afirmaba sobre un string
+// que salía TANTO del pie como del bloque de la pregunta, así que quitarlo del
+// pie lo dejaba verde igual. Acá se recorta el pie y se mira solo ahí.
+// Solo el contenido de la página: el nav global trae su propio «Reporta
+// desaparecido» (src/html.js), que es la cuarta entrada del sitio y no tiene
+// nada que ver con estas pantallas. Contar enlaces sin recortar el chrome hace
+// que cualquier aserción sobre /report pase o falle por la razón equivocada.
+function cuerpo(html) {
+  const a = html.indexOf('<main');
+  const b = html.indexOf('</main>');
+  return a === -1 || b === -1 ? html : html.slice(a, b);
+}
+
+const enlacesAReportar = (html) => (cuerpo(html).match(/href="\/report[?"]/g) || []).length;
+
+test('el pie del flujo del rescatista no ofrece reportar, y el bloque con la pregunta sí', async (t) => {
+  const matcher = fakeMatcher();
+  const { server, base } = await startApp(matcher);
+  t.after(() => server.close());
+
+  const conFoto = async () => {
+    const fd = new FormData();
+    fd.set('photo', new File([await photoBytes('nadie')], 'r.jpg', { type: 'image/jpeg' }));
+    return (await fetch(`${base}/rescate`, { method: 'POST', body: fd })).text();
+  };
+
+  const sinMatch = await conFoto();
+  assert.match(sinMatch, /href="\/rescate">🔍 Consultar otra persona/, 'el pie sí tiene su única salida');
+  // UNO solo, y es el que está detrás de la pregunta. Si alguien vuelve a
+  // ponerlo en el pie, este número pasa a 2 y el test cae — que es justamente
+  // lo que la versión anterior de este test no sabía distinguir.
+  assert.equal(enlacesAReportar(sinMatch), 1, 'un único enlace a reportar en la página, el de detrás de la pregunta');
+  const trasLaPregunta = cuerpo(sinMatch).slice(cuerpo(sinMatch).indexOf('aviso-si-cuerpo'));
+  assert.match(trasLaPregunta, /href="\/report">📢 Reportar a la persona que busco/, 'y está dentro del bloque desplegable');
+
+  // Con Rekognition caído tampoco se queda sin salida: hasta acá esa pantalla
+  // era una frase de error y nada más. Se comprueba primero que estamos EN esa
+  // rama (`available: false`) y no en la de «nadie la ha reportado», que trae el
+  // mismo bloque y taparía el fallo.
+  matcher.searchByImage = async () => {
+    throw new Error('rekognition caído');
+  };
+  const caido = await conFoto();
+  assert.match(caido, /El reconocimiento facial no está disponible/, 'esta es la rama del matcher caído');
+  assert.doesNotMatch(caido, /Nadie ha reportado a esta persona/);
+  assert.match(caido, /¿Eres tú quien está buscando a esta persona\?/);
+  assert.match(caido, /href="\/report">📢 Reportar a la persona que busco/);
 });
 
 // NOTIFY_MODE=direct: la cadena completa sin relevo, tal como quedaba antes.
@@ -561,10 +627,20 @@ test('a match without family contact offers the aviso form and stores the aviso'
   assert.doesNotMatch(html, /Sin datos de contacto/);
   assert.match(html, /action="\/rescate\/aviso"/, 'debe ofrecer el formulario de aviso, no un callejón sin salida');
 
+  // Antes de pedir nada, la pregunta que separa a un rescatista de una familia
+  // que llegó acá por equivocación — y la salida para la segunda.
+  assert.match(html, /¿Tienes a Mariana Prueba Torres contigo en este momento\?/);
+  assert.match(html, /No — yo soy quien la está buscando/);
+  assert.match(
+    html,
+    /href="\/report\?name=Mariana%20Prueba%20Torres&desde=\d+"/,
+    'quien la busca sale de acá al formulario de reporte, con el nombre ya puesto'
+  );
+
   // La pregunta del lugar se estaba leyendo al revés — llegaban respuestas con
-  // dónde está QUIEN AVISA. Tiene que quedar explícito de quién se pregunta, y
-  // con un ejemplo del detalle que sirve.
-  assert.match(html, /¿Dónde está ahora esa persona\?/);
+  // dónde está QUIEN AVISA. El nombre va dentro de la pregunta, que es lo que
+  // «esa persona» no lograba, y con un ejemplo del detalle que sirve.
+  assert.match(html, /¿En qué lugar está Mariana Prueba Torres en este momento\?/);
   assert.match(html, /no dónde estás tú/);
   assert.match(html, /Hospital San Jorge/, 'un ejemplo dice más que la etiqueta');
 
@@ -578,7 +654,17 @@ test('a match without family contact offers the aviso form and stores the aviso'
     })
   });
   assert.equal(res.status, 200);
-  assert.match(await res.text(), /Aviso enviado/);
+  const avisoEnviado = await res.text();
+  assert.match(avisoEnviado, /Aviso enviado/);
+
+  // Esta pantalla la ve alguien que ACABA de decirnos que tiene a una persona
+  // consigo. Es el peor sitio posible para un botón de «reporta un
+  // desaparecido»: sería la última cosa que ve, sin ninguna pregunta delante, y
+  // lo que crearía es una ficha de desaparecida para alguien que está a salvo,
+  // con su propio teléfono en el lugar del de la familia.
+  assert.match(avisoEnviado, /href="\/rescate">🔍 Consultar otra persona/, 'su única salida');
+  assert.equal(enlacesAReportar(avisoEnviado), 0, 'ni un solo enlace a reportar en el cuerpo de esta pantalla');
+  assert.doesNotMatch(avisoEnviado, /¿Eres tú quien está buscando a esta persona\?/);
 
   // On the timeline, without delisting, with the whereabouts kept out of the
   // public fields (they travel in `contact`, which updateCard never renders).
@@ -603,12 +689,105 @@ test('a match without family contact offers the aviso form and stores the aviso'
   assert.ok(relevo, 'el aviso de rescatista debía quedar registrado como relevo al operador');
   assert.equal(relevo.result, 'enviado', 'con AVISO_EMAIL configurada y SendGrid respondiendo bien, el relevo cuenta como enviado');
 
-  // A SECOND rescuer matching the same person now sees the first rescuer's
-  // contact, labelled as what it is — a rescuer, not the family.
+  // #120: al SIGUIENTE que coincida con esa cara no se le muestra nada de
+  // quien avisó antes. Ni el teléfono ni el lugar — los dos viajan juntos en
+  // `contact`, así que basta con que uno se filtre para entregar el otro.
   const fd2 = new FormData();
   fd2.set('photo', new File([await photoBytes('mariana')], 'r2.jpg', { type: 'image/jpeg' }));
   const html2 = await (await fetch(`${base}/rescate`, { method: 'POST', body: fd2 })).text();
-  assert.match(html2, /Contacto del rescatista que la tiene/);
+  assert.doesNotMatch(html2, /300 999 8877/, 'el teléfono de quien avisó no puede salir en la pantalla de nadie más');
+  assert.doesNotMatch(html2, /Albergue San José/, 'ni el sitio donde dijo que estaba la persona');
+  assert.doesNotMatch(html2, /Contacto del rescatista que la tiene/);
+  // Y sigue pudiendo dejar el suyo: la ficha no se queda sin salida.
+  assert.match(html2, /action="\/rescate\/aviso"/);
+  assert.match(html2, /Otra persona ya nos avisó por esta misma ficha/);
+});
+
+// La otra mitad de #120: lo de arriba prueba el aviso que acaba de entrar en
+// esa misma corrida. Este prueba el caso que de verdad hay en producción — un
+// aviso YA guardado, de antes del arreglo. El filtro vive en el momento de
+// pintar justamente para cubrirlo sin tocar la base.
+test('un aviso ya guardado tampoco expone a quien lo dejó', async (t) => {
+  const matcher = fakeMatcher();
+  const { server, base, store } = await startApp(matcher);
+  t.after(() => server.close());
+
+  const { person } = await store.findOrCreatePerson('Rosalba Prueba Ariza');
+  const update = await store.addUpdate(person.id, { status: 'missing', source: 'aggregator' });
+  const photo = await store.addPhoto({
+    personId: person.id,
+    kind: 'report',
+    updateId: update.id,
+    content: await photoBytes('rosalba'),
+    contentType: 'image/jpeg'
+  });
+  const { faceId } = await matcher.indexFace(await photoBytes('rosalba'));
+  await store.setPhotoFaceId(photo.id, faceId);
+
+  // El aviso escrito directo, como los que ya están en la base.
+  await store.addUpdate(person.id, {
+    status: 'missing',
+    source: 'rescate',
+    contact: '311 555 0102 · la persona puede ser localizada en: Calle Falsa 123, Pereira'
+  });
+
+  const fd = new FormData();
+  fd.set('photo', new File([await photoBytes('rosalba')], 'r.jpg', { type: 'image/jpeg' }));
+  const html = await (await fetch(`${base}/rescate`, { method: 'POST', body: fd })).text();
+
+  assert.match(html, /Rosalba Prueba Ariza/, 'la coincidencia sigue saliendo');
+  assert.doesNotMatch(html, /311 555 0102/);
+  assert.doesNotMatch(html, /Calle Falsa 123/);
+});
+
+// La otra cara del filtro, y la que puede costar una llamada: si la familia YA
+// había dejado su teléfono en un reporte y encima de eso entra un aviso, el
+// aviso queda como el update más reciente. Filtrar solo ese —mirando nada más
+// que el último— tapaba también el contacto de la familia, y entonces nadie
+// llama. Se muestra el contacto más reciente que de verdad sea de quien la
+// busca.
+test('un aviso encima no puede tapar el teléfono que la familia ya había dejado', async (t) => {
+  const matcher = fakeMatcher();
+  const { server, base, store } = await startApp(matcher);
+  t.after(() => server.close());
+
+  // Reporte de la familia, con su contacto, y su foto indexada.
+  const { person } = await store.findOrCreatePerson('Amparo Prueba Nieto');
+  const reporte = await store.addUpdate(person.id, {
+    status: 'missing',
+    source: 'web',
+    location: 'Quibdó',
+    contact: '300 111 2233'
+  });
+  const photo = await store.addPhoto({
+    personId: person.id,
+    kind: 'report',
+    updateId: reporte.id,
+    content: await photoBytes('amparo'),
+    contentType: 'image/jpeg'
+  });
+  const { faceId } = await matcher.indexFace(await photoBytes('amparo'));
+  await store.setPhotoFaceId(photo.id, faceId);
+
+  // Y DESPUÉS entra un aviso de un tercero, que pasa a ser el más reciente.
+  await store.addUpdate(person.id, {
+    status: 'missing',
+    source: 'rescate',
+    contact: '322 444 5566 · la persona puede ser localizada en: Calle Falsa 456'
+  });
+  const latest = await store.getLatestUpdate(person.id);
+  assert.equal(latest.source, 'rescate', 'el aviso tiene que ser el update más reciente para que este test pruebe algo');
+
+  const fd = new FormData();
+  fd.set('photo', new File([await photoBytes('amparo')], 'r.jpg', { type: 'image/jpeg' }));
+  const html = await (await fetch(`${base}/rescate`, { method: 'POST', body: fd })).text();
+
+  assert.match(html, /Contacta a quien la busca:<\/strong> 300 111 2233/, 'el teléfono de la familia sí se muestra');
+  assert.doesNotMatch(html, /322 444 5566/, 'el del tercero que avisó, no');
+  assert.doesNotMatch(html, /Calle Falsa 456/);
+  // Y con el contacto de la familia en pantalla, el formulario de aviso no
+  // tiene por qué aparecer: hay a quién llamar.
+  assert.doesNotMatch(html, /action="\/rescate\/aviso"/);
 });
 
 // Rekognition can look at a real photo and find no face (group shots from
@@ -635,4 +814,28 @@ test('a photo with no detectable face is marked and leaves the backfill loop', a
 
   const second = await backfillPhotoDerivatives(store, matcher, 10);
   assert.equal(second.processed, 0, 'la segunda corrida no debe reprocesarla');
+});
+
+// #151: el rescatista que tiene a la persona al lado abre la cámara sin salir
+// de la app. Con JS, dos botones manejan un solo input; sin JS queda el input
+// nativo. El input sigue siendo UNO — /rescate usa upload.single('photo').
+test('#151: /rescate ofrece tomar foto o elegir de galería sobre un solo input', async (t) => {
+  const { server, base } = await startApp();
+  t.after(() => server.close());
+
+  const html = await (await fetch(`${base}/rescate`)).text();
+
+  // Los dos botones que ve el rescatista.
+  assert.match(html, /data-photo-camera[^>]*>📷 Tomar foto/);
+  assert.match(html, /data-photo-gallery[^>]*>🖼️ Elegir de galería/);
+
+  // «Tomar foto» abre la cámara directamente vía capture.
+  assert.match(html, /setAttribute\('capture', 'environment'\)/);
+
+  // Sin JS queda el input nativo, que ya ofrece cámara y galería.
+  assert.match(html, /data-photo-native/);
+
+  // Un solo input de foto: /rescate usa upload.single('photo').
+  const fileInputs = html.match(/<input[^>]*type="file"[^>]*name="photo"/g) || [];
+  assert.equal(fileInputs.length, 1, 'debe haber exactamente un input de foto');
 });
