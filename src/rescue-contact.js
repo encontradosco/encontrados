@@ -78,7 +78,7 @@ function matchContactBlock(m) {
     <div class="aviso-si-cuerpo">
       <p>Déjanos tu número y dónde está ${name} ahora: nosotros le hacemos llegar el aviso a quien la busca.</p>
       <form class="stack compact" method="post" action="/rescate/aviso">
-        <input type="hidden" name="person_id" value="${m.person.id}">
+        <input type="hidden" name="person_id" value="${esc(m.person.id)}">
         <label class="field-label"><span>Tu teléfono (WhatsApp si tienes) *</span>
           <input name="phone" required maxlength="60" placeholder="Ej. 300 123 4567" autocomplete="tel" inputmode="tel"></label>
         <label class="field-label"><span>¿En qué lugar está ${name} en este momento? *</span>
@@ -88,7 +88,7 @@ function matchContactBlock(m) {
       </form>
     </div>
   </details>
-  <a class="big-btn secondary" href="/report?name=${encodeURIComponent(m.person.full_name)}&desde=${m.person.id}">🙋 No — yo soy quien la está buscando</a>
+  <a class="big-btn secondary" href="${esc(`/report?name=${encodeURIComponent(m.person.full_name)}&desde=${encodeURIComponent(m.person.id)}`)}">🙋 No — yo soy quien la está buscando</a>
   <p class="subtle">Si la estás buscando, agrega tu teléfono al reporte: así el rescatista que la encuentre te llama directo, sin que nadie más tenga que intermediar.</p>
 </div>`;
 }
