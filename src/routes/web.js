@@ -33,10 +33,14 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 // se puede quedar trancado en una validación de formato — el resto del
 // formulario sigue funcionando igual.
 const PHONE_DEFAULT_COUNTRY = '57';
-// Digits, spaces, and an optional leading '+' — nothing else. Used to reject
-// a value with a stray letter or symbol before normalizePhone() strips it
-// out and silently accepts what's left.
-const PHONE_RAW_RE = /^\+?[\d ]+$/;
+// Lo que una persona escribe cuando escribe un celular: dígitos y los
+// separadores con los que se agrupan acá — espacios, guiones, paréntesis del
+// indicativo y puntos — con un '+' opcional adelante. Todo eso lo limpia
+// normalizePhone() de todos modos, así que rechazarlo sería rechazar una forma
+// correcta de escribir el número. Lo que sí se rechaza es lo que no es un
+// teléfono: letras y cualquier otro símbolo, que normalizePhone() borraría en
+// silencio dejando pasar un valor que la persona nunca quiso ("300a1234567").
+const PHONE_RAW_RE = /^\+?[\d\s().-]+$/;
 function normalizePhone(raw) {
   let digits = String(raw || '')
     .replace(/\D/g, '')
