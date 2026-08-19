@@ -42,7 +42,13 @@ function pr(overrides = {}) {
     reviews: [],
     checkRuns: [
       { name: 'npm test', status: 'completed', conclusion: 'success', started_at: '2026-08-15T10:00:00Z' },
-      { name: 'CodeRabbit', status: 'completed', conclusion: 'success', started_at: '2026-08-15T10:00:00Z' },
+      {
+        name: 'CodeRabbit',
+        status: 'completed',
+        conclusion: 'success',
+        started_at: '2026-08-15T10:00:00Z',
+        description: 'Review completed',
+      },
     ],
     ...overrides,
   };
@@ -177,6 +183,68 @@ test('el gate acepta a CodeRabbit, que llega como commit status y no como check 
   assert.match(sinCodeRabbit.reason, /CodeRabbit/);
 });
 
+// ── La lista blanca de CodeRabbit (issue #199) ──────────────────────────────
+//
+// `conclusion: 'success'` no basta para este check puntual: CodeRabbit lo
+// reporta igual cuando revisó y no encontró nada que cuando NO revisó —cupo
+// agotado, PR en draft, y lo que aparezca después—. La única defensa es exigir
+// que `description` AFIRME la revisión, en vez de descartar las causas de
+// fallo que ya conocemos. Por eso los cuatro casos de abajo: el sano, las dos
+// causas medidas en PRs reales el mismo día, y una tercera inventada — esa
+// última es la que de verdad separa una lista blanca de una negra. Si solo se
+// probaran las dos causas conocidas, un refactor que las volviera un
+// blacklist pasaría estas mismas pruebas y el hueco del issue seguiría
+// abierto.
+function coderabbitStatus(description) {
+  return {
+    name: 'CodeRabbit',
+    status: 'completed',
+    conclusion: 'success',
+    started_at: '2026-08-15T10:00:00Z',
+    description,
+  };
+}
+const NPM_TEST_OK = {
+  name: 'npm test',
+  status: 'completed',
+  conclusion: 'success',
+  started_at: '2026-08-15T10:00:00Z',
+};
+
+test('CodeRabbit "Review completed": afirma la revisión, pasa', () => {
+  const d = decide(pr({ checkRuns: [NPM_TEST_OK, coderabbitStatus('Review completed')] }));
+  assert.equal(d.decision, 'approve_and_merge');
+});
+
+test('CodeRabbit "Review rate limited": success sin haber revisado, aborta (caso real #186)', () => {
+  const d = decide(pr({ checkRuns: [NPM_TEST_OK, coderabbitStatus('Review rate limited')] }));
+  assert.equal(d.decision, 'abort');
+  assert.match(d.reason, /CodeRabbit/);
+  // El `reason` tiene que decir la descripción EXACTA que encontró, para que
+  // quien lea el log sepa si fue una causa real o un falso positivo de la
+  // lista blanca — no basta con saber que abortó.
+  assert.match(d.reason, /Review rate limited/);
+});
+
+test('CodeRabbit "Review skipped: draft pull request": success sin haber revisado, aborta (caso real #201)', () => {
+  const d = decide(pr({ checkRuns: [NPM_TEST_OK, coderabbitStatus('Review skipped: draft pull request')] }));
+  assert.equal(d.decision, 'abort');
+  assert.match(d.reason, /CodeRabbit/);
+  assert.match(d.reason, /Review skipped: draft pull request/);
+});
+
+test('CodeRabbit con una descripción desconocida e inventada TAMBIÉN aborta: la lista es BLANCA, no negra', () => {
+  // La prueba que de verdad distingue las dos estrategias. Una lista NEGRA
+  // con solo las dos causas de arriba dejaría pasar este texto porque no
+  // está en su catálogo de excusas conocidas. La lista BLANCA lo detiene
+  // igual, porque nunca afirmó lo único que hace falta: que la revisión
+  // ocurrió sobre este diff.
+  const d = decide(pr({ checkRuns: [NPM_TEST_OK, coderabbitStatus('Review postponed: quota reshuffled by provider')] }));
+  assert.equal(d.decision, 'abort');
+  assert.match(d.reason, /CodeRabbit/);
+  assert.match(d.reason, /Review postponed: quota reshuffled by provider/);
+});
+
 test('los owners NO se acumulan entre reglas: el catch-all no posee lo restringido', () => {
   // Es la línea de la que cuelga todo el reparto. Si `ownersOf` acumulara, el
   // agente —que está en `*`— sería owner del esquema de la base.
@@ -192,7 +260,13 @@ test('un check en rojo aborta', () => {
     pr({
       checkRuns: [
         { name: 'npm test', status: 'completed', conclusion: 'failure', started_at: '2026-08-15T10:00:00Z' },
-        { name: 'CodeRabbit', status: 'completed', conclusion: 'success', started_at: '2026-08-15T10:00:00Z' },
+        {
+        name: 'CodeRabbit',
+        status: 'completed',
+        conclusion: 'success',
+        started_at: '2026-08-15T10:00:00Z',
+        description: 'Review completed',
+      },
       ],
     })
   );
@@ -214,7 +288,13 @@ test('gana la última corrida CONCLUIDA, no la última empezada', () => {
       checkRuns: [
         { name: 'npm test', status: 'completed', conclusion: 'success', started_at: '2026-08-15T10:00:00Z' },
         { name: 'npm test', status: 'queued', started_at: '2026-08-15T11:00:00Z' },
-        { name: 'CodeRabbit', status: 'completed', conclusion: 'success', started_at: '2026-08-15T10:00:00Z' },
+        {
+        name: 'CodeRabbit',
+        status: 'completed',
+        conclusion: 'success',
+        started_at: '2026-08-15T10:00:00Z',
+        description: 'Review completed',
+      },
       ],
     })
   );
@@ -227,7 +307,13 @@ test('si la última concluida es roja, una corrida en vuelo no la rescata', () =
       checkRuns: [
         { name: 'npm test', status: 'completed', conclusion: 'failure', started_at: '2026-08-15T10:00:00Z' },
         { name: 'npm test', status: 'in_progress', started_at: '2026-08-15T11:00:00Z' },
-        { name: 'CodeRabbit', status: 'completed', conclusion: 'success', started_at: '2026-08-15T10:00:00Z' },
+        {
+        name: 'CodeRabbit',
+        status: 'completed',
+        conclusion: 'success',
+        started_at: '2026-08-15T10:00:00Z',
+        description: 'Review completed',
+      },
       ],
     })
   );
