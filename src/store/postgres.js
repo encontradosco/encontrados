@@ -111,6 +111,61 @@ async function createPostgresAdapter(connectionString) {
     );
     CREATE INDEX IF NOT EXISTS idx_contact_log_person ON contact_log(person_id);
     CREATE INDEX IF NOT EXISTS idx_contact_log_created ON contact_log(created_at);
+
+    CREATE TABLE IF NOT EXISTS pets (
+      id SERIAL PRIMARY KEY,
+      species TEXT NOT NULL CHECK (species IN ('dog','cat')),
+      pet_name TEXT,
+      description TEXT,
+      contact TEXT,
+      resolved_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS pet_subscriptions (
+      id SERIAL PRIMARY KEY,
+      channel TEXT NOT NULL CHECK (channel IN ('email','whatsapp')),
+      address TEXT NOT NULL,
+      verified BOOLEAN NOT NULL DEFAULT false,
+      verify_token TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS pet_photos (
+      id SERIAL PRIMARY KEY,
+      pet_id INTEGER REFERENCES pets(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL CHECK (kind IN ('report','query')),
+      species TEXT NOT NULL CHECK (species IN ('dog','cat')),
+      subscription_id INTEGER REFERENCES pet_subscriptions(id) ON DELETE CASCADE,
+      content BYTEA NOT NULL,
+      content_type TEXT NOT NULL,
+      embedding JSONB,
+      embedding_model TEXT,
+      thumb BYTEA,
+      thumb_type TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CHECK (kind <> 'report' OR pet_id IS NOT NULL)
+    );
+    CREATE INDEX IF NOT EXISTS idx_pet_photos_pet ON pet_photos(pet_id);
+    CREATE INDEX IF NOT EXISTS idx_pet_photos_kind_species ON pet_photos(kind, species);
+
+    -- Bitácora de auto-fusiones (#150): a diferencia de match_log/contact_log,
+    -- ACÁ SÍ guarda un nombre a propósito. findOrCreatePerson no persiste el
+    -- fullName del reporte que se fusiona en ningún otro lado (addUpdate no lo
+    -- recibe) — sin esta columna, el nombre original desaparece y una fusión
+    -- mala queda imposible de deshacer sin adivinar. Se acepta el desvío del
+    -- "sin nombres" de las bitácoras anteriores porque el nombre de una persona
+    -- reportada ya es dato público del producto (se muestra en /person/:id),
+    -- a diferencia de contact/reporter/message, que nunca lo son.
+    CREATE TABLE IF NOT EXISTS merge_log (
+      id SERIAL PRIMARY KEY,
+      person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+      submitted_name TEXT NOT NULL,
+      score DOUBLE PRECISION NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_merge_log_person ON merge_log(person_id);
+    CREATE INDEX IF NOT EXISTS idx_merge_log_created ON merge_log(created_at);
   `);
   if (hasTrgm) {
     await pool.query(`
@@ -176,6 +231,20 @@ async function createPostgresAdapter(connectionString) {
 
   const one = async (sql, params) => (await pool.query(sql, params)).rows[0];
   const all = async (sql, params) => (await pool.query(sql, params)).rows;
+
+  // Las firmas faciales atadas a una o más suscripciones. Hay que leerlas
+  // ANTES de borrar la suscripción: `photos.subscription_id` también cascada
+  // (ver el esquema arriba), y con la suscripción se va la única fila que
+  // decía qué firma retirar de Rekognition — el mismo problema que
+  // `faceIdsForPerson` ya resuelve para el borrado de persona (#162).
+  async function faceIdsForSubscriptionIds(subscriptionIds) {
+    if (!subscriptionIds.length) return [];
+    const rows = await all(
+      'SELECT face_id FROM photos WHERE subscription_id = ANY($1) AND face_id IS NOT NULL',
+      [subscriptionIds]
+    );
+    return rows.map((r) => r.face_id);
+  }
 
   return {
     async insertPerson(fullName, normalized, phonetic) {
@@ -345,22 +414,40 @@ async function createPostgresAdapter(connectionString) {
         token
       ]);
     },
+    // Igual que deletePerson en src/routes/api.js: los face_id se leen ANTES
+    // de borrar la fila, porque la cascada de subscription_id se la lleva
+    // junto con la única forma de saber qué firma retirar (#162).
     async deleteSubscriptionByToken(token) {
-      return one('DELETE FROM subscriptions WHERE verify_token = $1 RETURNING *', [token]);
+      const sub = await one('SELECT * FROM subscriptions WHERE verify_token = $1', [token]);
+      if (!sub) return null;
+      const faceIds = await faceIdsForSubscriptionIds([sub.id]);
+      await pool.query('DELETE FROM subscriptions WHERE id = $1', [sub.id]);
+      return { ...sub, faceIds };
     },
     async deleteSubscription(personId, channel, address) {
-      const r = await pool.query(
-        'DELETE FROM subscriptions WHERE person_id = $1 AND channel = $2 AND address = $3',
+      const sub = await one(
+        'SELECT id FROM subscriptions WHERE person_id = $1 AND channel = $2 AND address = $3',
         [personId, channel, address]
       );
-      return r.rowCount;
+      if (!sub) return { count: 0, faceIds: [] };
+      const faceIds = await faceIdsForSubscriptionIds([sub.id]);
+      const r = await pool.query('DELETE FROM subscriptions WHERE id = $1', [sub.id]);
+      return { count: r.rowCount, faceIds };
     },
     async deleteSubscriptionsForAddress(channel, address) {
-      const r = await pool.query('DELETE FROM subscriptions WHERE channel = $1 AND address = $2', [
+      const subs = await all('SELECT id FROM subscriptions WHERE channel = $1 AND address = $2', [
         channel,
         address
       ]);
-      return r.rowCount;
+      if (!subs.length) return { count: 0, faceIds: [] };
+      const ids = subs.map((s) => s.id);
+      const faceIds = await faceIdsForSubscriptionIds(ids);
+      // Por id, no por (channel, address): una suscripción creada entre el
+      // SELECT de arriba y este DELETE no está en `ids`, así que este WHERE no
+      // debe alcanzarla — si la alcanzara, se borraría sin haber leído su
+      // face_id, el mismo hueco que cierra el resto de este archivo (#162).
+      const r = await pool.query('DELETE FROM subscriptions WHERE id = ANY($1)', [ids]);
+      return { count: r.rowCount, faceIds };
     },
     async subscriptionsForPerson(personId) {
       return all('SELECT * FROM subscriptions WHERE person_id = $1', [personId]);
@@ -517,6 +604,14 @@ async function createPostgresAdapter(connectionString) {
         [personId, updateId ?? null, channel, result]
       );
     },
+    // #150: registro de cada auto-fusión por nombre — ver el comentario del
+    // esquema sobre por qué esta tabla sí guarda un nombre.
+    async insertMergeLog({ personId, submittedName, score }) {
+      await pool.query(
+        'INSERT INTO merge_log (person_id, submitted_name, score) VALUES ($1, $2, $3)',
+        [personId, submittedName, score]
+      );
+    },
     // Cuenta total y por superficie. `since` (ISO) filtra a lo escrito desde
     // ahí — se usa para la línea de "cambio desde el reporte anterior" del
     // correo operativo; sin `since`, es el acumulado histórico completo.
@@ -636,6 +731,101 @@ async function createPostgresAdapter(connectionString) {
     // de repetir los límites en dos motores de SQL distintos).
     async matchLogSimilarityRows() {
       return all('SELECT similarity, surface FROM match_log');
+    },
+
+    async insertPet({ species, petName, description, contact }) {
+      return one(
+        'INSERT INTO pets (species, pet_name, description, contact) VALUES ($1, $2, $3, $4) RETURNING *',
+        [species, petName || null, description || null, contact || null]
+      );
+    },
+    async getPet(id) {
+      return one('SELECT * FROM pets WHERE id = $1', [id]);
+    },
+    async markPetResolved(id) {
+      return one('UPDATE pets SET resolved_at = now() WHERE id = $1 RETURNING *', [id]);
+    },
+    async insertPetPhoto({ petId, kind, species, subscriptionId, content, contentType }) {
+      return one(
+        `INSERT INTO pet_photos (pet_id, kind, species, subscription_id, content, content_type)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         RETURNING id, pet_id, kind, species, content_type, created_at`,
+        [petId || null, kind, species, subscriptionId || null, content, contentType]
+      );
+    },
+    async getPetPhoto(id) {
+      return one('SELECT * FROM pet_photos WHERE id = $1', [id]);
+    },
+    async setPetPhotoEmbedding(photoId, embedding, model) {
+      await pool.query('UPDATE pet_photos SET embedding = $1, embedding_model = $2 WHERE id = $3', [
+        JSON.stringify(embedding),
+        model || null,
+        photoId
+      ]);
+    },
+    async setPetPhotoThumbnail(photoId, { small, contentType }) {
+      await pool.query('UPDATE pet_photos SET thumb = $1, thumb_type = $2 WHERE id = $3', [
+        small,
+        contentType,
+        photoId
+      ]);
+    },
+    async clearPetPhotoContent(photoId) {
+      await pool.query('UPDATE pet_photos SET content = $1 WHERE id = $2', [Buffer.alloc(0), photoId]);
+    },
+    // LEFT JOIN porque una foto 'query' no tiene pet_id (nadie sabe todavía de
+    // qué mascota es) — el filtro de resuelta solo debe aplicar cuando SÍ hay
+    // una mascota asociada (siempre el caso para 'report', nunca para
+    // 'query'). Mostrar como "posible avistamiento" a una mascota que ya se
+    // marcó como encontrada no ayuda a nadie.
+    async petPhotosForMatching(kind, species) {
+      return all(
+        `SELECT pet_photos.id, pet_photos.pet_id, pet_photos.embedding, pet_photos.embedding_model
+         FROM pet_photos
+         LEFT JOIN pets ON pets.id = pet_photos.pet_id
+         WHERE pet_photos.kind = $1 AND pet_photos.species = $2 AND pet_photos.embedding IS NOT NULL
+           AND (pet_photos.pet_id IS NULL OR pets.resolved_at IS NULL)`,
+        [kind, species]
+      );
+    },
+    // Mismo patrón que photosMissingDerivatives (personas): sin el filtro de
+    // contenido no vacío, una foto 'query' que ya se procesó y se le borraron
+    // los bytes queda "pendiente" para siempre y ahoga la red de seguridad
+    // con filas que ya no se pueden comparar.
+    async petPhotosMissingEmbedding(limit) {
+      return all(
+        'SELECT * FROM pet_photos WHERE embedding IS NULL AND octet_length(content) > 0 ORDER BY id LIMIT $1',
+        [limit]
+      );
+    },
+    async petPhotosForPet(petId) {
+      return all(
+        `SELECT id, pet_id, content_type, thumb_type FROM pet_photos
+         WHERE kind = 'report' AND pet_id = $1 ORDER BY id`,
+        [petId]
+      );
+    },
+    // El listado público — espejo de missingPeople: toda mascota sin
+    // resolved_at, más reciente primero.
+    async lostPets(limit) {
+      return all('SELECT * FROM pets WHERE resolved_at IS NULL ORDER BY created_at DESC LIMIT $1', [limit]);
+    },
+    // Espejo de reunitedCount — el contador de buenas noticias.
+    async reunitedPetsCount() {
+      const r = await one('SELECT COUNT(*)::int AS n FROM pets WHERE resolved_at IS NOT NULL', []);
+      return r.n;
+    },
+    // Una foto por mascota para el listado — espejo de reportPhotosForPeople:
+    // la primera foto 'report' que además tenga miniatura gana, para no
+    // repetir en el listado el problema de una foto ilegible sin thumb.
+    async petPhotosForPets(petIds) {
+      if (!petIds.length) return [];
+      return all(
+        `SELECT id, pet_id, content_type, thumb_type FROM pet_photos
+         WHERE kind = 'report' AND pet_id = ANY($1)
+         ORDER BY pet_id, (thumb_type IS NULL), id`,
+        [petIds]
+      );
     },
 
     async close() {

@@ -5,6 +5,7 @@ const { relayEnabled, STATUS_LABEL } = require('./notify');
 const {
   processPhoto,
   resolveRescueAnswer,
+  forgetPersonFaces,
   MAX_QUERY_PHOTOS
 } = require('./facematch');
 const { nullMatcher } = require('./faces');
@@ -245,18 +246,22 @@ async function handleInbound(store, { channel, from, text, photo, matcher = null
   }
 
   if (parsed.intent === 'unsubscribe') {
+    // El retiro de firmas (#162) es best effort y no cambia esta respuesta —
+    // se construye del `count` que ya devolvió el borrado. Se espera de
+    // todos modos (no fire-and-forget): en un runtime serverless, cualquier
+    // trabajo sin await muere apenas se manda la respuesta al webhook.
     if (normalize(parsed.name) === 'todo' || normalize(parsed.name) === 'all') {
-      const n = await store.unsubscribeAll(channel, from);
-      return n
-        ? `Listo, cancelé tus ${n} suscripciones.`
-        : 'No tenías suscripciones activas.';
+      const { count, faceIds } = await store.unsubscribeAll(channel, from);
+      if (!count) return 'No tenías suscripciones activas.';
+      await forgetPersonFaces(matcher, faceIds, 'BAJA TODO');
+      return `Listo, cancelé tus ${count} suscripciones.`;
     }
     const matches = await store.searchPeople(parsed.name, { limit: 1 });
     if (!matches.length) return `No encontré a "${parsed.name}" entre tus suscripciones.`;
-    const n = await store.unsubscribe(matches[0].id, channel, from);
-    return n
-      ? `Listo, ya no recibirás avisos sobre *${matches[0].full_name}*.`
-      : `No estabas suscrito(a) a ${matches[0].full_name}.`;
+    const { count, faceIds } = await store.unsubscribe(matches[0].id, channel, from);
+    if (!count) return `No estabas suscrito(a) a ${matches[0].full_name}.`;
+    await forgetPersonFaces(matcher, faceIds, `suscripción de persona ${matches[0].id}`);
+    return `Listo, ya no recibirás avisos sobre *${matches[0].full_name}*.`;
   }
 
   return HELP;
