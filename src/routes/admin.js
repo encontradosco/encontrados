@@ -15,6 +15,16 @@ const {
 } = require('../adminAuth');
 const { gatherCheapReportData, gatherFunnelStats, gatherDailySeries, gatherPanelExtras } = require('../report');
 const { buildStatsPageHtml, buildFunnelFragmentHtml } = require('../adminStats');
+const { normalizeSourceUrl } = require('../report-admission');
+const {
+  gatherQueue,
+  gatherFicha,
+  recordNote,
+  resolveFicha,
+  buildQueuePageHtml,
+  buildFichaPageHtml,
+  buildResolvedPageHtml
+} = require('../statusReview');
 
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
@@ -102,6 +112,7 @@ function adminRoutes(store, matcher) {
       <h1>Panel de administración</h1>
       <p>Sesión: <strong>${esc(req.adminEmail)}</strong></p>
       <p>📊 <a href="/admin/stats">Estadísticas</a> — coincidencias, envíos y la base en general.</p>
+      <p>🔎 <a href="/admin/revision">Cola de revisión de estado</a> — fichas SIN CONFIRMAR que siguen publicadas como buscadas.</p>
       <p>El drill-down por ID (nombres y contactos en vivo) todavía no existe.</p>
       <form method="post" action="/admin/logout"><button type="submit">Cerrar sesión</button></form>
     `;
@@ -165,6 +176,96 @@ function adminRoutes(store, matcher) {
       }
     })
   );
+
+  // ===== COLA DE REVISIÓN DE ESTADO (#190) — inicio ========================
+  //
+  // Una ficha en `unknown` no tiene salida y se queda publicada como buscada
+  // (ver el comentario largo en src/statusReview.js). Estas cuatro rutas son
+  // la cola y la salida humana: la evidencia a la vista, una ficha a la vez, y
+  // constancia de quién decidió, cuándo y con qué.
+  //
+  // Todas exigen sesión de /admin — nunca statsGate, que tiene una ventana
+  // pública temporal. Acá se muestran datos sin agregar de personas concretas,
+  // y se escribe.
+  const wantsBody = express.urlencoded({ extended: false });
+
+  const noIndex = (res) => res.set('X-Robots-Tag', 'noindex, nofollow');
+
+  router.get(
+    '/revision',
+    requireAdminSession,
+    wrap(async (req, res) => {
+      noIndex(res);
+      res.send(buildQueuePageHtml(await gatherQueue(store)));
+    })
+  );
+
+  router.get(
+    '/revision/:id',
+    requireAdminSession,
+    wrap(async (req, res) => {
+      noIndex(res);
+      const ficha = await gatherFicha(store, req.params.id);
+      if (!ficha) return res.status(404).send(layout('No encontrado', '<p class="error">Persona no encontrada.</p>'));
+      res.send(buildFichaPageHtml(ficha));
+    })
+  );
+
+  // Re-render de la misma pantalla con los errores arriba y lo que la persona
+  // ya había escrito todavía en el formulario. Perder un párrafo de evidencia
+  // por un campo faltante es la clase de fricción que hace que la próxima vez
+  // no se escriba nada.
+  async function reRenderWithErrors(req, res, errors) {
+    const ficha = await gatherFicha(store, req.params.id);
+    if (!ficha) return res.status(404).send(layout('No encontrado', '<p class="error">Persona no encontrada.</p>'));
+    noIndex(res);
+    res.status(400).send(buildFichaPageHtml(ficha, { errors, form: req.body || {} }));
+  }
+
+  // Constancia sin efecto: el marcador privado de "probable" más lo que la
+  // persona encontró. No cambia el estado público y no manda ningún aviso.
+  router.post(
+    '/revision/:id/nota',
+    requireAdminSession,
+    wantsBody,
+    wrap(async (req, res) => {
+      const { estado, evidencia } = req.body || {};
+      const result = await recordNote({
+        store,
+        personId: req.params.id,
+        author: req.adminEmail,
+        estado,
+        evidencia
+      });
+      if (!result.ok) return reRenderWithErrors(req, res, result.errors);
+      res.redirect(`/admin/revision/${encodeURIComponent(req.params.id)}`);
+    })
+  );
+
+  // La salida. Escribe el estado nuevo Y MANDA AVISOS — ver la advertencia que
+  // la pantalla muestra antes de habilitar este botón.
+  router.post(
+    '/revision/:id/resolver',
+    requireAdminSession,
+    wantsBody,
+    wrap(async (req, res) => {
+      const { estado, evidencia, enlace, confirmo } = req.body || {};
+      const result = await resolveFicha({
+        store,
+        personId: req.params.id,
+        author: req.adminEmail,
+        estado,
+        evidencia,
+        enlace,
+        confirmo: Boolean(confirmo),
+        normalizeSourceUrl
+      });
+      if (!result.ok) return reRenderWithErrors(req, res, result.errors);
+      noIndex(res);
+      res.send(buildResolvedPageHtml(result));
+    })
+  );
+  // ===== COLA DE REVISIÓN DE ESTADO (#190) — fin ===========================
 
   return router;
 }

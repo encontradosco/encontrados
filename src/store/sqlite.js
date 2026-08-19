@@ -185,6 +185,31 @@ async function createSqliteAdapter(dbPath) {
     );
     CREATE INDEX IF NOT EXISTS idx_merge_log_person ON merge_log(person_id);
     CREATE INDEX IF NOT EXISTS idx_merge_log_created ON merge_log(created_at);
+
+    -- ===== COLA DE REVISIÓN DE ESTADO (#190) — inicio =====================
+    -- La constancia de la salida humana de una ficha en unknown: quién
+    -- decidió, cuándo y con qué evidencia. Mismas reglas que en Postgres, y
+    -- ahí está el comentario largo con el por qué —incluido por qué NO se
+    -- creó un estado público nuevo, por qué el marcador de "probable" es
+    -- PRIVADO y vive acá, y por qué el enlace de la noticia sigue viviendo en
+    -- updates.source_url—. created_at va como TEXTO ISO en los dos
+    -- motores, con el mismo formato: un TIMESTAMPTZ volvería como Date en
+    -- Postgres y como string acá.
+    CREATE TABLE IF NOT EXISTS status_review (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+      probable_status TEXT NOT NULL CHECK (probable_status IN ('safe','deceased')),
+      evidence_note TEXT NOT NULL,
+      author TEXT NOT NULL,
+      resolved INTEGER NOT NULL DEFAULT 0,
+      update_id INTEGER REFERENCES updates(id) ON DELETE SET NULL,
+      recipients INTEGER,
+      notify_mode TEXT CHECK (notify_mode IN ('direct','relay')),
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_status_review_person ON status_review(person_id);
+    CREATE INDEX IF NOT EXISTS idx_status_review_created ON status_review(created_at);
+    -- ===== COLA DE REVISIÓN DE ESTADO (#190) — fin ========================
   `);
 
   // Older dev databases: add the GPS columns if missing.
@@ -708,6 +733,64 @@ async function createSqliteAdapter(dbPath) {
         'INSERT INTO merge_log (person_id, submitted_name, score) VALUES (?, ?, ?)'
       ).run(personId, submittedName, score);
     },
+    // ===== COLA DE REVISIÓN DE ESTADO (#190) — inicio =====================
+    // Todos los que están en la cola: las personas cuyo ÚLTIMO estado es
+    // `unknown`. La cola no necesita una bandera de "resuelto" — resolver
+    // escribe una fila nueva en `updates`, el último estado deja de ser
+    // `unknown` y la ficha sale de acá sola.
+    //
+    // Mismo filtro de "último estado" que missingPeople (AGGREGATOR_SAFE_
+    // EXCLUSION): sin él, esta cola y el listado público no estarían mirando
+    // el mismo estado.
+    //
+    // Devuelve la evidencia con la que se va a juzgar, no solo el nombre:
+    // message, location y source_url de esa última fila. Todo esto se muestra
+    // detrás del gate de /admin.
+    async unknownPeople(limit) {
+      return db
+        .prepare(
+          `WITH latest AS (
+             SELECT u.*,
+                    ROW_NUMBER() OVER (PARTITION BY u.person_id ORDER BY u.created_at DESC, u.id DESC) AS rn
+             FROM updates u
+             ${AGGREGATOR_SAFE_EXCLUSION}
+           )
+           SELECT p.id, p.full_name,
+                  l.id AS update_id, l.status, l.message, l.location, l.source,
+                  l.source_url, l.created_at AS last_report
+           FROM people p
+           JOIN latest l ON l.person_id = p.id AND l.rn = 1
+           WHERE l.status = 'unknown'
+           ORDER BY l.created_at DESC
+           LIMIT ?`
+        )
+        .all(limit);
+    },
+    async insertStatusReview({ personId, probableStatus, evidenceNote, author, resolved, updateId, recipients, notifyMode }) {
+      const info = db
+        .prepare(
+          `INSERT INTO status_review
+             (person_id, probable_status, evidence_note, author, resolved, update_id, recipients, notify_mode)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          personId,
+          probableStatus,
+          evidenceNote,
+          author,
+          resolved ? 1 : 0,
+          updateId ?? null,
+          Number.isFinite(recipients) ? recipients : null,
+          notifyMode ?? null
+        );
+      return db.prepare('SELECT * FROM status_review WHERE id = ?').get(info.lastInsertRowid);
+    },
+    async statusReviewsForPerson(personId) {
+      return db
+        .prepare('SELECT * FROM status_review WHERE person_id = ? ORDER BY created_at DESC, id DESC')
+        .all(personId);
+    },
+    // ===== COLA DE REVISIÓN DE ESTADO (#190) — fin ========================
     // Cuenta total y por superficie. `since` (ISO) filtra a lo escrito desde
     // ahí — se usa para la línea de "cambio desde el reporte anterior" del
     // correo operativo; sin `since`, es el acumulado histórico completo.
