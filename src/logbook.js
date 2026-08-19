@@ -37,6 +37,20 @@ async function logContact(store, { personId, updateId, channel, result }) {
   }
 }
 
+// #150: registra cada auto-fusión de findOrCreatePerson (nombre ≥ 0.85).
+// `store` puede ser el store completo o el adapter crudo — solo hace falta
+// que tenga insertMergeLog, igual que logMatch/logContact.
+async function logMerge(store, { personId, submittedName, score }) {
+  try {
+    await store.insertMergeLog({ personId, submittedName, score });
+  } catch (e) {
+    console.error(
+      `[logbook:merge] no se pudo registrar la auto-fusión (persona ${personId}) — la fusión sigue en pie:`,
+      e.message
+    );
+  }
+}
+
 // Traduce el { ok, ... } que ya devuelven sendEmail/sendWhatsApp/relayToOperators
 // a un resultado del enum de contact_log. Cualquier envío que sí se intentó
 // (llegó a llamar al proveedor, o al relevo) es 'enviado' o 'fallido' — nunca
@@ -47,4 +61,4 @@ function resultFromSend(res) {
   return res && res.ok ? 'enviado' : 'fallido';
 }
 
-module.exports = { logMatch, logContact, resultFromSend };
+module.exports = { logMatch, logContact, logMerge, resultFromSend };

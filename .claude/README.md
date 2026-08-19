@@ -89,6 +89,7 @@ Claude también los usa solo cuando la conversación los pide.
 | `/pr-chico` | Abrir el PR: rama, título, cuerpo, y el autochequeo de si esto lo decide una persona |
 | `/revision-privacidad` | Verificar que un cambio no filtre datos personales antes de mandarlo |
 | `/cambio-de-esquema` | Agregar o cambiar una columna sin carpeta de migraciones y sin romper un adaptador |
+| `/buscar-desaparecidos` | Buscar una persona por nombre en los sitios públicos de desaparecidos (Buscador Terremoto, Colombia te busca, Encontrados) |
 
 ---
 
