@@ -10,3 +10,4 @@ data/
 # Preferencias personales de Claude Code. La configuración compartida del
 # proyecto sí se versiona: .claude/settings.json
 .claude/settings.local.json
+.worktrees/

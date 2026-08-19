@@ -1,7 +1,7 @@
 const crypto = require('crypto');
 const express = require('express');
-const multer = require('multer');
 const env = require('../env');
+const { upload } = require('../upload');
 const { sendVerificationEmail, sendEmail, avisoEmail, relayEnabled } = require('../notify');
 const {
   identifyRescuedPerson,
@@ -19,35 +19,6 @@ const { createReportAdmission } = require('../report-admission');
 
 // Express 4 doesn't catch async errors on its own.
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
-
-// A browser does not reliably label what it is uploading. A photo picked
-// through the Files app, received over WhatsApp, or dragged in from a desktop
-// folder routinely arrives as application/octet-stream, and filtering on the
-// label alone threw those away — `cb(null, false)` drops a file WITHOUT an
-// error, so the handler saw a request carrying no photo and told the person
-// they had forgotten to attach one. They had not. That is the literal shape of
-// "no puedo subir fotos": the app insisting there is no photo.
-//
-// So the label is only ever a hint here, and the real verdict is reached on
-// the bytes themselves in src/photo.js, which can also say precisely what went
-// wrong. The size ceiling is 12 MB because that is the territory a current
-// phone camera lives in; anything oversized is downscaled server-side before
-// it is stored or matched.
-const IMAGE_EXT = /\.(jpe?g|png|gif|webp|heic|heif|avif|bmp|tiff?)$/i;
-
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 12 * 1024 * 1024, files: 8 },
-  fileFilter: (req, file, cb) => {
-    const type = (file.mimetype || '').toLowerCase();
-    cb(
-      null,
-      type.startsWith('image/') ||
-        type === 'application/octet-stream' ||
-        IMAGE_EXT.test(file.originalname || '')
-    );
-  }
-});
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 

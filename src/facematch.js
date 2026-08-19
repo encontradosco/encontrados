@@ -451,7 +451,34 @@ async function matchStoredPhoto(store, matcher, photo, bytes) {
   // Search BEFORE indexing so the photo never matches itself.
   const matches = await matcher.searchByImage(bytes);
   console.log(`[facematch] photo ${id} (${kind}) → ${matches.length} raw match(es)`);
-  const { faceId, geometry } = await matcher.indexFace(bytes, id);
+
+  // Esta misma persona ya tiene esta foto exacta indexada — un reporte
+  // re-empujado por el agregador trae los mismos bytes cada vez (#160). Sin
+  // esto, cada re-empuje sumaba una firma nueva por la misma cara: hasta 118
+  // para una sola persona, medido en producción. Reusar el face_id evita la
+  // llamada a IndexFaces; detectFace da la geometría para la miniatura sin
+  // volver a indexar (mismo patrón que ya usa backfillPhotoDerivatives para
+  // no duplicar una cara que ya está en la colección).
+  //
+  // Best effort, no atómico a propósito: leer photoFaceIdForContent y llamar
+  // indexFace son dos pasos separados por una llamada de red a Rekognition, y
+  // esta app corre en varias instancias serverless sin estado compartido para
+  // serializarlos. Dos re-empujes de la MISMA foto llegando casi al mismo
+  // instante podrían leer null los dos y sumar dos firmas en vez de una — una
+  // ventana angosta (el caso real del issue es un re-crawl días después, no
+  // dos empujes simultáneos) que reduce el problema de "cada re-empuje" a
+  // "una carrera puntual", no lo cierra del todo. Cerrarla exigiría una
+  // reclamación atómica entre instancias, que es una decisión de arquitectura
+  // aparte y no cabe en este PR.
+  const reusedFaceId = await store.photoFaceIdForContent(personId, kind, bytes);
+  let faceId, geometry;
+  if (reusedFaceId) {
+    faceId = reusedFaceId;
+    geometry = await matcher.detectFace(bytes);
+    console.log(`[facematch] photo ${id} (${kind}) usa una firma existente`);
+  } else {
+    ({ faceId, geometry } = await matcher.indexFace(bytes, id));
+  }
   if (faceId) await store.setPhotoFaceId(id, faceId);
   // Report photos are shown publicly: they get the geometry to draw and the
   // face thumbnail the listing loads instead of the full image.
