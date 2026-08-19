@@ -31,7 +31,7 @@ async function createApp(adapter, matcher) {
   // detrás del gate de Vercel (#116, PR 5). Montados antes de /api y / para
   // que su prioridad sea explícita, aunque hoy no compiten con ninguna ruta.
   app.use('/admin', adminRoutes(store, faceMatcher));
-  app.use('/api/admin', adminApiRoutes());
+  app.use('/api/admin', adminApiRoutes(store, faceMatcher));
   app.use('/api', apiRoutes(store, faceMatcher, petStore, petMatcher));
   app.use('/webhooks', express.json(), webhookRoutes(store, faceMatcher));
   app.use('/', petRoutes(petStore, petMatcher));

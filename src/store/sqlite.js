@@ -163,6 +163,29 @@ async function createSqliteAdapter(dbPath) {
     );
     CREATE INDEX IF NOT EXISTS idx_merge_log_person ON merge_log(person_id);
     CREATE INDEX IF NOT EXISTS idx_merge_log_created ON merge_log(created_at);
+
+    -- Constancia de acciones de privacidad hechas a mano desde /admin (#161):
+    -- hoy solo "retirar la firma facial sin borrar la ficha", a pedido de una
+    -- familia que ya encontró a la persona. A diferencia de match_log/contact_log
+    -- esto SÍ guarda quién la ejecutó ('actor', el correo del admin autenticado):
+    -- no es una bitácora de producto, es la prueba de que una acción de habeas
+    -- data ocurrió y quién la autorizó — lo que exige poder demostrar Ley 1581.
+    -- Misma retención heredada que el resto del esquema: ON DELETE CASCADE.
+    --
+    -- 'unconfirmed_count' es el resultado REAL, no la intención: forgetPersonFaces
+    -- es best effort y no lanza si Rekognition falla, así que sin esto la
+    -- constancia diría "se retiró la firma" incluso cuando quedó indexada —
+    -- inservible para auditar si de verdad se cumplió lo prometido.
+    CREATE TABLE IF NOT EXISTS privacy_actions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+      action TEXT NOT NULL CHECK (action IN ('forget_face')),
+      actor TEXT NOT NULL,
+      unconfirmed_count INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_privacy_actions_person ON privacy_actions(person_id);
+    CREATE INDEX IF NOT EXISTS idx_privacy_actions_created ON privacy_actions(created_at);
   `);
 
   // Older dev databases: add the GPS columns if missing.
@@ -557,6 +580,19 @@ async function createSqliteAdapter(dbPath) {
       if (!person) return null;
       db.prepare('DELETE FROM people WHERE id = ?').run(id);
       return person;
+    },
+    async recordPrivacyAction({ personId, action, actor, unconfirmedCount = 0 }) {
+      const info = db
+        .prepare(
+          'INSERT INTO privacy_actions (person_id, action, actor, unconfirmed_count) VALUES (?, ?, ?, ?)'
+        )
+        .run(personId, action, actor, unconfirmedCount);
+      return db.prepare('SELECT * FROM privacy_actions WHERE id = ?').get(info.lastInsertRowid);
+    },
+    async privacyActionsForPerson(personId) {
+      return db
+        .prepare('SELECT * FROM privacy_actions WHERE person_id = ? ORDER BY created_at DESC')
+        .all(personId);
     },
     async counts() {
       const n = (sql) => db.prepare(sql).get().n;

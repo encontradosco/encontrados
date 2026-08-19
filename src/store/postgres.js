@@ -166,6 +166,29 @@ async function createPostgresAdapter(connectionString) {
     );
     CREATE INDEX IF NOT EXISTS idx_merge_log_person ON merge_log(person_id);
     CREATE INDEX IF NOT EXISTS idx_merge_log_created ON merge_log(created_at);
+
+    -- Constancia de acciones de privacidad hechas a mano desde /admin (#161):
+    -- hoy solo "retirar la firma facial sin borrar la ficha", a pedido de una
+    -- familia que ya encontró a la persona. A diferencia de match_log/contact_log
+    -- esto SÍ guarda quién la ejecutó ('actor', el correo del admin autenticado):
+    -- no es una bitácora de producto, es la prueba de que una acción de habeas
+    -- data ocurrió y quién la autorizó — lo que exige poder demostrar Ley 1581.
+    -- Misma retención heredada que el resto del esquema: ON DELETE CASCADE.
+    --
+    -- 'unconfirmed_count' es el resultado REAL, no la intención: forgetPersonFaces
+    -- es best effort y no lanza si Rekognition falla, así que sin esto la
+    -- constancia diría "se retiró la firma" incluso cuando quedó indexada —
+    -- inservible para auditar si de verdad se cumplió lo prometido.
+    CREATE TABLE IF NOT EXISTS privacy_actions (
+      id SERIAL PRIMARY KEY,
+      person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+      action TEXT NOT NULL CHECK (action IN ('forget_face')),
+      actor TEXT NOT NULL,
+      unconfirmed_count INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_privacy_actions_person ON privacy_actions(person_id);
+    CREATE INDEX IF NOT EXISTS idx_privacy_actions_created ON privacy_actions(created_at);
   `);
   if (hasTrgm) {
     await pool.query(`
@@ -565,6 +588,18 @@ async function createPostgresAdapter(connectionString) {
     },
     async deletePerson(id) {
       return one('DELETE FROM people WHERE id = $1 RETURNING *', [id]);
+    },
+    async recordPrivacyAction({ personId, action, actor, unconfirmedCount = 0 }) {
+      return one(
+        `INSERT INTO privacy_actions (person_id, action, actor, unconfirmed_count)
+         VALUES ($1, $2, $3, $4) RETURNING *`,
+        [personId, action, actor, unconfirmedCount]
+      );
+    },
+    async privacyActionsForPerson(personId) {
+      return all('SELECT * FROM privacy_actions WHERE person_id = $1 ORDER BY created_at DESC', [
+        personId
+      ]);
     },
     async counts() {
       const r = await one(`SELECT
