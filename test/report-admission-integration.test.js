@@ -33,17 +33,21 @@ function fakeMatcher() {
   return {
     enabled: true,
     status: 'activo (fake)',
+    calls: { index: 0, detect: 0, search: 0 },
     async ensureReady() {},
     async indexFace(bytes) {
+      this.calls.index++;
       const id = `face-${++n}`;
       if (!indexed.has(key(bytes))) indexed.set(key(bytes), []);
       indexed.get(key(bytes)).push(id);
       return { faceId: id, geometry: null };
     },
     async detectFace() {
+      this.calls.detect++;
       return null;
     },
     async searchByImage(bytes) {
+      this.calls.search++;
       return (indexed.get(key(bytes)) || []).map((faceId) => ({ faceId, similarity: 97 }));
     }
   };
@@ -227,6 +231,79 @@ test('external_id upsert notifies the REAL owner, not the drifted name lookup', 
   assert.equal(secondBody.person_id, ownerId, 'la actualización debe seguir sobre el owner original');
   assert.equal(secondBody.duplicate.merged_into_existing_person, true);
   assert.deepEqual(emailTos(sg), ['sigue-al-owner@ejemplo.com'], 'el aviso va al suscriptor del owner real');
+});
+
+// -------------------------------- no re-indexing the same photo (#160) ----
+//
+// The aggregator re-pushes the same ficha with the same photo on every crawl.
+// Before this fix, every re-push called IndexFaces again for identical bytes,
+// piling up redundant face signatures for the same person (measured: up to
+// 118 for one person in production). The fix must not touch a photo that
+// genuinely changed.
+
+test('re-pushing the same external_id with the SAME photo reuses the face_id, no new IndexFaces call', async (t) => {
+  const matcher = fakeMatcher();
+  const app = await startApp(matcher);
+  t.after(() => app.server.close());
+
+  const face = await photoBytes('reempuje-misma-foto');
+  const body = { name: 'Persona Reempujada', status: 'missing', external_id: 'ext-reempuje', photo: { base64: face.toString('base64'), content_type: 'image/jpeg' } };
+
+  const first = await fetch(`${app.base}/api/updates`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  const personId = (await first.json()).person_id;
+  assert.equal(matcher.calls.index, 1, 'la primera vez sí indexa');
+
+  const faceIdAfterFirst = await app.store.photoFaceIdForContent(personId, 'report', face);
+  assert.ok(faceIdAfterFirst, 'la primera foto queda indexada');
+
+  // Same external_id, same exact photo bytes — the aggregator's normal crawl.
+  await fetch(`${app.base}/api/updates`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...body, message: 'segundo empuje, misma foto' })
+  });
+
+  assert.equal(matcher.calls.index, 1, 'el re-empuje con la misma foto NO debe volver a llamar IndexFaces');
+  assert.ok(matcher.calls.detect >= 1, 'la geometría de la miniatura se saca con detectFace, sin reindexar');
+  const faceIdAfterSecond = await app.store.photoFaceIdForContent(personId, 'report', face);
+  assert.equal(faceIdAfterSecond, faceIdAfterFirst, 'la foto repetida reusa la misma firma facial');
+});
+
+test('re-pushing with a DIFFERENT photo still indexes a new face', async (t) => {
+  const matcher = fakeMatcher();
+  const app = await startApp(matcher);
+  t.after(() => app.server.close());
+
+  const faceOne = await photoBytes('foto-original');
+  const faceTwo = await photoBytes('foto-distinta');
+
+  await fetch(`${app.base}/api/updates`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: 'Persona Con Foto Nueva',
+      status: 'missing',
+      external_id: 'ext-foto-nueva',
+      photo: { base64: faceOne.toString('base64'), content_type: 'image/jpeg' }
+    })
+  });
+  assert.equal(matcher.calls.index, 1);
+
+  await fetch(`${app.base}/api/updates`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: 'Persona Con Foto Nueva',
+      status: 'missing',
+      external_id: 'ext-foto-nueva',
+      photo: { base64: faceTwo.toString('base64'), content_type: 'image/jpeg' }
+    })
+  });
+  assert.equal(matcher.calls.index, 2, 'una foto distinta sí debe indexarse — el dedupe es solo por bytes idénticos');
 });
 
 // ------------------------ duplicate check self-match protection (API + web)
