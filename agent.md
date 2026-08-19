@@ -384,7 +384,7 @@ presencia y huella, nunca el valor).
 | `PORT` | 3000. Solo aplica a `npm run dev` / `npm start`; en Vercel nadie escucha un puerto. |
 | `DATABASE_URL` (o `POSTGRES_URL`, `STORAGE_URL`, `NEON_DATABASE_URL`…) | SQLite. En local, un archivo; **en Vercel, un `/tmp` efímero que se pierde**. |
 | `DB_PATH` | `./data/encontrados.db`. Solo para SQLite local. |
-| `API_KEY` | Los `POST` del API quedan **abiertos** y `DELETE /api/people/:id` responde 503. Las lecturas de información de personas son públicas siempre, con o sin llave; la excepción es `GET /api/match-stats`, que es operativa y dispara búsquedas en Rekognition, así que pide llave. |
+| `API_KEY` | Los `POST` del API quedan **abiertos** —solo si no se presenta cabecera; un token presentado que no corresponde a ninguna llave emitida se rechaza igual— y `DELETE /api/people/:id` responde 503. Las lecturas de información de personas son públicas siempre, con o sin llave; la excepción es `GET /api/match-stats`, que es operativa y dispara búsquedas en Rekognition, así que pide llave. **Si hay llaves emitidas (`api_keys`), esta variable es obligatoria**: sin ella el modo abierto le da alcance de operación a cualquiera que no mande cabecera. |
 | `SENDGRID_API_KEY` | No sale ningún correo: ni verificación de suscripción, ni alertas, ni avisos. Se le hace `trim()` porque un salto de línea pegado sin querer devuelve 401. |
 | `EMAIL_FROM` | `a@torrenegra.com`. Tiene que ser un remitente verificado en SendGrid o SendGrid responde 403. |
 | `AVISO_EMAIL` | El aviso del rescatista no se manda. Falla en silencio: quien reportó ve su página de éxito igual. Y con `NOTIFY_MODE=relay` (el modo por omisión) tampoco sale ningún aviso a terceros: quedan en el log como `[notify:relevo] PERDIDO`. |
@@ -409,6 +409,42 @@ presencia y huella, nunca el valor).
 `SENDGRID_API_BASE`, `GITHUB_API_BASE`, `WHATSAPP_API_BASE`,
 `VERCEL_OAUTH_API_BASE` y `VERCEL_OAUTH_AUTHORIZE_URL` existen solo para que
 las pruebas apunten a sus servidores falsos. No se definen en producción.
+
+## Llaves de API: dos alcances
+
+`API_KEY` es la llave de **operación** y sigue funcionando exactamente igual que
+siempre: abre las siete superficies con llave, incluido el `DELETE` irreversible.
+Junto a ella hay llaves guardadas en la base (`api_keys`), que se emiten con
+`npm run api-key` y **pueden mucho menos**. El paso a paso está en
+[`docs/llaves-de-api.md`](docs/llaves-de-api.md); lo que hay que saber para leer
+el código:
+
+- De una llave emitida solo se guarda su **SHA-256** y un prefijo de 8
+  caracteres. La verificación es una búsqueda por hash **sin caché**, para que
+  revocar surta efecto en el request siguiente. Una fila nunca se borra: se
+  revoca.
+- El alcance se decide **en servidor**, con el principal que resolvió la puerta,
+  nunca con el cuerpo del request. Una llave `ingest` solo puede
+  `POST /api/updates`; ahí `source` se fuerza a `aggregator`, `reporter` y
+  `contact` se descartan, no se dispara `notifySubscribers`, hay techo de
+  escrituras por hora, y **no puede sobreescribir un `external_id` que no
+  creó** (el upsert por `external_id` no mira quién creó la fila, y esos ids son
+  URLs públicas de la fuente: derivables por cualquiera).
+- **Los estados que no puede afirmar no se rechazan: se estacionan en
+  `unknown`**, y la respuesta lo dice en `status_coercion`. Nunca se convierten
+  en `missing` — buena parte de lo que se encuentra en fuentes públicas es gente
+  que ya apareció, y publicar eso como desaparecida sería peor que no ingerir
+  nada. Es el mismo principio con el que el adaptador del registro público manda
+  `"Localizada sin vida"` a `unknown` (`src/sources/colombiatebusca.js`).
+  Cuidado: `unknown` **no tiene salida** todavía (#190), así que esto llena una
+  cola que hoy nadie atiende.
+- `api_write_log` deja el rastro de qué llave escribió qué ficha, y hace un
+  segundo trabajo fácil de pasar por alto: es la **prueba de propiedad** de la
+  que depende la regla de arriba. Si no se pudo escribir, la ficha queda sin
+  dueño demostrable y la corrección siguiente se rechaza — falla cerrado.
+- Emitir es hoy un script. El panel en `/admin` va en un PR aparte a propósito:
+  agregar llaves por persona **sin** el alcance acotado permitiría emitir con dos
+  clics una llave de poder total.
 
 ## Endpoints operativos
 
@@ -437,7 +473,9 @@ alguien, sí:
   lo que borra, con el mismo orden que el DELETE del ARCO; el radio no cambia,
   y cuando no hay nada que purgar no gasta ni una llamada a Rekognition.
 - `DELETE /api/people/:id` — **con llave**, y deshabilitado (503) si no hay
-  `API_KEY`. Cumple el borrado que promete la política de privacidad, y se lleva
+  `API_KEY`. Exige `API_KEY` misma: ni siquiera una llave emitida con alcance
+  `operator` puede borrar (única asimetría entre las dos, y es la dirección
+  segura). Cumple el borrado que promete la política de privacidad, y se lleva
   las dos copias del rastro: la fila (en cascada) y las firmas faciales de sus
   fotos, que viven en la colección de Rekognition y a las que la cascada no
   llega. **El orden importa y está elegido:** los `face_id` se leen antes del
