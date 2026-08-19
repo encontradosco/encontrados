@@ -73,10 +73,37 @@ function parseMessage(text) {
 // consentimiento explícito fuera del formulario web) y queda para otro PR.
 // El texto no puede decir "no venía con un comando reconocido": en las ramas
 // find y unsubscribe SÍ hay un comando válido (BUSCAR, BAJA) — lo que falta
-// es que sea uno de los dos que procesan fotos. Decir lo contrario manda a
+// es que sea uno de los que procesan fotos. Decir lo contrario manda a
 // reenviar la misma foto con el mismo BUSCAR, que tampoco la va a usar.
-const PHOTO_NOT_PROCESSED_NOTE =
-  '📷 Recibí una foto, pero este mensaje no la usa. Para que cuente, mándala de nuevo con BIEN <nombre> o SUSCRIBIR <nombre> como leyenda.';
+//
+// Y tiene que ofrecer los comandos de reporte, no solo BIEN. El caso más
+// probable que cae en `unrecognized` es alguien escribiendo en lenguaje
+// natural que NO encuentra a un familiar y adjuntando su foto — el ejemplo
+// del propio #156. Ofrecerle únicamente "BIEN <nombre>" lo empuja a
+// registrarla como a salvo: un dato falso, y justo el que hace que nadie la
+// siga buscando.
+//
+// FALLECIDO queda fuera a propósito, y no por descuido: procesa la foto
+// igual que los otros tres (las cuatro palabras entran por el mismo intent
+// 'report'). Se omite por dos razones que apuntan al mismo lado. La primera
+// es consistencia: HELP tampoco lo lista, así que este aviso sería el único
+// lugar del bot que lo ofrece, y un aviso automático no es donde se estrena
+// un comando que el producto no anuncia. La segunda es el costo del error:
+// este texto sale justamente cuando NO entendimos el mensaje, y de todas las
+// sugerencias posibles esa es la que peor se equivoca si la persona la toma
+// por descarte. Quien tenga que reportar un fallecimiento sigue pudiendo
+// hacerlo — el comando funciona igual que antes de este cambio.
+//
+// "no la guardé" es literal en las cuatro ramas, no una manera de hablar:
+// ninguna llama a `processPhoto` ni a `admitReport`, que son los dos únicos
+// caminos por los que una foto entra a la base o al índice facial. Los bytes
+// que bajó el webhook se quedan en memoria y se van con la petición.
+const PHOTO_NOT_PROCESSED_NOTE = [
+  '📷 Recibí una foto, pero con este mensaje no puedo usarla, así que no la guardé.',
+  'Para que sirva, mándala otra vez con el comando como leyenda:',
+  '• SUSCRIBIR <nombre> — si estás buscando a esa persona',
+  '• BIEN / HERIDO / DESAPARECIDO <nombre> — si la encontraste'
+].join('\n');
 
 function withPhotoNote(reply, photo) {
   return photo ? `${reply}\n\n${PHOTO_NOT_PROCESSED_NOTE}` : reply;
