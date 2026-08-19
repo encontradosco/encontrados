@@ -59,8 +59,13 @@ async function startApp() {
     store,
     adapter,
     base: `http://127.0.0.1:${server.address().port}`,
-    stop() {
-      server.close();
+    // Se cierran las DOS cosas, y se espera al servidor. Con 17 pruebas en
+    // este archivo, dejar abierto el handle de la base y no esperar el cierre
+    // del socket le deja al runner —que corre los archivos en paralelo— una
+    // pila de descriptores vivos que solo aprieta al resto de la suite.
+    async stop() {
+      await new Promise((resolve) => server.close(resolve));
+      await adapter.close();
       delete process.env.ADMIN_EMAILS;
       delete process.env.ADMIN_SESSION_SECRET;
       delete process.env.NOTIFY_MODE;
@@ -149,7 +154,7 @@ test('la constancia privada no sale por ninguna lectura pública', async () => {
       assert.ok(!/probable/i.test(cuerpo), `la palabra "probable" apareció en el ${donde} público`);
     }
   } finally {
-    app.stop();
+    await app.stop();
   }
 });
 
@@ -177,7 +182,7 @@ test('la evidencia de una resolución tampoco viaja al mensaje público', async 
     assert.ok(!json.includes(NOTA_PRIVADA));
     assert.ok(!json.includes(ADMIN));
   } finally {
-    app.stop();
+    await app.stop();
   }
 });
 
@@ -204,7 +209,7 @@ test('sin evidencia escrita no se resuelve, y no se manda ningún aviso', async 
       assert.equal((await reviews(app.adapter, person.id)).length, 0);
     }
   } finally {
-    app.stop();
+    await app.stop();
   }
 });
 
@@ -221,7 +226,7 @@ test('sin marcar la casilla de "esto manda un aviso" no se resuelve', async () =
     assert.equal((await app.store.getLatestUpdate(person.id)).status, 'unknown');
     assert.equal((await reviews(app.adapter, person.id)).length, 0);
   } finally {
-    app.stop();
+    await app.stop();
   }
 });
 
@@ -238,7 +243,7 @@ test('un estado que no sea "apareció viva" o "murió" se rechaza', async () => 
       assert.equal((await app.store.getLatestUpdate(person.id)).status, 'unknown');
     }
   } finally {
-    app.stop();
+    await app.stop();
   }
 });
 
@@ -284,7 +289,7 @@ test('resolver deja constancia de quién, cuándo, con qué y a cuántos', async
     const publica = publicUpdate(await app.store.getLatestUpdate(person.id));
     assert.ok(!JSON.stringify(publica).includes(ADMIN));
   } finally {
-    app.stop();
+    await app.stop();
   }
 });
 
@@ -305,7 +310,7 @@ test('una ficha ya resuelta no se resuelve otra vez', async () => {
       'una sola resolución, un solo aviso'
     );
   } finally {
-    app.stop();
+    await app.stop();
   }
 });
 
@@ -336,7 +341,7 @@ test('la cola lista la ficha con su evidencia y la suelta al resolverla', async 
     const despues = await (await fetch(`${app.base}/admin/revision`, { headers })).text();
     assert.ok(!despues.includes('Helena Sintética Ocho'), 'resuelta, sale de la cola');
   } finally {
-    app.stop();
+    await app.stop();
   }
 });
 
@@ -361,7 +366,7 @@ test('la pantalla avisa, antes de confirmar, que resolver notifica y a cuántos'
     // Ni la dirección de una familia ni el correo del equipo se pintan acá.
     assert.ok(!html.includes('tia@ejemplo.test'), 'la cola no expone las direcciones de quien sigue la ficha');
   } finally {
-    app.stop();
+    await app.stop();
   }
 });
 
@@ -374,7 +379,7 @@ test('sin nadie suscrito la pantalla lo dice, en vez de amenazar con un aviso qu
     ).text();
     assert.match(html, /no sale ningún aviso/i);
   } finally {
-    app.stop();
+    await app.stop();
   }
 });
 
@@ -397,7 +402,7 @@ test('la cola entera exige sesión de /admin', async () => {
     assert.equal((await reviews(app.adapter, person.id)).length, 0);
     assert.equal((await app.store.getLatestUpdate(person.id)).status, 'unknown');
   } finally {
-    app.stop();
+    await app.stop();
   }
 });
 
@@ -421,7 +426,7 @@ test('una ficha que ya no está en la cola no muestra el botón de resolver', as
     // El de dejar constancia sí sigue: no tiene efecto y sirve para el registro.
     assert.match(html, /action="\/admin\/revision\/\d+\/nota"/);
   } finally {
-    app.stop();
+    await app.stop();
   }
 });
 
@@ -449,7 +454,7 @@ test('un error en la constancia repuebla la constancia, NUNCA el formulario de r
       'palabras escritas para una constancia sin efecto no pueden aparecer precargadas en el formulario que manda avisos'
     );
   } finally {
-    app.stop();
+    await app.stop();
   }
 });
 
@@ -471,7 +476,7 @@ test('un error al resolver repuebla el formulario de resolver, y solo ese', asyn
     assert.ok(resolver.includes('https://ejemplo.test/n'), 'ni el enlace');
     assert.ok(!nota.includes(NOTA_PRIVADA), 'y no se derrama al otro formulario');
   } finally {
-    app.stop();
+    await app.stop();
   }
 });
 
@@ -494,7 +499,7 @@ test('un :id que no es un entero da 404, no un 500 de la base', async () => {
       }
     }
   } finally {
-    app.stop();
+    await app.stop();
   }
 });
 
@@ -526,7 +531,7 @@ test('solo el valor exacto de la casilla cuenta como confirmación', async () =>
     assert.equal(ok.status, 200);
     assert.equal((await app.store.getLatestUpdate(person.id)).status, 'deceased');
   } finally {
-    app.stop();
+    await app.stop();
   }
 });
 
@@ -545,6 +550,6 @@ test('la casilla del formulario emite exactamente el valor que el servidor exige
       'la casilla tiene que emitir el mismo valor que exige validateEvidence'
     );
   } finally {
-    app.stop();
+    await app.stop();
   }
 });
