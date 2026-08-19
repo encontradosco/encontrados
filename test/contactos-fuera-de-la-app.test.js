@@ -99,11 +99,12 @@ test('un contacto externo con fecha vieja no corre "envíos medidos desde" hacia
   const antes = await store.contactLogEarliest();
   assert.ok(antes, 'la app ya tiene su primer registro');
 
-  // Y ahora un contacto del equipo, fechado dos días antes.
+  // Y ahora un contacto del equipo, fechado el día en que arrancó el proyecto
+  // —lo más atrás que la ruta acepta, y bastante antes del envío de la app.
   const res = await registrar(base, {
     ...CONTACTO_BASE,
     person_id: personId,
-    occurred_at: '2020-01-01T00:00:00Z',
+    occurred_at: '2026-08-10T00:00:00Z',
     ref: ref('correo-viejo')
   });
   assert.equal(res.status, 201);
@@ -112,7 +113,7 @@ test('un contacto externo con fecha vieja no corre "envíos medidos desde" hacia
   // la app no midió nada — la mentira por omisión que esa frase existe para
   // evitar.
   assert.equal(await store.contactLogEarliest(), antes);
-  assert.equal(await store.contactLogEarliest({ source: 'operador' }), '2020-01-01T00:00:00Z');
+  assert.equal(await store.contactLogEarliest({ source: 'operador' }), '2026-08-10T00:00:00Z');
 });
 
 test('la serie diaria de la app tampoco ve los contactos externos', async (t) => {
@@ -185,7 +186,11 @@ test('el endpoint rechaza lo que no es un contacto externo válido', async (t) =
     [{ ...ok, result: 'rechazado' }, 400, /result/],
     [{ ...ok, occurred_at: 'ayer' }, 400, /occurred_at/],
     [{ ...ok, occurred_at: undefined }, 400, /occurred_at/],
-    [{ ...ok, occurred_at: new Date(Date.now() + 86400000).toISOString() }, 400, /futuro/]
+    [{ ...ok, occurred_at: new Date(Date.now() + 86400000).toISOString() }, 400, /futuro/],
+    // La cota simétrica: un 1970 arrastraría medio siglo al "medido desde" de
+    // la sección externa.
+    [{ ...ok, occurred_at: '1970-01-01T00:00:00Z' }, 400, /anterior al inicio/],
+    [{ ...ok, occurred_at: '2026-08-09T23:59:59Z' }, 400, /anterior al inicio/]
   ];
   for (const [body, status, mensaje] of casos) {
     const res = await registrar(base, body);
@@ -416,4 +421,65 @@ test('el script de registro valida el archivo entero antes de mandar nada', asyn
   assert.equal(roto.errors.length, 1);
 
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('el script no pierde las líneas buenas que vienen después de una mala', async () => {
+  const { readEntries } = require('../scripts/registrar-contactos');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'contactos-'));
+  const file = path.join(dir, 'intercalado.jsonl');
+  const linea = (o) =>
+    JSON.stringify({
+      person_id: 1,
+      channel: 'email',
+      result: 'enviado',
+      occurred_at: '2026-08-11T15:04:05Z',
+      message_id: '<uno@correo.ejemplo>',
+      ...o
+    });
+  fs.writeFileSync(
+    file,
+    [
+      linea({ message_id: '<uno@correo.ejemplo>' }),
+      linea({ channel: 'paloma', message_id: '<dos@correo.ejemplo>' }),
+      linea({ message_id: '<tres@correo.ejemplo>' })
+    ].join('\n') + '\n'
+  );
+  const { entries, errors } = readEntries(file);
+  // El lote se aborta igual —main sale con cualquier error—, pero el conteo
+  // que se imprime tiene que decir la verdad sobre cuántas líneas están bien.
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /línea 2/);
+  assert.equal(entries.length, 2, 'la línea 3 sigue contando aunque la 2 esté mala');
+
+  // Number(null) es 0, y 0 es un entero: sin el chequeo explícito, una
+  // persona sin id se iba a la ruta como persona 0.
+  const sinId = path.join(dir, 'sin-id.jsonl');
+  fs.writeFileSync(sinId, [linea({ person_id: null }), linea({ person_id: '' })].join('\n') + '\n');
+  const roto = readEntries(sinId);
+  assert.equal(roto.entries.length, 0);
+  assert.equal(roto.errors.length, 2);
+  for (const e of roto.errors) assert.match(e, /falta person_id/);
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('la fecha del aviso llega con la misma forma venga del motor que venga', async () => {
+  // Postgres entrega created_at como Date; SQLite, como string ISO. La suite
+  // corre sobre SQLite, así que sin este test la diferencia solo aparecería
+  // en producción: el <time> de la ficha saldría con la forma del Date.
+  const fakePostgres = {
+    async familyContactLogByPerson() {
+      return [
+        {
+          channel: 'email',
+          result: 'enviado',
+          source: 'operador',
+          created_at: new Date('2026-08-11T15:04:05Z')
+        }
+      ];
+    }
+  };
+  const [fila] = await createStore(fakePostgres).familyContactLogByPerson(1);
+  assert.equal(fila.created_at, '2026-08-11T15:04:05Z');
+  assert.equal(typeof fila.created_at, 'string');
 });

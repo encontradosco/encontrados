@@ -54,9 +54,10 @@ Lo que se registra es **el evento, no el destinatario**:
 ```
 
 No hay campo para el nombre, la dirección, el número ni el cuerpo del mensaje, y
-no hay dónde guardarlos: las columnas de `contact_log` son un id, dos enums, una
-fecha y una referencia opaca. Es la misma garantía que ya tenía la tabla, y este
-cambio no la relaja.
+no hay dónde guardarlos: las columnas de `contact_log` son ids internos
+(`person_id`, `update_id`), tres enums (`channel`, `result`, `source`), la fecha
+y `external_ref`, la referencia opaca. Es la misma garantía que ya tenía la
+tabla, y este cambio no la relaja.
 
 ### Por qué `ref` es un digesto y no el id del mensaje
 
@@ -93,8 +94,10 @@ DELETE /api/contact-log/:ref     Authorization: Bearer <API_KEY>
   decidió por su cuenta no intentar nada", y una persona escribiendo desde su
   buzón no tiene ese estado.
 - `occurred_at`: la fecha **real** del contacto, no la de hoy. Se rechaza una
-  fecha futura (es un error de zona horaria del registrador, y corre hacia
-  adelante la serie de días del panel).
+  fecha más de cinco minutos en el futuro —la tolerancia es por el desfase de
+  reloj entre máquinas— y también una anterior al 10 de agosto de 2026, el día
+  en que el proyecto existe. Las dos cotas atajan el mismo error de zona
+  horaria del registrador, que corre la serie de días del panel.
 - Respuesta: `201` con `created: true` la primera vez, `200` con `created:
   false` en un reintento. Las dos son éxito.
 - `DELETE` solo puede borrar filas con `source = 'operador'`: el filtro vive en

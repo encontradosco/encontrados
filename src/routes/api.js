@@ -656,6 +656,9 @@ function apiRoutes(store, matcher, petStore, petMatcher) {
   // por su cuenta no intentar nada", y una persona que escribe desde su buzón
   // no tiene ese estado. O se mandó, o falló.
   const EXTERNAL_RESULTS = ['enviado', 'fallido'];
+  // El primer commit del repo. Nada de lo que esta ruta registra puede haber
+  // pasado antes de que la app existiera.
+  const INICIO_DEL_REGISTRO = Date.parse('2026-08-10T00:00:00Z');
 
   router.post(
     '/contact-log',
@@ -686,6 +689,15 @@ function apiRoutes(store, matcher, petStore, petMatcher) {
       // minutos de tolerancia por el desfase de reloj entre máquinas.
       if (occurredAt.getTime() > Date.now() + 5 * 60 * 1000) {
         return res.status(400).json({ error: 'occurred_at está en el futuro' });
+      }
+      // Y la cota simétrica: un contacto anterior al día en que el proyecto
+      // existe no es un hecho, es el mismo error de zona horaria (o una línea
+      // mal formada) corriendo la serie hacia el otro lado. Importa porque
+      // contactLogEarliest({ source: 'operador' }) fecha el "medido desde" de
+      // la sección externa: un 1970 ahí pinta como instrumentados cincuenta
+      // años en los que nadie contactó a nadie.
+      if (occurredAt.getTime() < INICIO_DEL_REGISTRO) {
+        return res.status(400).json({ error: 'occurred_at es anterior al inicio del proyecto' });
       }
 
       const { inserted } = await store.insertContactLog({

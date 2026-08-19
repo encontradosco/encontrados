@@ -87,6 +87,11 @@ function readEntries(file) {
     const raw = line.trim();
     if (!raw) return;
     const nth = `línea ${i + 1}`;
+    // Los errores DE ESTA LÍNEA. Mirar el acumulado del archivo haría que una
+    // línea mala en el medio se llevara por delante a las buenas que vienen
+    // después: el lote se aborta igual (main sale con cualquier error), pero
+    // el conteo que se imprime en seco mentiría sobre cuántas hay.
+    const propios = [];
     let obj;
     try {
       obj = JSON.parse(raw);
@@ -94,16 +99,25 @@ function readEntries(file) {
       errors.push(`${nth}: no es JSON válido`);
       return;
     }
-    if (!Number.isInteger(Number(obj.person_id))) errors.push(`${nth}: person_id debe ser un entero`);
-    if (!CHANNELS.includes(obj.channel)) errors.push(`${nth}: channel debe ser ${CHANNELS.join(' o ')}`);
-    if (!RESULTS.includes(obj.result)) errors.push(`${nth}: result debe ser ${RESULTS.join(' o ')}`);
+    // Number(null) y Number('') son 0, y 0 es un entero: sin este chequeo una
+    // persona sin id pasaría la validación y saldría a la ruta como persona 0.
+    if (obj.person_id === null || obj.person_id === undefined || obj.person_id === '') {
+      propios.push(`${nth}: falta person_id`);
+    } else if (!Number.isInteger(Number(obj.person_id))) {
+      propios.push(`${nth}: person_id debe ser un entero`);
+    }
+    if (!CHANNELS.includes(obj.channel)) propios.push(`${nth}: channel debe ser ${CHANNELS.join(' o ')}`);
+    if (!RESULTS.includes(obj.result)) propios.push(`${nth}: result debe ser ${RESULTS.join(' o ')}`);
     if (!obj.occurred_at || Number.isNaN(new Date(obj.occurred_at).getTime())) {
-      errors.push(`${nth}: occurred_at debe ser una fecha ISO 8601`);
+      propios.push(`${nth}: occurred_at debe ser una fecha ISO 8601`);
     }
     if (!obj.message_id || typeof obj.message_id !== 'string') {
-      errors.push(`${nth}: falta message_id (la evidencia del envío)`);
+      propios.push(`${nth}: falta message_id (la evidencia del envío)`);
     }
-    if (errors.length) return;
+    if (propios.length) {
+      errors.push(...propios);
+      return;
+    }
     entries.push({
       person_id: Number(obj.person_id),
       channel: obj.channel,
