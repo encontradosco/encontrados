@@ -128,6 +128,43 @@ test('home ofrece dos caminos claros, cada uno con su espacio de imagen', async 
   assert.match(home, /<img src="\/img\/busqueda\.jpg"/);
 });
 
+// Los dos caminos son <span>, no encabezados, así que la página necesita su
+// propio <h1>. Es la puerta de entrada del sitio: sin él, un lector de pantalla
+// y un buscador entran sin nada que diga qué es esto — y con la base vacía el
+// home se quedaba sin un solo encabezado.
+test('el home tiene un h1 y los encabezados bajan en orden', async (t) => {
+  const { server, base } = await startApp();
+  t.after(() => server.close());
+
+  const headingsOf = (html) =>
+    [...html.matchAll(/<(h[1-6])\b[^>]*>/g)].map((m) => Number(m[1][1]));
+
+  // Sin reportes todavía: el h1 tiene que estar igual.
+  const vacio = await (await fetch(base)).text();
+  assert.deepEqual(headingsOf(vacio), [1], 'con la base vacía el home es solo su h1');
+  assert.match(vacio, /<h1[^>]*>Personas desaparecidas por el terremoto en Colombia<\/h1>/);
+
+  const fd = new FormData();
+  fd.set('name', 'Pedro Pablo Ramírez');
+  fd.set('location', 'Barrio Centro');
+  fd.set('contact', '300 123 4567');
+  fd.append('photos', new File([Buffer.from('foto')], 'f.jpg', { type: 'image/jpeg' }));
+  const creado = await fetch(`${base}/report`, { method: 'POST', body: fd, redirect: 'manual' });
+  assert.equal(creado.status, 303);
+
+  const conReportes = await (await fetch(base)).text();
+  const niveles = headingsOf(conReportes);
+  assert.equal(niveles[0], 1, 'el primer encabezado de la página es el h1');
+  assert.equal(niveles.filter((n) => n === 1).length, 1, 'un solo h1 por página');
+  // Ningún salto: de un encabezado al siguiente se baja de a un nivel.
+  for (let i = 1; i < niveles.length; i++) {
+    assert.ok(
+      niveles[i] <= niveles[i - 1] + 1,
+      `salto de h${niveles[i - 1]} a h${niveles[i]}: el orden de encabezados se rompió`
+    );
+  }
+});
+
 // A second party reporting the same person is never rejected: the report is
 // merged into the same person as one more update, keeping both contacts so a
 // rescuer's match can reach every family member who is searching.

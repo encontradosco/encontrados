@@ -531,6 +531,13 @@ function webRoutes(store, matcher) {
         layout(
           'Inicio',
           `
+<!-- El encabezado de nivel 1 de la página. Los dos caminos de abajo son
+     hermanos con el mismo peso y ninguno titula la página, por eso van como
+     span y no como encabezado. Sin este, el home arrancaba en el nivel 2 del
+     listado de reportes — o sin ningún encabezado, cuando todavía no hay
+     reportes — que es como entrar a la puerta principal de un servicio de
+     emergencia sin que nada diga qué es esto. -->
+<h1 class="compact">Personas desaparecidas por el terremoto en Colombia</h1>
 <section class="paths">
   <!-- Dos caminos, y nada más: el rescatista que encontró a alguien, y quien
        está buscando. Cada uno lleva su propia imagen arriba para que se
