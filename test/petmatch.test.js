@@ -1,5 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
+const path = require('node:path');
 const sharp = require('sharp');
 const { createSqliteAdapter } = require('../src/store/sqlite');
 const { createPetStore } = require('../src/pets');
@@ -475,5 +477,60 @@ test('backfillUnindexedPetPhotos borra los bytes de una foto "encontré" aunque 
     stored.content.length,
     0,
     'los bytes de una foto "encontré" deben borrarse aunque el backfill no haya logrado generar un embedding'
+  );
+});
+
+// El borrado de la foto de «encontré» vive FUERA del try — y eso se verifica
+// por ALCANCE, no por cercanía de texto.
+//
+// Por qué hace falta esta prueba y no basta la de codeowners.test.js: allá el
+// patrón `kind === 'query') await petStore.clearPetPhotoContent(` solo
+// establece que las dos cosas están pegadas en el texto. Si alguien mueve esa
+// línea DENTRO del try y conserva la forma, aquel patrón sigue coincidiendo —
+// y la promesa se rompe en silencio: un error transitorio de base dejaría los
+// bytes de la foto guardados para siempre.
+//
+// Acá se mide lo que de verdad importa: que la llamada ocurra después de que
+// cierra el bloque que puede fallar.
+test('el borrado de una foto «query» corre aunque guardar el embedding o comparar fallen', () => {
+  const fuente = fs.readFileSync(path.join(__dirname, '..', 'src', 'petmatch.js'), 'utf8');
+
+  // El try que envuelve lo que puede fallar es el que contiene matchPetPhoto.
+  // `await matchPetPhoto(` y no `matchPetPhoto(` a secas: lo segundo cae en la
+  // DEFINICIÓN de la función, que está antes y fuera de cualquier try.
+  const dentroDelTry = fuente.indexOf('await matchPetPhoto(');
+  assert.ok(dentroDelTry !== -1, 'no encontré la llamada a matchPetPhoto — ¿se renombró la pieza?');
+  const inicioTry = fuente.lastIndexOf('try {', dentroDelTry);
+  assert.ok(inicioTry !== -1, 'matchPetPhoto ya no está dentro de un try — revisa si la promesa sigue en pie');
+
+  // Recorrer llaves desde el `try` hasta que cierre, y seguir hasta que cierre
+  // también su `catch`: ahí termina el bloque que puede fallar.
+  function finDelBloque(desde) {
+    let profundidad = 0;
+    for (let i = desde; i < fuente.length; i++) {
+      if (fuente[i] === '{') profundidad++;
+      else if (fuente[i] === '}') {
+        profundidad--;
+        if (profundidad === 0) return i;
+      }
+    }
+    return -1;
+  }
+  const finTry = finDelBloque(fuente.indexOf('{', inicioTry));
+  assert.ok(finTry !== -1, 'no pude encontrar el cierre del try');
+  const inicioCatch = fuente.indexOf('{', fuente.indexOf('catch', finTry));
+  const finCatch = finDelBloque(inicioCatch);
+  assert.ok(finCatch !== -1, 'no pude encontrar el cierre del catch');
+
+  // La llamada guardada tiene que aparecer DESPUÉS de ese cierre.
+  const borradoGuardado = /if\s*\(\s*kind\s*===\s*'query'\s*\)\s*await\s+petStore\.clearPetPhotoContent\s*\(/g;
+  const posiciones = [...fuente.matchAll(borradoGuardado)].map((m) => m.index);
+  assert.ok(posiciones.length > 0, 'no encontré el borrado guardado por `kind === \'query\'`');
+  assert.ok(
+    posiciones.some((p) => p > finCatch),
+    'el borrado de la foto «query» quedó DENTRO del bloque que puede fallar.\n\n' +
+      'Si guardar el embedding o comparar lanza, el borrado no corre y los bytes de la foto de\n' +
+      'quien encontró la mascota se quedan en la base — justo lo que la promesa dice que no pasa.\n' +
+      'Tiene que ir después de que cierra el catch, incondicional.'
   );
 });
