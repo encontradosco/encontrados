@@ -223,7 +223,7 @@ hay framework de frontend ni paso de build: lo que se lee es lo que corre.
   fragmento HTML inyectado por un script vanilla inline). Si ese fragmento
   falla o expira, la sección lo dice — nunca un cero que parezca un dato
   real. `gatherReportData` (el correo, que sí puede pagar el recompute
-  completo porque corre en su propio cron) ahora compone
+  completo porque no tiene a nadie esperándolo) ahora compone
   `gatherCheapReportData` + `gatherFunnelStats`, y mide cuánto tarda esa
   segunda parte — el correo trae esa duración en el pie, y una corrida que
   pase de 60s deja un `console.warn` con umbral explícito.
@@ -343,10 +343,11 @@ sola función. De ahí salen tres reglas que no son negociables:
   debe correr adentro del camino síncrono de una página** — así fue el 504 de
   `/admin/stats` que motivó subir `maxDuration` de 30 a 120 y diferir el
   embudo a `GET /admin/stats/funnel` (hotfix post-#127, ver `src/adminStats.js`).
-  El cron (`POST /api/report/send`, `src/report.js`) sí puede pagarlo porque
-  corre solo, sin nadie esperando — pero corre contra el MISMO techo, y el
-  correo ahora trae su propia duración en el pie para que crecer sea visible
-  antes de volver a rozarlo. Pendiente, declarado y no resuelto: la
+  El reporte por correo (`POST /api/report/send`, `src/report.js`) sí puede
+  pagarlo porque corre solo, sin nadie esperando — pero corre contra el MISMO
+  techo, y el correo trae su propia duración en el pie para que crecer sea
+  visible antes de volver a rozarlo. Desde el 19-ago-2026 ya no lo dispara un
+  cron: lo manda un operador a mano, con `/admin/stats` como fuente de verdad. Pendiente, declarado y no resuelto: la
   concurrencia de `computeMatchStats` (`MATCH_STATS_CONCURRENCY = 3`,
   `src/facematch.js`) nunca se ajustó contra la cuota real de SearchFaces de
   la cuenta — us-east-1 default hasta 50 TPS según la doc pública de AWS, muy

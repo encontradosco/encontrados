@@ -374,9 +374,10 @@ function apiRoutes(store, matcher, petStore, petMatcher) {
     })
   );
 
-  // ALL /api/report/send — arma y manda el reporte operativo recurrente
-  // (#116, PR 2). Lo dispara el cron de Vercel 3×/día y, a mano, un operador
-  // con la API key (el primer envío real lo dispara un humano apenas mergee).
+  // ALL /api/report/send — arma y manda el reporte operativo por correo
+  // (#116, PR 2). Hoy lo dispara UN OPERADOR a mano con la API key: el cron de
+  // Vercel que lo mandaba 3×/día se retiró el 19-ago-2026, cuando /admin/stats
+  // pasó a ser la fuente de verdad de la operación.
   //
   // A diferencia del resto de esta ruta, acá NO aplica "las lecturas quedan
   // abiertas": esto tiene efecto de lado (manda correos vía SendGrid, que

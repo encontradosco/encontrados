@@ -3,10 +3,5 @@
   "rewrites": [{ "source": "/(.*)", "destination": "/api" }],
   "functions": {
     "api/index.js": { "maxDuration": 120 }
-  },
-  "crons": [
-    { "path": "/api/report/send", "schedule": "0 12 * * *" },
-    { "path": "/api/report/send", "schedule": "0 18 * * *" },
-    { "path": "/api/report/send", "schedule": "0 0 * * *" }
-  ]
+  }
 }

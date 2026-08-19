@@ -1,9 +1,14 @@
-// Reporte operativo recurrente por correo (#116, PR 2) — el segundo de los
-// PRs chicos de la secuencia aprobada, y el que llega ANTES que el panel.
+// Reporte operativo por correo (#116, PR 2) — el segundo de los PRs chicos de
+// la secuencia aprobada, y el que llegó ANTES que el panel.
 //
-// Tres veces al día (7:00 / 13:00 / 19:00 Bogotá) recomputa el cruce de
-// coincidencias (computeMatchStats, #117) más los conteos generales de la
-// base, arma el HTML EXACTO que aprobó @ni500 en el issue
+// **Ya no sale solo.** El cron de Vercel que lo mandaba tres veces al día se
+// retiró el 19-ago-2026: /admin/stats quedó como la fuente de verdad de la
+// operación, y un correo recurrente con las mismas cifras solo competía con
+// él. El endpoint sigue en pie para un envío puntual a mano.
+//
+// Recomputa el cruce de coincidencias (computeMatchStats, #117) más los
+// conteos generales de la base, arma el HTML EXACTO que aprobó @ni500 en el
+// issue
 // (https://github.com/encontradosco/encontrados/issues/116#issuecomment-5271536079)
 // y lo manda por SendGrid a los buzones que diga REPORT_RECIPIENTS.
 //
@@ -18,11 +23,13 @@ const { RESCUE_ANCHOR_NORMALIZED_PREFIX } = require('./people');
 
 const BOGOTA_TZ = 'America/Bogota';
 
-// Los tres horarios fijos del cron (#116, PR 4 — hora de Bogotá: 7, 13, 19).
+// Los tres horarios que tuvo el cron (#116, PR 4 — hora de Bogotá: 7, 13, 19).
 // No existe una tabla de "cuándo salió el reporte anterior" — nunca se
 // diseñó una, y no hace falta: con un cron de horario FIJO, la mejor
 // aproximación honesta a "desde el reporte anterior" es la hora programada
-// inmediatamente antes de esta corrida. Funciona bien mientras el cron corra
+// inmediatamente antes de esta corrida. Retirado el cron (ver la cabecera),
+// estas horas son lo que le da una ventana definida a un envío manual: el
+// correo sigue diciendo "desde las 13:00" y no "desde vaya a saberse cuándo". Funciona bien mientras el cron corra
 // puntual; si una corrida se salta (un despliegue caído, por ejemplo), el
 // siguiente reporte simplemente suma un poco más en su ventana — no hay doble
 // conteo ni hueco, solo una ventana más ancha esa vez. Colombia no tiene
