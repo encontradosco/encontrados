@@ -92,6 +92,7 @@ test('home lists missing people and offers both actions', async (t) => {
   const fd = new FormData();
   fd.set('name', 'Pedro Pablo Ramírez');
   fd.set('location', 'Barrio Centro');
+  fd.set('department', 'Antioquia');
   fd.set('contact', '300 123 4567');
   fd.append('photos', new File([Buffer.from('foto')], 'f.jpg', { type: 'image/jpeg' }));
   const report = await fetch(`${base}/report`, { method: 'POST', body: fd, redirect: 'manual' });
@@ -120,6 +121,7 @@ test('a duplicate report merges into the same person instead of being rejected',
     const fd = new FormData();
     fd.set('name', 'Marta Cecilia Giraldo');
     fd.set('location', 'Barrio La Merced');
+    fd.set('department', 'Antioquia');
     fd.set('contact', contact);
     fd.append('photos', new File([Buffer.from('foto')], 'f.jpg', { type: 'image/jpeg' }));
     return fetch(`${base}/report`, { method: 'POST', body: fd, redirect: 'manual' });
@@ -142,13 +144,14 @@ test('a duplicate report merges into the same person instead of being rejected',
   assert.equal(updates.length, 2);
 });
 
-test('reporting requires photos, name, place and contact', async (t) => {
+test('reporting requires photos, name, place, department and contact', async (t) => {
   const { server, base } = await startApp();
   t.after(() => server.close());
 
   const missingContact = new FormData();
   missingContact.set('name', 'Sin Contacto');
   missingContact.set('location', 'Centro');
+  missingContact.set('department', 'Antioquia');
   missingContact.append('photos', new File([Buffer.from('foto')], 'f.jpg', { type: 'image/jpeg' }));
   assert.equal((await fetch(`${base}/report`, { method: 'POST', body: missingContact })).status, 400);
 
@@ -168,6 +171,7 @@ test('the contact of the reporter is never shown on public pages', async (t) => 
   const fd = new FormData();
   fd.set('name', 'Julia Restrepo');
   fd.set('location', 'La Candelaria');
+  fd.set('department', 'Antioquia');
   fd.set('contact', 'secreto@ejemplo.com');
   fd.append('photos', new File([Buffer.from('foto')], 'f.jpg', { type: 'image/jpeg' }));
   await fetch(`${base}/report`, { method: 'POST', body: fd, redirect: 'manual' });
@@ -315,6 +319,7 @@ test('the contact is remembered between reports via a cookie', async (t) => {
   const fd = new FormData();
   fd.set('name', 'Marta Isabel Vélez');
   fd.set('location', 'Chapinero');
+  fd.set('department', 'Antioquia');
   fd.set('contact', 'Cruz Roja · 300 555 1234');
   fd.append('photos', new File([Buffer.from('foto')], 'f.jpg', { type: 'image/jpeg' }));
   const res = await fetch(`${base}/report`, { method: 'POST', body: fd, redirect: 'manual' });

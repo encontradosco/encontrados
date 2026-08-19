@@ -38,6 +38,7 @@ async function createPostgresAdapter(connectionString) {
       status TEXT NOT NULL CHECK (status IN ('safe','injured','missing','deceased','unknown')),
       message TEXT,
       location TEXT,
+      department TEXT,
       lat DOUBLE PRECISION,
       lng DOUBLE PRECISION,
       contact TEXT,
@@ -180,6 +181,11 @@ async function createPostgresAdapter(connectionString) {
   // De dónde salió la afirmación: el enlace a la noticia que confirma que una
   // persona apareció. Un `safe` con enlace carga su propia prueba.
   await pool.query('ALTER TABLE updates ADD COLUMN IF NOT EXISTS source_url TEXT');
+  // Departamento del lugar donde se cree que está la persona — de una lista
+  // fija (src/departments.js), no texto libre. #150: es la señal que
+  // findOrCreatePerson usa para no fusionar por nombre solo cuando dos
+  // reportes apuntan a lugares muy distintos.
+  await pool.query('ALTER TABLE updates ADD COLUMN IF NOT EXISTS department TEXT');
   // Detection geometry (bounding box + landmarks) for the public overlay, and
   // the face thumbnail the public listing loads instead of the full photo.
   await pool.query('ALTER TABLE photos ADD COLUMN IF NOT EXISTS face_detail JSONB');
@@ -271,14 +277,25 @@ async function createPostgresAdapter(connectionString) {
     // new one (the aggregator re-sending its latest snapshot doesn't duplicate
     // the person's history). Without externalId, behavior is unchanged: a
     // plain insert every time.
-    async insertUpdate(personId, { status, message, location, lat, lng, source, sourceUrl, reporter, contact, externalId }) {
+    //
+    // `department` es la ÚNICA excepción a "un re-push que perdió un dato
+    // BORRA el que la fila ya tenía" (ver la nota de toUpdate en
+    // src/sources/colombiatebusca.js). Señalado en revisión del PR de #150:
+    // ese comportamiento es aceptable para un campo informativo como
+    // location, pero department alimenta el guardrail de fusión — perderlo en
+    // un reintento debilitaría en silencio la protección contra el incidente
+    // que #150 existe para evitar. COALESCE conserva el valor existente
+    // cuando el nuevo push no trae uno; solo lo pisa cuando SÍ trae un valor
+    // distinto.
+    async insertUpdate(personId, { status, message, location, department, lat, lng, source, sourceUrl, reporter, contact, externalId }) {
       return one(
-        `INSERT INTO updates (person_id, status, message, location, lat, lng, source, source_url, reporter, contact, external_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        `INSERT INTO updates (person_id, status, message, location, department, lat, lng, source, source_url, reporter, contact, external_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
          ON CONFLICT (external_id) WHERE external_id IS NOT NULL DO UPDATE SET
            status = EXCLUDED.status,
            message = EXCLUDED.message,
            location = EXCLUDED.location,
+           department = COALESCE(EXCLUDED.department, updates.department),
            lat = EXCLUDED.lat,
            lng = EXCLUDED.lng,
            source_url = EXCLUDED.source_url,
@@ -290,6 +307,7 @@ async function createPostgresAdapter(connectionString) {
           status,
           message || null,
           location || null,
+          department || null,
           Number.isFinite(lat) ? lat : null,
           Number.isFinite(lng) ? lng : null,
           source,

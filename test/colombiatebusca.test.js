@@ -31,6 +31,7 @@ async function report(base, extra = {}) {
   const fd = new FormData();
   fd.set('name', 'Marta Isabel Quintero');
   fd.set('location', 'Barrio San José, Quibdó');
+  fd.set('department', 'Antioquia');
   fd.set('contact', 'hermana@ejemplo.com');
   fd.set('message', 'Lleva una chaqueta roja');
   for (const [k, v] of Object.entries(extra)) fd.set(k, v);
@@ -51,7 +52,12 @@ test('el formulario de reporte ya no ofrece publicar en un registro de terceros'
   assert.doesNotMatch(html, /name="colombiatebusca"/);
   assert.doesNotMatch(html, /Reportar también en ColombiaTeBusca/i);
   // Las casillas que solo existían para llenar SU formulario se van con ella.
-  for (const field of ['reporter_name', 'department', 'municipality', 'place']) {
+  // `department` volvió con el #150 — no es la misma casilla: esta no le
+  // pertenece al formulario de Colombia Te Busca, es la señal fija (lista
+  // cerrada, no texto libre) que usa findOrCreatePerson para no fusionar dos
+  // reportes que apuntan a lugares muy distintos. La prueba de abajo confirma
+  // que sigue sin ser esa casilla.
+  for (const field of ['reporter_name', 'municipality', 'place']) {
     assert.doesNotMatch(html, new RegExp(`name="${field}"`), `sobra la casilla ${field}`);
   }
   assert.doesNotMatch(html, /ctb-fields/);
@@ -60,6 +66,111 @@ test('el formulario de reporte ya no ofrece publicar en un registro de terceros'
   const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'styles.css'), 'utf8');
   assert.doesNotMatch(css, /\.ctb-fields/);
   assert.doesNotMatch(css, /\.ctb-why/);
+});
+
+// #150: el <select> es de verdad — opciones fijas, y el valor elegido llega
+// a la fila guardada. La prueba de arriba ya confirmó que NO es la casilla
+// de Colombia Te Busca (sin ese texto, sin esas clases); esta confirma que
+// SÍ hace lo que promete.
+test('el departamento elegido en el formulario queda guardado en el reporte', async (t) => {
+  const { server, base, store } = await startApp();
+  t.after(() => server.close());
+
+  const html = await (await fetch(`${base}/report`)).text();
+  assert.match(html, /<select name="department" required>/);
+  assert.match(html, /<option value="Chocó">Chocó<\/option>/);
+
+  const res = await report(base, { department: 'Chocó' });
+  assert.equal(res.status, 303);
+  const personId = Number(res.headers.get('location').match(/^\/person\/(\d+)\?/)[1]);
+  const [update] = await store.getUpdates(personId);
+  assert.equal(update.department, 'Chocó');
+});
+
+// El servidor la trata igual que si faltara del todo (ver "server-side
+// validation" señalado en revisión del PR de #150): un valor fuera de la
+// lista fija equivale a no elegir nada, así que /report la rechaza con 400
+// en vez de guardar un reporte sin la señal que promete el formulario.
+// admitReport() (la capa compartida con API/WhatsApp) sigue degradando a
+// null en silencio — eso lo cubre test/report-admission.test.js.
+test('un departamento que no está en la lista fija se rechaza igual que si faltara', async (t) => {
+  const { server, base } = await startApp();
+  t.after(() => server.close());
+
+  const res = await report(base, { department: 'Narnia' });
+  assert.equal(res.status, 400);
+});
+
+test('sin departamento, /report se rechaza con 400 en vez de guardar la ficha sin la señal', async (t) => {
+  const { server, base } = await startApp();
+  t.after(() => server.close());
+
+  const fd = new FormData();
+  fd.set('name', 'Marta Isabel Quintero');
+  fd.set('location', 'Barrio San José, Quibdó');
+  fd.set('contact', 'hermana@ejemplo.com');
+  fd.append('photos', new File([await photoBytes()], 'f.jpg', { type: 'image/jpeg' }));
+  const res = await fetch(`${base}/report`, { method: 'POST', body: fd, redirect: 'manual' });
+  assert.equal(res.status, 400);
+});
+
+// Señalado en revisión del PR de #150: department es la ÚNICA excepción a
+// "un re-push que perdió un dato BORRA el que la fila ya tenía" (ese
+// comportamiento sigue igual para location/contact/etc — ver la nota de
+// toUpdate en src/sources/colombiatebusca.js). Un agregador que re-sincroniza
+// sin mandar department NO puede debilitar en silencio la señal que usa el
+// guardrail de fusión de #150. POST /api/updates es la puerta real donde esto
+// pasa: es la que trae external_id y por lo tanto el upsert.
+test('un re-push por external_id sin department conserva el que ya estaba guardado', async (t) => {
+  const { server, base, store } = await startApp();
+  t.after(() => server.close());
+
+  const post = (department) =>
+    fetch(`${base}/api/updates`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Persona Prueba Reintento',
+        status: 'missing',
+        source: 'aggregator',
+        external_id: 'ctb-reintento-1',
+        ...(department !== undefined ? { department } : {})
+      })
+    });
+
+  const first = await post('Chocó');
+  assert.equal(first.status, 201);
+  const second = await post(undefined); // re-push típico: no repite el campo
+
+  assert.equal(second.status, 201);
+  const { person } = await store.findOrCreatePerson('Persona Prueba Reintento');
+  const [update] = await store.getUpdates(person.id);
+  assert.equal(update.department, 'Chocó', 'el reintento no debe borrar el departamento ya guardado');
+});
+
+test('un re-push por external_id CON un department distinto sí lo actualiza', async (t) => {
+  const { server, base, store } = await startApp();
+  t.after(() => server.close());
+
+  const post = (department) =>
+    fetch(`${base}/api/updates`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Persona Prueba Reintento Dos',
+        status: 'missing',
+        source: 'aggregator',
+        external_id: 'ctb-reintento-2',
+        department
+      })
+    });
+
+  await post('Chocó');
+  await post('Valle del Cauca');
+
+  const { person } = await store.findOrCreatePerson('Persona Prueba Reintento Dos');
+  const [update] = await store.getUpdates(person.id);
+  assert.equal(update.department, 'Valle del Cauca', 'un valor nuevo sí debe pisar el anterior');
 });
 
 // Retirar la casilla no basta: mientras el servidor siguiera atendiendo el

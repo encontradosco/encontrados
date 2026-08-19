@@ -15,6 +15,7 @@ const gh = require('../github');
 const { logContact, resultFromSend } = require('../logbook');
 const { RESCUE_ANCHOR_PREFIX } = require('../people');
 const { createReportAdmission } = require('../report-admission');
+const { DEPARTMENTS, cleanDepartment } = require('../departments');
 
 // Express 4 doesn't catch async errors on its own.
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
@@ -1005,6 +1006,19 @@ ${RESCUE_FOOTER}`
     })
   );
 
+  // Opciones fijas (src/departments.js), no texto libre: es la señal que
+  // #150 usa para no fusionar por nombre solo cuando dos reportes apuntan a
+  // lugares muy distintos. "Selecciona…" deshabilitada y sin `value` para que
+  // un envío sin elegir nada llegue vacío, no con el primer departamento de
+  // la lista.
+  function departmentOptions(selected) {
+    const sel = String(selected || '');
+    return [
+      `<option value="" disabled${sel ? '' : ' selected'}>Selecciona un departamento…</option>`,
+      ...DEPARTMENTS.map((d) => `<option value="${esc(d)}"${d === sel ? ' selected' : ''}>${esc(d)}</option>`)
+    ].join('');
+  }
+
   // ------------------------------------------------- report a missing person
   router.get('/report', (req, res) => {
     const remembered = rememberedContact(req);
@@ -1026,6 +1040,8 @@ ${RESCUE_FOOTER}`
       <input name="location" id="location" list="location-options" autocomplete="off" placeholder="Ej. Barrio San José, Armenia" required>
       <datalist id="location-options"></datalist>
     </span></label>
+  <label class="field-label"><span>Departamento *</span>
+    <select name="department" required>${departmentOptions()}</select></label>
   <label class="field-label"><span>Tu teléfono para que te contacten</span>
     <input name="contact_phone" inputmode="tel" autocomplete="tel" maxlength="120" value="${esc(remembered.phone)}" placeholder="Ej. 300 123 4567"></label>
   <label class="field-label"><span>Tu correo</span>
@@ -1061,20 +1077,35 @@ ${LOCATION_SCRIPT}`,
     '/report',
     upload.array('photos', 8),
     wrap(async (req, res) => {
-      const { name, location, message } = req.body;
+      const { name, location, department, message } = req.body;
       const phone = String(req.body.contact_phone || '').trim();
       const email = String(req.body.contact_email || '').trim();
       // Sigue habiendo UNA sola obligación de contacto, ahora repartida en dos
       // casillas: con cualquiera de las dos el reporte pasa, igual que antes.
       const contact = composeContact({ phone, email, contact: req.body.contact });
       const files = (req.files || []).slice(0, MAX_QUERY_PHOTOS);
-      if (!name || !name.trim() || !location || !location.trim() || !contact || !files.length) {
+      // El <select> ya lo marca `required` en el formulario, pero eso no
+      // valida un POST directo (un multipart armado a mano, sin pasar por el
+      // navegador). Sin este chequeo, saltarse el campo se salta también la
+      // señal principal del guardrail de fusión de #150 — señalado en
+      // revisión del PR. Server-side SOLO acá, en la ruta web: el servicio
+      // compartido (admitReport) sigue degradando a null para quien llame
+      // desde la API o WhatsApp, que hoy no tienen forma de mandar este dato.
+      if (
+        !name ||
+        !name.trim() ||
+        !location ||
+        !location.trim() ||
+        !contact ||
+        !files.length ||
+        !cleanDepartment(department)
+      ) {
         return res
           .status(400)
           .send(
             layout(
               'Error',
-              '<p class="error">Faltan datos: hacen falta las fotos, el nombre, el lugar y un teléfono o correo de contacto.</p>'
+              '<p class="error">Faltan datos: hacen falta las fotos, el nombre, el lugar, el departamento y un teléfono o correo de contacto.</p>'
             )
           );
       }
@@ -1096,6 +1127,7 @@ ${LOCATION_SCRIPT}`,
         status: 'missing',
         message,
         location,
+        department,
         source: 'web',
         contact,
         photos: files.map((f) => ({ bytes: f.buffer, contentType: f.mimetype })),

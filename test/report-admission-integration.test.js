@@ -131,6 +131,7 @@ test('web, API and WhatsApp reports all notify the same verified subscriber', as
   const fd = new FormData();
   fd.set('name', 'Camilo Andrés Restrepo');
   fd.set('location', 'Barrio Centro');
+  fd.set('department', 'Antioquia');
   fd.set('contact', '300 123 4567');
   fd.append('photos', new File([Buffer.from('web-foto')], 'f.jpg', { type: 'image/jpeg' }));
   const webRes = await fetch(`${app.base}/report`, { method: 'POST', body: fd, redirect: 'manual' });
@@ -168,6 +169,7 @@ test('the reporter is not echoed their own report — email (web) and WhatsApp (
   const fd = new FormData();
   fd.set('name', 'Lucía Fernanda Peña');
   fd.set('location', 'La Candelaria');
+  fd.set('department', 'Antioquia');
   fd.set('contact_email', 'reportante@ejemplo.com');
   fd.append('photos', new File([Buffer.from('foto-web')], 'f.jpg', { type: 'image/jpeg' }));
   await fetch(`${app.base}/report`, { method: 'POST', body: fd, redirect: 'manual' });

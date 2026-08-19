@@ -144,6 +144,7 @@ test('relevo activo: la coincidencia facial no llega al rescatista, y el contact
   const rf = new FormData();
   rf.set('name', 'Rosa Elvira Prueba');
   rf.set('location', 'Barrio San José');
+  rf.set('department', 'Antioquia');
   rf.set('contact', '300 000 0000');
   rf.append('photos', new File([await photoBytes('nn')], 'f.jpg', { type: 'image/jpeg' }));
   await fetch(`${app.base}/report`, { method: 'POST', body: rf, redirect: 'manual' });
@@ -185,6 +186,7 @@ test('relevo apagado (NOTIFY_MODE=direct): el aviso le llega al rescatista SIN e
   const rf = new FormData();
   rf.set('name', 'Rosa Elvira Prueba');
   rf.set('location', 'Barrio San José');
+  rf.set('department', 'Antioquia');
   rf.set('contact', '300 000 0000');
   rf.append('photos', new File([await photoBytes('nn')], 'f.jpg', { type: 'image/jpeg' }));
   await fetch(`${app.base}/report`, { method: 'POST', body: rf, redirect: 'manual' });

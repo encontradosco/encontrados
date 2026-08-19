@@ -390,7 +390,13 @@ function updateCard(u, personName) {
   ${personName ? `<h3><a href="/person/${u.person_id}">${esc(personName)}</a></h3>` : ''}
   <p>${statusBadge(u.status)} ${timeTag(u.created_at)}</p>
   ${u.message ? `<p class="msg">${esc(u.message)}</p>` : ''}
-  ${u.location ? `<p class="loc">📍 ${esc(u.location)}${mapLink(u)}</p>` : u.lat != null && u.lng != null ? `<p class="loc">📍 Ubicación GPS${mapLink(u)}</p>` : ''}
+  ${
+    u.location
+      ? `<p class="loc">📍 ${esc(u.location)}${u.department ? ` (${esc(u.department)})` : ''}${mapLink(u)}</p>`
+      : u.lat != null && u.lng != null
+        ? `<p class="loc">📍 Ubicación GPS${mapLink(u)}</p>`
+        : ''
+  }
   ${sourceLink(u)}
   <p class="meta">Fuente: ${esc(SOURCE_LABEL[u.source] || u.source)}${reporterLabel ? ` · Reportado por: ${esc(reporterLabel)}` : ''}</p>
 </article>`;
