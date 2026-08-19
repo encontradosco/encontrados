@@ -38,24 +38,22 @@
 # comportamiento observable, pruebas, estilos y documentación.
 *                            @torrenegra @cris-pappcorn @ni500 @yesid-lopez
 
-# Sobre @yesid-lopez, que entró el 14-ago-2026: el alcance se le amplía por
-# anillos. Van dos.
+# Sobre @yesid-lopez: entró el 14-ago-2026 y el alcance se le amplió por
+# anillos —14-ago el catch-all y la superficie pública del API, 18-ago el resto
+# de `.github/`—. El 19-ago-2026 se cerró el escalonamiento: queda con el mismo
+# alcance que @torrenegra y @ni500, este archivo incluido.
 #
-#   1. 14-ago-2026 — este catch-all y, más abajo, la superficie pública del API.
-#   2. 18-ago-2026 — `.github/` salvo este archivo (ver el bloque de gobierno):
-#      workflows y plantillas. El motivo es de disponibilidad, no de confianza:
-#      `.github/` estaba anclado a los dos owners de la organización, así que
-#      cualquier cambio de CI quedaba esperando a que uno de los dos apareciera.
+# La decisión se tomó contra el dato que el propio escalonamiento decía que
+# había que mirar —cuántos PRs quedan esperando a los dos owners— y no contra
+# una impresión. Medido el 19-ago-2026: 15 de 17 PRs abiertos. No era una cola
+# lenta, era la cola entera; el freno ya no estaba deteniendo lo riesgoso, sino
+# todo. El resto del criterio es de Nic, que trabaja con él a diario.
 #
-# Sigue AFUERA de biometría, privacidad, esquema y autenticación, y afuera de
-# este archivo — que es la llave maestra, porque quien lo aprueba puede sumarse
-# a todo lo demás. No es desconfianza: son las categorías donde un error no
-# rompe una pantalla.
-#
-# El anillo que viene se decide con un dato, no con una impresión: cuántos PRs
-# quedan esperando a @torrenegra o @ni500. Medido el 14-ago-2026 eran 9 de 10
-# abiertos, y de esos cinco eran biometría. El despertador reporta ese número en
-# su digest, así que la ampliación se discute contra la carga real.
+# Lo que hay que decir de frente, porque es la única asimetría que queda: él es
+# colaborador con permiso de escritura, no owner de la organización. En GitHub
+# eso sigue siendo distinto —los ajustes del repo, la regla de rama y quién
+# entra siguen siendo de @torrenegra y @ni500—, así que "paridad" acá significa
+# paridad de REVISIÓN, que es de lo que trata este archivo, no de administración.
 
 
 # === Esquema de la base ====================================================
@@ -63,7 +61,7 @@
 # columna nueva tiene que ir en LOS DOS motores (sqlite en local, Postgres en
 # producción). La base de producción es compartida y un cambio acá no se
 # ensaya en un preview: se estrena en vivo.
-/src/store/                  @torrenegra @ni500
+/src/store/                  @torrenegra @ni500 @yesid-lopez
 
 
 # === Biometría y matching ==================================================
@@ -71,17 +69,17 @@
 # de que dos fichas son la misma persona. Un error acá no rompe una pantalla —
 # borra la evidencia de que alguien está buscando a una persona, o le dice a un
 # rescatista que el desconocido que tiene al lado es el familiar de otro.
-/src/faces.js                @torrenegra @ni500
-/src/facematch.js            @torrenegra @ni500
-/src/duplicates.js           @torrenegra @ni500
+/src/faces.js                @torrenegra @ni500 @yesid-lopez
+/src/facematch.js            @torrenegra @ni500 @yesid-lopez
+/src/duplicates.js           @torrenegra @ni500 @yesid-lopez
 
 
 # === Privacidad y datos de contacto ========================================
 # Qué sale de un reporte hacia afuera —enmascarado o crudo— y a quién se le
 # escribe. En zona de desastre el teléfono de una familia que está buscando a
 # alguien es materia de extorsión, no un campo más de un formulario.
-/src/privacy.js              @torrenegra @ni500
-/src/notify.js               @torrenegra @ni500
+/src/privacy.js              @torrenegra @ni500 @yesid-lopez
+/src/notify.js               @torrenegra @ni500 @yesid-lopez
 
 
 # === La app pública ========================================================
@@ -96,11 +94,11 @@
 #
 # El precio se paga en velocidad: es el archivo que más se toca del repo, así
 # que un arreglo de copy o de layout queda esperando a una persona sin
-# necesitarlo. La salida no es hacer una excepción — es sacar esas cuatro
-# piezas a su propio módulo y devolver web.js a lo rutinario. Ese refactor no
-# cambia comportamiento observable, así que es rutinario y no necesita esperar
-# a nadie.
-/src/routes/web.js           @torrenegra @ni500
+# necesitarlo. Sumar un tercer revisor alivia la espera, pero NO paga la deuda:
+# la salida sigue siendo sacar esas cuatro piezas a su propio módulo y devolver
+# web.js a lo rutinario. Ese refactor no cambia comportamiento observable, así
+# que es rutinario y no necesita esperar a nadie.
+/src/routes/web.js           @torrenegra @ni500 @yesid-lopez
 
 
 # === Superficie pública y despliegue =======================================
@@ -108,11 +106,7 @@
 # escribe sin sesión de usuario, y la configuración con la que Vercel sirve el
 # sitio. Un cambio acá se le rompe a alguien que no está en esta conversación,
 # así que sigue necesitando un portero — pero es una superficie técnica, no
-# datos de una familia, y es donde @yesid-lopez ya trabaja.
-#
-# Este es su primer anillo (14-ago-2026): tres rutas, elegidas porque un error
-# acá se ve, se reporta y se revierte con un rollback de Vercel. Un error en
-# biometría o en privacidad no se ve y no se revierte.
+# datos de una familia.
 /src/routes/api.js           @torrenegra @ni500 @yesid-lopez
 /src/routes/webhooks.js      @torrenegra @ni500 @yesid-lopez
 /vercel.json                 @torrenegra @ni500 @yesid-lopez
@@ -122,7 +116,7 @@
 # La puerta de /admin, aparte del bloque de arriba a propósito: quien pueda
 # aprobar un cambio acá puede abrirle el panel a cualquiera, y eso no es una
 # superficie que se revierta mirando el sitio.
-/src/adminAuth.js            @torrenegra @ni500
+/src/adminAuth.js            @torrenegra @ni500 @yesid-lopez
 
 
 # === Gobierno: lo que OTORGA permisos ======================================
@@ -130,26 +124,24 @@
 # CONCEDE O QUITA PODER, no lo que describe cómo trabajamos. Por eso agent.md y
 # README.md se quedan arriba, en lo rutinario, y esto no.
 #
-# `.github/` incluye este mismo archivo, y eso es deliberado: si @cris-pappcorn
-# fuera owner de CODEOWNERS podría aprobar por su cuenta el PR que le quita el
-# freno, y todo lo de arriba sería decorativo. Incluye también los workflows,
-# donde vive el check `npm test` que la regla de rama exige — quien pueda
-# editarlo puede desactivar la única prueba obligatoria.
+# Desde el 19-ago-2026 este bloque hace UNA sola cosa, y conviene decirla sin
+# rodeos: mantener afuera a @cris-pappcorn, que es un agente de IA. Los tres
+# mantenedores humanos son owners de todo; el agente no es owner de acá. Si lo
+# fuera podría aprobar por su cuenta el PR que le quita el freno, y todo lo de
+# arriba sería decorativo. Vale también para los workflows, donde vive el check
+# `npm test` que la regla de rama exige: quien pueda editarlo puede desactivar
+# la única prueba obligatoria.
 #
 # Se lleva de paso las plantillas de issue y de PR, que no conceden nada. Es
 # colateral y lo decimos: no hay forma de excluirlas sin negación (punto 3), y
 # no vale la pena mover archivos de sitio para ganar eso.
-/.github/                    @torrenegra @ni500 @yesid-lopez
-
-# Y una excepción DENTRO de la excepción, que va DESPUÉS porque gana el último
-# patrón que coincide (punto 1 del encabezado).
 #
-# Este archivo es la llave maestra: quien pueda aprobar un cambio ACÁ puede
-# aprobar el PR que lo suma a cualquier otra ruta de arriba. O sea que "un
-# anillo más" en CODEOWNERS no es un anillo más: son todos, de una. Por eso se
-# queda con los dos owners de la organización, y por eso el resto de `.github/`
-# —workflows, plantillas— sí se puede delegar sin regalar el repo.
-/.github/CODEOWNERS          @torrenegra @ni500
-/CONTRIBUTING.md             @torrenegra @ni500
-/SECURITY.md                 @torrenegra @ni500
-/.coderabbit.yaml            @torrenegra @ni500
+# Acá vivía una excepción dentro de la excepción —una línea aparte para este
+# mismo archivo, que lo dejaba solo en manos de los dos owners de la
+# organización— y se retiró el 19-ago-2026 al quedar con los mismos owners que
+# `/.github/`: una regla que repite a su padre no restringe nada, solo hace
+# creer que sí.
+/.github/                    @torrenegra @ni500 @yesid-lopez
+/CONTRIBUTING.md             @torrenegra @ni500 @yesid-lopez
+/SECURITY.md                 @torrenegra @ni500 @yesid-lopez
+/.coderabbit.yaml            @torrenegra @ni500 @yesid-lopez

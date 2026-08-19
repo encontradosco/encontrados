@@ -7,6 +7,7 @@ const {
   identifyRescuedPerson,
   notifyRescuerOfMatches,
   backfillPhotoDerivatives,
+  forgetPersonFaces,
   MAX_QUERY_PHOTOS
 } = require('../facematch');
 const { esc, layout, updateCard, timeTag, facePlate, LOCATION_SCRIPT } = require('../html');
@@ -1295,12 +1296,16 @@ ${updates.length ? updates.map((u) => updateCard(u)).join('') : '<p class="subtl
   router.all(
     '/unsubscribe',
     wrap(async (req, res) => {
+      // La suscripción ya se lleva sus face_id (la cascada de subscription_id
+      // se llevaría la fila de `photos` con ellos — #162); retirarlos de
+      // Rekognition después es best effort y nunca bloquea la confirmación.
       const sub = await store.unsubscribeByToken(req.query.token);
       if (!sub) {
         return res
           .status(404)
           .send(layout('Enlace inválido', '<p class="error">Este enlace ya no es válido: el aviso no existe.</p>'));
       }
+      await forgetPersonFaces(matcher, sub.faceIds, `suscripción ${sub.id}`);
       res.send(
         layout(
           'Aviso cancelado',

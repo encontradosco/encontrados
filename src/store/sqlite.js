@@ -145,6 +145,24 @@ async function createSqliteAdapter(dbPath) {
     );
     CREATE INDEX IF NOT EXISTS idx_pet_photos_pet ON pet_photos(pet_id);
     CREATE INDEX IF NOT EXISTS idx_pet_photos_kind_species ON pet_photos(kind, species);
+
+    -- Bitácora de auto-fusiones (#150): a diferencia de match_log/contact_log,
+    -- ACÁ SÍ guarda un nombre a propósito. findOrCreatePerson no persiste el
+    -- fullName del reporte que se fusiona en ningún otro lado (addUpdate no lo
+    -- recibe) — sin esta columna, el nombre original desaparece y una fusión
+    -- mala queda imposible de deshacer sin adivinar. Se acepta el desvío del
+    -- "sin nombres" de las bitácoras anteriores porque el nombre de una persona
+    -- reportada ya es dato público del producto (se muestra en /person/:id),
+    -- a diferencia de contact/reporter/message, que nunca lo son.
+    CREATE TABLE IF NOT EXISTS merge_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+      submitted_name TEXT NOT NULL,
+      score REAL NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_merge_log_person ON merge_log(person_id);
+    CREATE INDEX IF NOT EXISTS idx_merge_log_created ON merge_log(created_at);
   `);
 
   // Older dev databases: add the GPS columns if missing.
@@ -200,6 +218,20 @@ async function createSqliteAdapter(dbPath) {
   );
 
   const getPersonStmt = db.prepare('SELECT * FROM people WHERE id = ?');
+
+  // Las firmas faciales atadas a una o más suscripciones. Hay que leerlas
+  // ANTES de borrar la suscripción: `photos.subscription_id` también cascada
+  // (ver el esquema arriba), y con la suscripción se va la única fila que
+  // decía qué firma retirar de Rekognition — el mismo problema que
+  // `faceIdsForPerson` ya resuelve para el borrado de persona (#162).
+  function faceIdsForSubscriptionIds(subscriptionIds) {
+    if (!subscriptionIds.length) return [];
+    const marks = subscriptionIds.map(() => '?').join(',');
+    return db
+      .prepare(`SELECT face_id FROM photos WHERE subscription_id IN (${marks}) AND face_id IS NOT NULL`)
+      .all(...subscriptionIds)
+      .map((r) => r.face_id);
+  }
 
   return {
     async insertPerson(fullName, normalized, phonetic) {
@@ -365,21 +397,38 @@ async function createSqliteAdapter(dbPath) {
       db.prepare('UPDATE subscriptions SET verified = 1 WHERE id = ?').run(sub.id);
       return { ...sub, verified: 1 };
     },
+    // Igual que deletePerson en src/routes/api.js: los face_id se leen ANTES
+    // de borrar la fila, porque la cascada de subscription_id se la lleva
+    // junto con la única forma de saber qué firma retirar (#162).
     async deleteSubscriptionByToken(token) {
       const sub = db.prepare('SELECT * FROM subscriptions WHERE verify_token = ?').get(token);
       if (!sub) return null;
+      const faceIds = faceIdsForSubscriptionIds([sub.id]);
       db.prepare('DELETE FROM subscriptions WHERE id = ?').run(sub.id);
-      return sub;
+      return { ...sub, faceIds };
     },
     async deleteSubscription(personId, channel, address) {
-      return db
-        .prepare('DELETE FROM subscriptions WHERE person_id = ? AND channel = ? AND address = ?')
-        .run(personId, channel, address).changes;
+      const sub = db
+        .prepare('SELECT id FROM subscriptions WHERE person_id = ? AND channel = ? AND address = ?')
+        .get(personId, channel, address);
+      if (!sub) return { count: 0, faceIds: [] };
+      const faceIds = faceIdsForSubscriptionIds([sub.id]);
+      const info = db.prepare('DELETE FROM subscriptions WHERE id = ?').run(sub.id);
+      return { count: info.changes, faceIds };
     },
     async deleteSubscriptionsForAddress(channel, address) {
-      return db
-        .prepare('DELETE FROM subscriptions WHERE channel = ? AND address = ?')
-        .run(channel, address).changes;
+      const subs = db
+        .prepare('SELECT id FROM subscriptions WHERE channel = ? AND address = ?')
+        .all(channel, address);
+      if (!subs.length) return { count: 0, faceIds: [] };
+      const ids = subs.map((s) => s.id);
+      const faceIds = faceIdsForSubscriptionIds(ids);
+      // Por id, no por (channel, address): ver el comentario equivalente en
+      // postgres.js — una suscripción creada entre el SELECT y este DELETE no
+      // debe quedar alcanzada por él (#162).
+      const marks = ids.map(() => '?').join(',');
+      const info = db.prepare(`DELETE FROM subscriptions WHERE id IN (${marks})`).run(...ids);
+      return { count: info.changes, faceIds };
     },
     async subscriptionsForPerson(personId) {
       return db.prepare('SELECT * FROM subscriptions WHERE person_id = ?').all(personId);
@@ -545,6 +594,13 @@ async function createSqliteAdapter(dbPath) {
       db.prepare(
         'INSERT INTO contact_log (person_id, update_id, channel, result) VALUES (?, ?, ?, ?)'
       ).run(personId, updateId ?? null, channel, result);
+    },
+    // #150: registro de cada auto-fusión por nombre — ver el comentario del
+    // esquema sobre por qué esta tabla sí guarda un nombre.
+    async insertMergeLog({ personId, submittedName, score }) {
+      db.prepare(
+        'INSERT INTO merge_log (person_id, submitted_name, score) VALUES (?, ?, ?)'
+      ).run(personId, submittedName, score);
     },
     // Cuenta total y por superficie. `since` (ISO) filtra a lo escrito desde
     // ahí — se usa para la línea de "cambio desde el reporte anterior" del
