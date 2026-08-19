@@ -99,6 +99,13 @@ function readEntries(file) {
       errors.push(`${nth}: no es JSON válido`);
       return;
     }
+    // `JSON.parse('null')` no lanza: devuelve null, y leerle un campo tumba el
+    // script con un TypeError en vez de con el error de archivo que este
+    // validador existe para dar.
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) {
+      errors.push(`${nth}: debe ser un objeto JSON`);
+      return;
+    }
     // Number(null) y Number('') son 0, y 0 es un entero: sin este chequeo una
     // persona sin id pasaría la validación y saldría a la ruta como persona 0.
     if (obj.person_id === null || obj.person_id === undefined || obj.person_id === '') {

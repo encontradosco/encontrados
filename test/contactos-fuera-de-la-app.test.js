@@ -453,6 +453,15 @@ test('el script no pierde las líneas buenas que vienen después de una mala', a
 
   // Number(null) es 0, y 0 es un entero: sin el chequeo explícito, una
   // persona sin id se iba a la ruta como persona 0.
+  // `JSON.parse('null')` es válido y devuelve null: leerle un campo tumbaría
+  // el script con un TypeError en vez de con el error de archivo.
+  const noObjeto = path.join(dir, 'no-objeto.jsonl');
+  fs.writeFileSync(noObjeto, 'null\n[1,2]\n"texto"\n');
+  const noObj = readEntries(noObjeto);
+  assert.equal(noObj.entries.length, 0);
+  assert.equal(noObj.errors.length, 3);
+  for (const e of noObj.errors) assert.match(e, /debe ser un objeto JSON/);
+
   const sinId = path.join(dir, 'sin-id.jsonl');
   fs.writeFileSync(sinId, [linea({ person_id: null }), linea({ person_id: '' })].join('\n') + '\n');
   const roto = readEntries(sinId);
