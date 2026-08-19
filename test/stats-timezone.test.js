@@ -20,12 +20,28 @@ const Database = require('better-sqlite3');
 const { createSqliteAdapter } = require('../src/store/sqlite');
 const { gatherDailySeries, bogotaDayKey } = require('../src/report');
 
-// 23:04 del 12-ago-2026 hora de Bogotá (UTC-5) = 04:04 del 13-ago-2026 UTC —
+// 04:04 UTC de un día son las 23:04 del día ANTERIOR en Bogotá (UTC-5):
 // exactamente la franja de las 19:00-24:00 Bogotá que el bug corría al día
 // siguiente. `created_at` en SQLite es TEXT ISO en UTC (ver schema).
-const LATE_BOGOTA_UTC = '2026-08-13T04:04:00Z';
-const EXPECTED_BOGOTA_DAY = '2026-08-12';
-const WRONG_UTC_DAY = '2026-08-13';
+//
+// El instante se construye RELATIVO A HOY y no con una fecha fija, y eso es lo
+// único que importa entender de este bloque: `gatherDailySeries` arma su
+// ventana con `Date.now()` (src/report.js), así que una fecha clavada en el
+// calendario sale de la ventana sola con el paso de los días. La versión
+// anterior fijaba el 12-ago-2026 y empezó a fallar el 19-ago —siete días
+// después, sin que nadie tocara nada—, dejando en rojo el único check
+// obligatorio de la regla de rama y bloqueando el merge de TODO el repo.
+// Una prueba que se vence sola no cuida nada: avisa de una regresión que no
+// existe justo cuando ya nadie le cree.
+const REF = new Date();
+REF.setUTCDate(REF.getUTCDate() - 2);
+REF.setUTCHours(4, 4, 0, 0);
+
+// El instante en UTC, y los dos días que la prueba enfrenta: el de Bogotá
+// (donde la fila DEBE caer) y el de UTC (donde caía con el bug).
+const LATE_BOGOTA_UTC = REF.toISOString();
+const EXPECTED_BOGOTA_DAY = bogotaDayKey(REF);
+const WRONG_UTC_DAY = LATE_BOGOTA_UTC.slice(0, 10);
 
 async function sqliteAdapterWithTempFile() {
   const dbPath = path.join(os.tmpdir(), `encontrados-tz-test-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
@@ -79,9 +95,9 @@ test('SQLite matchLogDaily: una coincidencia de las 23:04 Bogotá se cuenta en e
     const bogotaRow = daily.find((r) => r.day === EXPECTED_BOGOTA_DAY);
     const utcRow = daily.find((r) => r.day === WRONG_UTC_DAY);
 
-    assert.ok(bogotaRow, 'debía quedar una fila en el día de Bogotá (12-ago)');
+    assert.ok(bogotaRow, `debía quedar una fila en el día de Bogotá (${EXPECTED_BOGOTA_DAY})`);
     assert.equal(bogotaRow.count, 1);
-    assert.equal(utcRow, undefined, 'no debe quedar ninguna fila en el día de UTC (13-ago) — esa era la regresión');
+    assert.equal(utcRow, undefined, `no debe quedar ninguna fila en el día de UTC (${WRONG_UTC_DAY}) — esa era la regresión`);
   } finally {
     await cleanup();
   }
@@ -101,9 +117,9 @@ test('SQLite contactLogDaily: un envío de las 23:04 Bogotá se cuenta en el dí
     const bogotaRow = daily.find((r) => r.day === EXPECTED_BOGOTA_DAY);
     const utcRow = daily.find((r) => r.day === WRONG_UTC_DAY);
 
-    assert.ok(bogotaRow, 'debía quedar una fila en el día de Bogotá (12-ago)');
+    assert.ok(bogotaRow, `debía quedar una fila en el día de Bogotá (${EXPECTED_BOGOTA_DAY})`);
     assert.equal(bogotaRow.count, 1);
-    assert.equal(utcRow, undefined, 'no debe quedar ninguna fila en el día de UTC (13-ago) — esa era la regresión');
+    assert.equal(utcRow, undefined, `no debe quedar ninguna fila en el día de UTC (${WRONG_UTC_DAY}) — esa era la regresión`);
   } finally {
     await cleanup();
   }
