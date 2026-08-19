@@ -342,9 +342,19 @@ function reviewHistoryHtml(reviews) {
     .join('')}</div>`;
 }
 
-function buildFichaPageHtml(ficha, { errors = [], form = {} } = {}) {
+// `formName` dice de CUÁL de los dos formularios vino un envío fallido, y sin
+// ese dato el re-render hace daño en vez de ayudar: los dos comparten los
+// nombres de campo (`estado`, `evidencia`), así que el texto escrito para una
+// constancia sin efecto reaparecía precargado dentro del formulario de
+// RESOLVER —el que manda avisos— mientras el de constancia volvía vacío.
+// Rellenar el formulario peligroso con palabras que nadie escribió para él es
+// exactamente lo que este re-render existía para evitar. Hallazgo de
+// coderabbitai en la revisión de este PR.
+function buildFichaPageHtml(ficha, { errors = [], form = {}, formName = '' } = {}) {
   const { person, latest, reviews, recipients, mode } = ficha;
   const enlaceActual = latest && latest.source_url;
+  const enviado = (nombre) => (formName === nombre ? form : {});
+  const formNota = enviado('nota');
 
   const body = `
     <h1>Revisar: ${esc(person.full_name)}</h1>
@@ -376,18 +386,20 @@ function buildFichaPageHtml(ficha, { errors = [], form = {} } = {}) {
       <label>Lo veo como
         <select name="estado" required>
           <option value="">Elige una</option>
-          <option value="safe">Apareció viva</option>
-          <option value="deceased">Murió</option>
+          <option value="safe"${formNota.estado === 'safe' ? ' selected' : ''}>Apareció viva</option>
+          <option value="deceased"${formNota.estado === 'deceased' ? ' selected' : ''}>Murió</option>
         </select>
       </label>
       <label>Qué encontré
-        <textarea name="evidencia" rows="3" required placeholder="Qué fuente, qué dice, y qué te falta para estar seguro."></textarea>
+        <textarea name="evidencia" rows="3" required placeholder="Qué fuente, qué dice, y qué te falta para estar seguro.">${esc(
+          formNota.evidencia || ''
+        )}</textarea>
       </label>
       <button type="submit">Guardar constancia</button>
     </form>
 
     <h2>Resolver la ficha</h2>
-    ${resolveFormHtml({ person, latest, recipients, mode, form })}
+    ${resolveFormHtml({ person, latest, recipients, mode, form: enviado('resolver') })}
   `;
   return layout(`Revisar ${person.full_name}`, body, {
     path: `/admin/revision/${person.id}`,

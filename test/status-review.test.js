@@ -423,3 +423,76 @@ test('una ficha que ya no está en la cola no muestra el botón de resolver', as
     app.stop();
   }
 });
+
+// --- Hallazgos de la revisión de coderabbitai ------------------------------
+
+test('un error en la constancia repuebla la constancia, NUNCA el formulario de resolver', async () => {
+  const app = await startApp();
+  try {
+    const person = await fichaSinConfirmar(app.store, 'Marta Sintética Trece');
+    // Falla por el estado, no por la evidencia: así el texto sobrevive al
+    // rechazo y se puede ver DÓNDE lo repone la pantalla.
+    const res = await fetch(
+      `${app.base}/admin/revision/${person.id}/nota`,
+      form({ estado: '', evidencia: NOTA_PRIVADA })
+    );
+    assert.equal(res.status, 400);
+    const html = await res.text();
+
+    const nota = html.slice(html.indexOf('/nota"'), html.indexOf('Resolver la ficha'));
+    const resolver = html.slice(html.indexOf('Resolver la ficha'));
+
+    assert.ok(nota.includes(NOTA_PRIVADA), 'la constancia recupera lo que la persona escribió');
+    assert.ok(
+      !resolver.includes(NOTA_PRIVADA),
+      'palabras escritas para una constancia sin efecto no pueden aparecer precargadas en el formulario que manda avisos'
+    );
+  } finally {
+    app.stop();
+  }
+});
+
+test('un error al resolver repuebla el formulario de resolver, y solo ese', async () => {
+  const app = await startApp();
+  try {
+    const person = await fichaSinConfirmar(app.store, 'Norma Sintética Catorce');
+    const res = await fetch(
+      `${app.base}/admin/revision/${person.id}/resolver`,
+      form({ estado: 'deceased', evidencia: NOTA_PRIVADA, enlace: 'https://ejemplo.test/n' })
+    );
+    assert.equal(res.status, 400, 'falta la casilla de confirmación');
+    const html = await res.text();
+
+    const nota = html.slice(html.indexOf('/nota"'), html.indexOf('Resolver la ficha'));
+    const resolver = html.slice(html.indexOf('Resolver la ficha'));
+
+    assert.ok(resolver.includes(NOTA_PRIVADA), 'no se pierde la evidencia ya escrita');
+    assert.ok(resolver.includes('https://ejemplo.test/n'), 'ni el enlace');
+    assert.ok(!nota.includes(NOTA_PRIVADA), 'y no se derrama al otro formulario');
+  } finally {
+    app.stop();
+  }
+});
+
+test('un :id que no es un entero da 404, no un 500 de la base', async () => {
+  const app = await startApp();
+  try {
+    const headers = { Cookie: sessionCookie() };
+    // 'abc' contra una columna INTEGER de Postgres es 22P02 → 500. Acá se
+    // corta antes de tocar la base.
+    for (const id of ['abc', '1.5', '-1', '0', '9007199254740993', '1;drop']) {
+      const get = await fetch(`${app.base}/admin/revision/${encodeURIComponent(id)}`, { headers });
+      assert.equal(get.status, 404, `GET con id «${id}»`);
+
+      for (const accion of ['nota', 'resolver']) {
+        const post = await fetch(
+          `${app.base}/admin/revision/${encodeURIComponent(id)}/${accion}`,
+          form({ estado: 'safe', evidencia: NOTA_PRIVADA, confirmo: '1' })
+        );
+        assert.equal(post.status, 404, `POST ${accion} con id «${id}»`);
+      }
+    }
+  } finally {
+    app.stop();
+  }
+});

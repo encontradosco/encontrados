@@ -191,6 +191,23 @@ function adminRoutes(store, matcher) {
 
   const noIndex = (res) => res.set('X-Robots-Tag', 'noindex, nofollow');
 
+  // `:id` llega crudo de la URL. En SQLite un id no numérico simplemente no
+  // encuentra nada, pero en Postgres —que es producción— comparar texto contra
+  // una columna INTEGER revienta con 22P02 y sale un 500. Una ruta de /admin
+  // que devuelve 500 ante una URL mal escrita manda a depurar la base cuando
+  // el problema era la URL. Se valida acá, antes de cualquier lectura, y se
+  // responde 404: no existe esa persona, que es la verdad.
+  //
+  // Hallazgo de coderabbitai en la revisión de este PR.
+  function personIdOrNull(raw) {
+    if (!/^\d+$/.test(String(raw ?? ''))) return null;
+    const id = Number(raw);
+    return Number.isSafeInteger(id) && id > 0 ? id : null;
+  }
+
+  const noSuchPerson = (res) =>
+    res.status(404).send(layout('No encontrado', '<p class="error">Persona no encontrada.</p>'));
+
   router.get(
     '/revision',
     requireAdminSession,
@@ -205,8 +222,10 @@ function adminRoutes(store, matcher) {
     requireAdminSession,
     wrap(async (req, res) => {
       noIndex(res);
-      const ficha = await gatherFicha(store, req.params.id);
-      if (!ficha) return res.status(404).send(layout('No encontrado', '<p class="error">Persona no encontrada.</p>'));
+      const personId = personIdOrNull(req.params.id);
+      if (personId === null) return noSuchPerson(res);
+      const ficha = await gatherFicha(store, personId);
+      if (!ficha) return noSuchPerson(res);
       res.send(buildFichaPageHtml(ficha));
     })
   );
@@ -215,11 +234,18 @@ function adminRoutes(store, matcher) {
   // ya había escrito todavía en el formulario. Perder un párrafo de evidencia
   // por un campo faltante es la clase de fricción que hace que la próxima vez
   // no se escriba nada.
-  async function reRenderWithErrors(req, res, errors) {
-    const ficha = await gatherFicha(store, req.params.id);
-    if (!ficha) return res.status(404).send(layout('No encontrado', '<p class="error">Persona no encontrada.</p>'));
+  // `formName` NO es decorativo: las dos formas comparten los nombres de campo
+  // (`estado`, `evidencia`), así que sin decir de cuál vino el envío, el texto
+  // que alguien escribió para una constancia sin efecto reaparecía precargado
+  // dentro del formulario de RESOLVER —el que manda avisos— y el de constancia
+  // volvía vacío. Hallazgo de coderabbitai en la revisión de este PR.
+  async function reRenderWithErrors(req, res, errors, formName) {
+    const personId = personIdOrNull(req.params.id);
+    if (personId === null) return noSuchPerson(res);
+    const ficha = await gatherFicha(store, personId);
+    if (!ficha) return noSuchPerson(res);
     noIndex(res);
-    res.status(400).send(buildFichaPageHtml(ficha, { errors, form: req.body || {} }));
+    res.status(400).send(buildFichaPageHtml(ficha, { errors, form: req.body || {}, formName }));
   }
 
   // Constancia sin efecto: el marcador privado de "probable" más lo que la
@@ -229,16 +255,18 @@ function adminRoutes(store, matcher) {
     requireAdminSession,
     wantsBody,
     wrap(async (req, res) => {
+      const personId = personIdOrNull(req.params.id);
+      if (personId === null) return noSuchPerson(res);
       const { estado, evidencia } = req.body || {};
       const result = await recordNote({
         store,
-        personId: req.params.id,
+        personId,
         author: req.adminEmail,
         estado,
         evidencia
       });
-      if (!result.ok) return reRenderWithErrors(req, res, result.errors);
-      res.redirect(`/admin/revision/${encodeURIComponent(req.params.id)}`);
+      if (!result.ok) return reRenderWithErrors(req, res, result.errors, 'nota');
+      res.redirect(`/admin/revision/${personId}`);
     })
   );
 
@@ -249,10 +277,12 @@ function adminRoutes(store, matcher) {
     requireAdminSession,
     wantsBody,
     wrap(async (req, res) => {
+      const personId = personIdOrNull(req.params.id);
+      if (personId === null) return noSuchPerson(res);
       const { estado, evidencia, enlace, confirmo } = req.body || {};
       const result = await resolveFicha({
         store,
-        personId: req.params.id,
+        personId,
         author: req.adminEmail,
         estado,
         evidencia,
@@ -260,7 +290,7 @@ function adminRoutes(store, matcher) {
         confirmo: Boolean(confirmo),
         normalizeSourceUrl
       });
-      if (!result.ok) return reRenderWithErrors(req, res, result.errors);
+      if (!result.ok) return reRenderWithErrors(req, res, result.errors, 'resolver');
       noIndex(res);
       res.send(buildResolvedPageHtml(result));
     })
