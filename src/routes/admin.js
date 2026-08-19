@@ -191,7 +191,7 @@ function adminApiRoutes(store, matcher) {
       // Los ids se leen ANTES de nada — mismo motivo que en DELETE
       // /api/people/:id: es la única fuente de qué hay que retirar.
       const faceIds = await store.faceIdsForPerson(person.id);
-      const faces = await forgetPersonFaces(matcher, faceIds, person.id);
+      const faces = await forgetPersonFaces(matcher, faceIds, `persona ${person.id}`);
 
       // A propósito NO se pone face_id en NULL: si se pusiera, el próximo
       // backfillUnindexedPhotos (que solo mira face_id IS NULL) volvería a
