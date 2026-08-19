@@ -145,6 +145,24 @@ async function createSqliteAdapter(dbPath) {
     );
     CREATE INDEX IF NOT EXISTS idx_pet_photos_pet ON pet_photos(pet_id);
     CREATE INDEX IF NOT EXISTS idx_pet_photos_kind_species ON pet_photos(kind, species);
+
+    -- Bitácora de auto-fusiones (#150): a diferencia de match_log/contact_log,
+    -- ACÁ SÍ guarda un nombre a propósito. findOrCreatePerson no persiste el
+    -- fullName del reporte que se fusiona en ningún otro lado (addUpdate no lo
+    -- recibe) — sin esta columna, el nombre original desaparece y una fusión
+    -- mala queda imposible de deshacer sin adivinar. Se acepta el desvío del
+    -- "sin nombres" de las bitácoras anteriores porque el nombre de una persona
+    -- reportada ya es dato público del producto (se muestra en /person/:id),
+    -- a diferencia de contact/reporter/message, que nunca lo son.
+    CREATE TABLE IF NOT EXISTS merge_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+      submitted_name TEXT NOT NULL,
+      score REAL NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_merge_log_person ON merge_log(person_id);
+    CREATE INDEX IF NOT EXISTS idx_merge_log_created ON merge_log(created_at);
   `);
 
   // Older dev databases: add the GPS columns if missing.
@@ -545,6 +563,13 @@ async function createSqliteAdapter(dbPath) {
       db.prepare(
         'INSERT INTO contact_log (person_id, update_id, channel, result) VALUES (?, ?, ?, ?)'
       ).run(personId, updateId ?? null, channel, result);
+    },
+    // #150: registro de cada auto-fusión por nombre — ver el comentario del
+    // esquema sobre por qué esta tabla sí guarda un nombre.
+    async insertMergeLog({ personId, submittedName, score }) {
+      db.prepare(
+        'INSERT INTO merge_log (person_id, submitted_name, score) VALUES (?, ?, ?)'
+      ).run(personId, submittedName, score);
     },
     // Cuenta total y por superficie. `since` (ISO) filtra a lo escrito desde
     // ahí — se usa para la línea de "cambio desde el reporte anterior" del
