@@ -350,8 +350,21 @@ function createStore(adapter) {
     return adapter.matchLogEarliest();
   }
 
-  async function contactLogEarliest() {
-    return adapter.contactLogEarliest();
+  async function contactLogEarliest(opts) {
+    return adapter.contactLogEarliest(opts);
+  }
+
+  async function deleteContactLogByRef(externalRef) {
+    return adapter.deleteContactLogByRef(externalRef);
+  }
+
+  // Normaliza igual que getPerson/getUpdates: Postgres entrega `created_at`
+  // como Date y SQLite como string ISO, y el consumidor (el bloque de avisos
+  // de la ficha) se lo pasa a timeTag() sin distinguir. Sin isoRow, el
+  // atributo datetime del <time> sale con la forma del motor —o sea, distinto
+  // en producción que en la suite, que corre sobre SQLite.
+  async function familyContactLogByPerson(personId) {
+    return (await adapter.familyContactLogByPerson(personId)).map(isoRow);
   }
 
   // Cifras del panel #132 — pass-through directo, igual que el resto de la
@@ -419,6 +432,8 @@ function createStore(adapter) {
     contactLogDaily,
     matchLogEarliest,
     contactLogEarliest,
+    deleteContactLogByRef,
+    familyContactLogByPerson,
     updatesBeyondFirstBySource,
     queryPhotoPeople,
     matchLogSimilarityRows,
