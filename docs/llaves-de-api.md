@@ -68,11 +68,25 @@ Tres cosas que conviene saber antes de correrlo:
    quién emite**: era texto libre y guardaba exactamente lo que el alias existe
    para no guardar. La columna `created_by` quedó en la tabla, sin usar.
 3. **Emitir la primera llave cierra el modo abierto de desarrollo.** Sin
-   `API_KEY` configurada y sin ninguna llave emitida, los `POST` quedan abiertos
-   para poder desarrollar en local sin credenciales. En cuanto existe una llave
-   emitida esa puerta se cierra sola, en el request siguiente: una petición sin
-   cabecera recibe 401 en vez de alcance de operación. Igual, **configurá
-   `API_KEY`** en cualquier despliegue.
+   `API_KEY` configurada y sin ninguna llave emitida, una petición **sin
+   cabecera** recibe alcance `operator`, para poder desarrollar en local sin
+   credenciales. Conviene ser exacto con qué abre eso: **todo lo que está detrás
+   del alcance**, que no son solo los `POST` —también `GET /api/match-stats` y
+   `DELETE /api/contact-log/:ref`—. La única que no abre es
+   `DELETE /api/people/:id`, que compara contra `API_KEY` directamente y queda
+   deshabilitada si no está configurada.
+
+   Dos precisiones más, porque el modo abierto es la única puerta que falla
+   abierta:
+
+   - Solo la **ausencia** de credenciales usa esta excepción. Una llave
+     desconocida o revocada recibe `401` incluso en modo abierto: equivocarse de
+     llave cierra, no abre.
+   - En cuanto existe una llave emitida la puerta se cierra sola, en el request
+     siguiente: una petición sin cabecera recibe `401` en vez de alcance de
+     operación.
+
+   Igual, **configurá `API_KEY`** en cualquier despliegue.
 
 Entregala por un canal que no la deje escrita. Un gestor de contraseñas sirve
 para **entregar** el secreto una vez; el registro de quién tiene qué es la tabla,
