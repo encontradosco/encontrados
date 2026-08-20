@@ -226,8 +226,9 @@ async function createSqliteAdapter(dbPath) {
     -- prefijo para poder distinguirlas en una lista, label es un ALIAS público
     -- y no el nombre legal de nadie, y una fila no se borra: se revoca.
     -- revoked_at y last_used_at van como TEXTO ISO en los dos motores porque se
-    -- comparan en JS. created_by queda SIN USAR a propósito y no se quita — el
-    -- por qué está en el comentario de Postgres.
+    -- comparan en JS. created_by guarda la CUENTA DE OPERACIÓN que emitió la
+    -- llave —un correo de ADMIN_EMAILS, nunca texto libre— y el por qué de esa
+    -- distinción está en el comentario de Postgres.
     CREATE TABLE IF NOT EXISTS api_keys (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       label TEXT NOT NULL,

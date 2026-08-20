@@ -377,14 +377,25 @@ async function createPostgresAdapter(connectionString) {
     -- único rastro de qué escribió esa llave, que es justo lo que hace falta
     -- para limpiar después de revocarla.
     --
-    -- created_by queda SIN USAR a propósito, y no se quita. Se creó para anotar
-    -- quién emitió la llave, pero la única forma de llenarla era texto libre de
-    -- la línea de comandos, o sea justo el nombre legal o el correo que la regla
-    -- 3 de arriba existe para no guardar; la bandera que la llenaba se quitó
-    -- antes de mergear. La columna se deja porque quitarla es un cambio de
-    -- esquema y el hueco no cuesta nada: es NULL en todas las filas. Si alguna
-    -- vez hace falta saber quién emitió, que sea con un identificador de una
-    -- cuenta y no con lo que alguien escriba en una bandera.
+    -- created_by guarda QUIÉN emitió la llave, y lo único que hace que eso no
+    -- contradiga la regla 3 de arriba es QUÉ VALORES acepta: un correo que ya
+    -- está en ADMIN_EMAILS, o sea una de las pocas cuentas que administran esta
+    -- instalación. Es una REFERENCIA A UNA CUENTA DE OPERACIÓN, nunca texto
+    -- libre. La distinción es la que resuelve la objeción de privacidad: hubo
+    -- antes una bandera (--por) que aceptaba lo que alguien tecleara, y por ahí
+    -- entraba justo el nombre legal o el correo de un voluntario; se quitó. Con
+    -- la regla nueva ese dato no puede entrar, porque el conjunto de valores
+    -- posibles es la allowlist y nada más. Quien lo valida es scripts/api-key.js
+    -- contra isAllowedEmail (src/adminAuth.js) — el esquema no lo puede exigir,
+    -- porque la allowlist vive en el entorno y no en la base.
+    --
+    -- Para qué hace falta: la emisión se delega a personas de confianza, y una
+    -- llave emitida tiene que poder revocarla quien la emitió además de los
+    -- administradores. Sin este dato esa regla no se puede escribir. Ojo con lo
+    -- que la columna todavía NO es: es el DATO, no el control. Hoy el CLI ya
+    -- implica poder total y no hay sesión contra la cual aplicar autoridad
+    -- alguna; eso llega con el panel de /admin. Las filas emitidas antes de esta
+    -- regla quedan en NULL, y ese NULL significa "no se registró", no "nadie".
     --
     -- revoked_at y last_used_at van como TEXTO ISO en los DOS motores, por la
     -- misma razón que subscriptions.rescue_asked_at: se leen y se comparan en

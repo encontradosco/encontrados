@@ -13,7 +13,7 @@
 //
 // Uso:
 //   npm run api-key -- listar
-//   npm run api-key -- emitir --alias "voluntario-1" --alcance ingest
+//   npm run api-key -- emitir --alias "voluntario-1" --alcance ingest --emisor <correo>
 //   npm run api-key -- revocar --id 3
 //
 // Contra qué base corre: la misma que el servidor (src/store/index.js) — SQLite
@@ -30,6 +30,7 @@ const {
   INGEST_STATUSES,
   INGEST_WRITES_PER_HOUR
 } = require('../src/routes/api');
+const { isAllowedEmail, adminEmails } = require('../src/adminAuth');
 
 function parseArgs(argv) {
   const out = { _: [] };
@@ -44,18 +45,73 @@ function parseArgs(argv) {
 const USO = `
 Uso:
   npm run api-key -- listar
-  npm run api-key -- emitir --alias <alias> --alcance ${API_SCOPES.join('|')}
+  npm run api-key -- emitir --alias <alias> --alcance ${API_SCOPES.join('|')} --emisor <correo>
   npm run api-key -- revocar --id <id>
 
 Sobre --alias: es un ALIAS PÚBLICO, no el nombre legal ni el correo de nadie.
 Alcanza para saber a quién revocarle; guardar más convertiría la tabla en un
 registro de datos personales de voluntarios (Ley 1581).
 
-No hay bandera para anotar QUIÉN emite. La había (--por) y se quitó: era texto
-libre que terminaba en la base, o sea exactamente el nombre legal o el correo
-que --alias existe para no guardar. Quién emitió una llave se sabe por el canal
-por el que se entregó, no por esta tabla.
+Sobre --emisor: es una CUENTA DE OPERACIÓN, no una persona escrita a mano. El
+único valor que se acepta es un correo que YA está en ADMIN_EMAILS — la misma
+allowlist que abre /admin—, así que por esta bandera no puede entrar el dato
+personal de un voluntario: los valores posibles son ese puñado de cuentas y
+ninguno más. Hubo antes una bandera --por de texto libre y se quitó justo por
+eso; esta no es la misma con otro nombre.
 `.trim();
+
+// Quién emite la llave. Devuelve el correo normalizado, o lanza.
+//
+// La regla entera está en qué VALORES acepta: solo un correo que ya vive en
+// ADMIN_EMAILS, o sea una de las pocas cuentas que administran esta
+// instalación. Eso da la identidad del emisor y al mismo tiempo hace imposible
+// guardar acá el dato personal de un voluntario, porque el conjunto de valores
+// posibles es la allowlist y nada más. La bandera anterior (--por) aceptaba
+// texto libre y por eso se quitó; la diferencia no es el nombre de la bandera,
+// es que ahora esto es una REFERENCIA A UNA CUENTA y no algo que alguien teclea.
+//
+// Para qué hace falta: la emisión se delega a personas de confianza, y una
+// llave emitida tiene que poder revocarla quien la emitió, además de los
+// administradores. Sin este dato esa regla no se puede escribir.
+function normalizarEmisor(valor) {
+  const crudo = String(valor ?? '').trim();
+  if (!crudo) {
+    throw new Error(
+      'Falta --emisor <correo>: la cuenta de operación que emite esta llave.\n' +
+        'Tiene que ser uno de los correos de ADMIN_EMAILS — no un nombre, y no el correo\n' +
+        'de quien va a USAR la llave (para eso está --alias, que es público).'
+    );
+  }
+  // Los dos errores de abajo se separan a propósito: llevan a acciones
+  // distintas. "No estás en la allowlist" lo arregla otra persona agregándote;
+  // "no hay allowlist en este entorno" es un problema de configuración de la
+  // terminal desde la que estás corriendo esto, y confundirlos hace perder el
+  // tiempo buscando en el lado equivocado.
+  const configuradas = adminEmails();
+  if (!configuradas.length) {
+    throw new Error(
+      'Este entorno no tiene ADMIN_EMAILS configurada, así que no hay ninguna cuenta de\n' +
+        'operación contra la cual validar --emisor. Una allowlist vacía cierra para todos,\n' +
+        'nunca abre, así que ningún correo va a pasar hasta que la configures.\n' +
+        'Configurá ADMIN_EMAILS acá donde estás corriendo el comando — es la MISMA variable\n' +
+        'que usa /admin, y tenerla en Vercel no la pone en tu terminal.'
+    );
+  }
+  if (!isAllowedEmail(crudo)) {
+    const n = configuradas.length;
+    throw new Error(
+      `El correo "${crudo}" no está en la ADMIN_EMAILS de este entorno (hay ${n} cuenta` +
+        `${n === 1 ? '' : 's'} configurada${n === 1 ? '' : 's'}).\n` +
+        'Solo una cuenta de operación puede figurar como emisora: eso es justamente lo que\n' +
+        'impide que en esta columna termine el dato personal de un voluntario. Si esa cuenta\n' +
+        'debería poder emitir llaves, agregala a ADMIN_EMAILS primero.'
+    );
+  }
+  // Se guarda normalizado, igual que compara isAllowedEmail: el día que el
+  // panel pregunte "¿esta llave es tuya?" va a comparar contra la sesión, y dos
+  // formas del mismo correo harían que la respuesta dependa de cómo se tecleó.
+  return crudo.toLowerCase();
+}
 
 // Lo que hay que decirle a quien recibe una llave de ingesta. No es adorno: la
 // decisión de permitir foto se tomó porque sin foto la ficha no sirve para el
@@ -105,7 +161,8 @@ async function main() {
         const estado = f.revoked_at ? `REVOCADA (${f.revoked_at})` : 'activa';
         console.log(
           `#${f.id}  ${f.scope.padEnd(8)}  ${f.key_prefix}…  ${estado.padEnd(34)}  ` +
-            `último uso: ${f.last_used_at || 'nunca'}  alias: ${f.label}`
+            `último uso: ${f.last_used_at || 'nunca'}  emisor: ${f.created_by || 'sin registrar'}  ` +
+            `alias: ${f.label}`
         );
       }
       return;
@@ -118,6 +175,7 @@ async function main() {
       if (!API_SCOPES.includes(alcance)) {
         throw new Error(`--alcance debe ser uno de: ${API_SCOPES.join(', ')}.`);
       }
+      const emisor = normalizarEmisor(args.emisor);
       if (/@|\+\d{7}/.test(alias)) {
         throw new Error(
           'El alias parece un correo o un teléfono. Es un alias PÚBLICO: usá algo como "voluntario-1".'
@@ -128,9 +186,12 @@ async function main() {
         label: alias,
         keyHash: hashApiKey(llave),
         keyPrefix: apiKeyPrefix(llave),
-        scope: alcance
+        scope: alcance,
+        createdBy: emisor
       });
-      console.log(`\nLlave #${fila.id} emitida, alcance "${alcance}", alias "${alias}".`);
+      console.log(
+        `\nLlave #${fila.id} emitida, alcance "${alcance}", alias "${alias}", emisor ${emisor}.`
+      );
       console.log('\n  ' + llave + '\n');
       console.log('Esto es lo único que se muestra una vez. De ella solo queda guardado su');
       console.log('SHA-256 y el prefijo ' + fila.key_prefix + '. Entregala por un canal que no la deje escrita.');

@@ -56,7 +56,8 @@ Lecturas públicas; si defines `API_KEY`, los POST requieren `Authorization: Bea
 `API_KEY` es la llave de **operación**: abre las siete superficies con llave,
 incluido el `DELETE` irreversible. Para que alguien aporte datos sin recibir todo
 eso se emiten llaves con alcance acotado, guardadas en la base
-(`npm run api-key -- emitir --alias voluntario-1 --alcance ingest`) — ver
+(`npm run api-key -- emitir --alias voluntario-1 --alcance ingest --emisor <correo>`)
+— ver
 [`docs/llaves-de-api.md`](docs/llaves-de-api.md). Una llave `ingest` solo puede
 usar `POST /api/updates`, solo afirma `missing`/`unknown`, no puede sobreescribir
 fichas que no creó y no le manda avisos a nadie.

@@ -47,7 +47,7 @@ alcance acotado sería peor que no hacer nada, porque permitiría emitir con dos
 clics una llave de poder total.
 
 ```bash
-npm run api-key -- emitir --alias voluntario-1 --alcance ingest
+npm run api-key -- emitir --alias voluntario-1 --alcance ingest --emisor <tu correo de ADMIN_EMAILS>
 npm run api-key -- listar
 npm run api-key -- revocar --id 3
 ```
@@ -56,7 +56,7 @@ Corre contra la misma base que el servidor: SQLite en local, Postgres si el
 entorno trae `DATABASE_URL` / `POSTGRES_URL`. **Emitir una llave de producción es
 una operación de producción.**
 
-Tres cosas que conviene saber antes de correrlo:
+Cuatro cosas que conviene saber antes de correrlo:
 
 1. **La llave se muestra una sola vez.** De ella solo se guarda su SHA-256 y un
    prefijo de 8 caracteres. No hay forma de recuperarla: perdida, se revoca y se
@@ -64,10 +64,11 @@ Tres cosas que conviene saber antes de correrlo:
 2. **`--alias` es un alias público.** No el nombre legal, no el correo, no el
    teléfono. Alcanza para saber a quién revocarle; guardar más convertiría la
    tabla en un registro de datos personales de voluntarios, con su propia
-   retención por definir (Ley 1581). Por lo mismo **no hay bandera para anotar
-   quién emite**: era texto libre y guardaba exactamente lo que el alias existe
-   para no guardar. La columna `created_by` quedó en la tabla, sin usar.
-3. **Emitir la primera llave cierra el modo abierto de desarrollo.** Sin
+   retención por definir (Ley 1581).
+3. **`--emisor` es una cuenta de operación, no una persona.** Es obligatoria y
+   solo acepta un correo que ya está en `ADMIN_EMAILS`. Ver
+   [Quién emitió cada llave](#quién-emitió-cada-llave).
+4. **Emitir la primera llave cierra el modo abierto de desarrollo.** Sin
    `API_KEY` configurada y sin ninguna llave emitida, una petición **sin
    cabecera** recibe alcance `operator`, para poder desarrollar en local sin
    credenciales. Conviene ser exacto con qué abre eso: **todo lo que está detrás
@@ -92,11 +93,51 @@ Entregala por un canal que no la deje escrita. Un gestor de contraseñas sirve
 para **entregar** el secreto una vez; el registro de quién tiene qué es la tabla,
 no el gestor.
 
+## Quién emitió cada llave
+
+`--emisor` es **obligatoria** al emitir, y el único valor que acepta es un correo
+que ya está en `ADMIN_EMAILS` — la misma allowlist que abre `/admin`. Queda
+guardado en `api_keys.created_by`, normalizado a minúsculas, y `listar` lo
+muestra.
+
+**Por qué una cuenta y no un nombre.** Hubo antes una bandera de texto libre
+(`--por`) y se quitó antes de mergear: lo que terminaba en la base era el nombre
+legal o el correo de un voluntario, o sea exactamente lo que `--alias` existe
+para no guardar. Lo que volvió no es esa bandera con otro nombre. La diferencia
+es qué **valores** son posibles: una referencia a una cuenta de operación no
+puede contener el dato personal de un voluntario, porque el conjunto de valores
+aceptados es ese puñado de cuentas y ninguno más. Se guarda quién emitió sin
+abrir la puerta que la objeción de privacidad quería cerrar.
+
+**Para qué sirve.** La emisión se delega: una persona de confianza se reúne con
+quien aspira a aportar datos y, si pasa el filtro, le emite una llave `ingest`.
+Una llave emitida así tiene que poder revocarla **quien la emitió**, además de
+quienes administran. Ese modelo de autoridad **todavía no está implementado**, y
+no podría estarlo hoy: se aplica contra una sesión autenticada, y por línea de
+comandos ya se tiene poder total. Llega con el panel de `/admin`, que va aparte.
+Lo que este dato hace es volverlo posible.
+
+Dos consecuencias prácticas:
+
+- **`created_by` en `NULL` significa "no se registró", no "nadie".** Las llaves
+  emitidas antes de esta regla no tienen emisor y `listar` las muestra como
+  `sin registrar`.
+- **La allowlist tiene que estar en la terminal desde la que corrés el comando**,
+  no solo en Vercel. Sin `ADMIN_EMAILS` configurada acá no hay contra qué
+  validar, y el comando se niega a emitir. El error distingue ese caso —falta la
+  allowlist en este entorno— del otro —tu correo no está en ella—, porque se
+  arreglan en lados distintos.
+
 ## Revocar
 
 ```bash
 npm run api-key -- revocar --id 3
 ```
+
+Hoy revocar por línea de comandos no verifica quién revoca: quien puede correr el
+comando puede revocar cualquier llave. Es la misma razón de arriba, y por eso no
+hay columna `revoked_by` todavía — anotar un dato que nada verifica sería peor
+que no tenerlo.
 
 Surte efecto en el request siguiente: la verificación no tiene caché.
 
