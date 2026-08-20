@@ -151,10 +151,16 @@ atiende— es el cuello de botella de este frente.
 
 ## Quién escribió qué
 
-Cada escritura de `POST /api/updates` queda en `api_write_log` con la llave que
-la hizo (`api_key_id` nulo = la llave de entorno). Solo ids y enums, nunca texto
-libre, y se borra con la persona (`ON DELETE CASCADE` sobre `people(id)`), igual
-que `match_log` y `contact_log`.
+Cada escritura de `POST /api/updates` **cuya bitácora se alcanza a escribir**
+queda en `api_write_log` con la llave que la hizo (`api_key_id` nulo = la llave
+de entorno). Solo ids y enums, nunca texto libre, y se borra con la persona
+(`ON DELETE CASCADE` sobre `people(id)`), igual que `match_log` y `contact_log`.
+
+La salvedad no es retórica y está desarrollada más abajo: si esa escritura falla,
+una llave `ingest` recibe `503` y la ficha queda **sin fila**, mientras que para
+una llave `operator` el reporte sigue en pie —también sin fila—. O sea que la
+bitácora es completa salvo por fallas de escritura, y de ahí sale todo lo que
+viene después.
 
 Esa bitácora hace dos trabajos, y el segundo es fácil de pasar por alto: sostiene
 el **techo por hora** y es la **prueba de qué llave creó cada ficha**, de donde
