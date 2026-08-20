@@ -79,7 +79,7 @@ async function logApiWrite(store, { personId, updateId, apiKeyId, action }) {
     return true;
   } catch (e) {
     console.error(
-      `[logbook:api] no se pudo registrar la escritura (persona ${personId}, llave ${apiKeyId ?? 'entorno'}, ${action}) — el reporte sigue en pie:`,
+      `[logbook:api] no se pudo registrar la escritura (persona ${personId}, llave ${apiKeyId ?? 'entorno'}, ${action}) — la ficha quedó guardada, pero quien llama decide qué hacer: una llave de ingesta responde 503 y reintenta con el mismo external_id, y para el operador el reporte sigue en pie:`,
       e.message
     );
     return false;

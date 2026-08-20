@@ -142,8 +142,20 @@ la hizo (`api_key_id` nulo = la llave de entorno). Solo ids y enums, nunca texto
 libre, y se borra con la persona (`ON DELETE CASCADE` sobre `people(id)`), igual
 que `match_log` y `contact_log`.
 
-Esa bitácora hace dos trabajos, y el segundo es fácil de pasar por alto: es
-también la **prueba de qué llave creó cada ficha**, y de ahí sale la regla de que
-una llave `ingest` no pueda pisar lo ajeno. Si la bitácora no se pudo escribir,
-la ficha queda sin dueño demostrable y la siguiente corrección de esa misma llave
-se rechaza. Falla cerrado, que es la dirección correcta.
+Esa bitácora hace dos trabajos, y el segundo es fácil de pasar por alto: sostiene
+el **techo por hora** y es la **prueba de qué llave creó cada ficha**, de donde
+sale la regla de que una llave `ingest` no pueda pisar lo ajeno. O sea que para
+una llave `ingest` no es observabilidad: es el control.
+
+Por eso, **si la bitácora no se puede escribir, una llave `ingest` recibe `503`**,
+no `201`. La ficha ya quedó guardada —no se pierde el hallazgo, y la respuesta
+trae su `person_id`—, pero seguir de largo dejaría a esa llave sin techo y con
+permiso de pisar cualquier `external_id`, sin que nada lo indicara afuera.
+**Reintentá con el mismo `external_id`: es idempotente.** Si aun así quedara una
+ficha sin fila en la bitácora, queda sin dueño demostrable y la siguiente
+corrección de esa misma llave se rechaza. Falla cerrado en los dos puntos, que es
+la dirección correcta.
+
+Para una llave `operator` se conserva la regla de las otras bitácoras del repo:
+un fallo de bitácora **nunca** tumba un reporte, porque ahí no sostiene ningún
+control.
