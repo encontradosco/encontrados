@@ -152,9 +152,17 @@ atiende— es el cuello de botella de este frente.
 ## Quién escribió qué
 
 Cada escritura de `POST /api/updates` **cuya bitácora se alcanza a escribir**
-queda en `api_write_log` con la llave que la hizo (`api_key_id` nulo = la llave
-de entorno). Solo ids y enums, nunca texto libre, y se borra con la persona
-(`ON DELETE CASCADE` sobre `people(id)`), igual que `match_log` y `contact_log`.
+queda en `api_write_log` con la llave que la hizo. Solo ids y enums, nunca texto
+libre, y se borra con la persona (`ON DELETE CASCADE` sobre `people(id)`), igual
+que `match_log` y `contact_log`.
+
+`api_key_id` nulo significa **una escritura sin llave emitida**, y hoy eso cubre
+dos casos que la bitácora **no distingue**: la `API_KEY` de entorno y el modo
+abierto de desarrollo. Los dos principales llevan `id: null` a propósito —no
+tienen fila en `api_keys`—, así que leyendo la bitácora no se puede separar una
+escritura autenticada con `API_KEY` de una anónima en un despliegue sin
+credenciales. Es una razón más para **configurar `API_KEY` siempre**: con ella
+puesta el modo abierto ni existe, y el nulo vuelve a tener un solo significado.
 
 La salvedad no es retórica y está desarrollada más abajo: si esa escritura falla,
 una llave `ingest` recibe `503` y la ficha queda **sin fila**, mientras que para
