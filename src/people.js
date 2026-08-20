@@ -330,6 +330,26 @@ function createStore(adapter) {
     return adapter.insertMergeLog(fields);
   }
 
+  // ---- Cola de revisión de estado (#190) --------------------------------
+  // Pass-through, igual que la bitácora: la lógica de qué significa una ficha
+  // en la cola y de qué hace falta para resolverla vive en
+  // src/statusReview.js, no acá.
+  //
+  // El límite por omisión es alto a propósito: es una cola de trabajo que una
+  // persona tiene que vaciar, no un listado paginado, y una ficha que no se
+  // ve es una ficha que sigue publicada como buscada.
+  async function getUnknownPeople(limit = 200) {
+    return (await adapter.unknownPeople(limit)).map(isoRow);
+  }
+
+  async function insertStatusReview(fields) {
+    return isoRow(await adapter.insertStatusReview(fields));
+  }
+
+  async function statusReviewsForPerson(personId) {
+    return (await adapter.statusReviewsForPerson(personId)).map(isoRow);
+  }
+
   async function matchLogCounts(opts) {
     return adapter.matchLogCounts(opts);
   }
@@ -350,8 +370,21 @@ function createStore(adapter) {
     return adapter.matchLogEarliest();
   }
 
-  async function contactLogEarliest() {
-    return adapter.contactLogEarliest();
+  async function contactLogEarliest(opts) {
+    return adapter.contactLogEarliest(opts);
+  }
+
+  async function deleteContactLogByRef(externalRef) {
+    return adapter.deleteContactLogByRef(externalRef);
+  }
+
+  // Normaliza igual que getPerson/getUpdates: Postgres entrega `created_at`
+  // como Date y SQLite como string ISO, y el consumidor (el bloque de avisos
+  // de la ficha) se lo pasa a timeTag() sin distinguir. Sin isoRow, el
+  // atributo datetime del <time> sale con la forma del motor —o sea, distinto
+  // en producción que en la suite, que corre sobre SQLite.
+  async function familyContactLogByPerson(personId) {
+    return (await adapter.familyContactLogByPerson(personId)).map(isoRow);
   }
 
   // Cifras del panel #132 — pass-through directo, igual que el resto de la
@@ -413,12 +446,17 @@ function createStore(adapter) {
     insertMatchLog,
     insertContactLog,
     insertMergeLog,
+    getUnknownPeople,
+    insertStatusReview,
+    statusReviewsForPerson,
     matchLogCounts,
     contactLogCounts,
     matchLogDaily,
     contactLogDaily,
     matchLogEarliest,
     contactLogEarliest,
+    deleteContactLogByRef,
+    familyContactLogByPerson,
     updatesBeyondFirstBySource,
     queryPhotoPeople,
     matchLogSimilarityRows,
