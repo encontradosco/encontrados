@@ -135,16 +135,32 @@ tu cambio toca cualquiera de las dos, dilo explícitamente en el PR.
 
 ## La revisión
 
-Revisan los mantenedores core: [@torrenegra](https://github.com/torrenegra),
-[@ni500](https://github.com/ni500), [@yesid-lopez](https://github.com/yesid-lopez)
-y [@cris-pappcorn](https://github.com/cris-pappcorn) — este último es un agente
-de IA, y lo decimos de frente porque vas a interactuar con él. Buscamos tres
-cosas, en este orden: que resuelva un problema real, que no rompa a nadie más, y
-que sea lo más pequeño que puede ser para lograrlo. Vas a recibir preguntas —
-son sobre el código, no sobre ti.
+Quien revisa está en uno de dos anillos. La diferencia no es de jerarquía sino
+de **qué rutas puede aprobar**, y está escrita en
+[`.github/CODEOWNERS`](.github/CODEOWNERS), no en la cabeza de nadie:
+
+- **Mantenedores core** — [@torrenegra](https://github.com/torrenegra),
+  [@ni500](https://github.com/ni500),
+  [@yesid-lopez](https://github.com/yesid-lopez). Aprueban todo, incluidas las
+  rutas restringidas: esquema de la base, biometría, privacidad, autenticación
+  y `.github/`.
+- **Revisores** — [@bit2424](https://github.com/bit2424) y
+  [@cris-pappcorn](https://github.com/cris-pappcorn). Aprueban **lo rutinario**;
+  en las rutas restringidas su firma no alcanza y sigue haciendo falta un
+  mantenedor core. `@cris-pappcorn` es un agente de IA, y lo decimos de frente
+  porque vas a interactuar con él.
+
+Ser revisor no es estar a prueba para otra cosa: es el permiso que dice, y hay
+trabajo que solo se destraba ahí. El anillo se amplía contra un dato —cuántos
+PRs quedan esperando— y no contra una impresión; así entró cada quien.
+
+Buscamos tres cosas, en este orden: que resuelva un problema real, que no rompa
+a nadie más, y que sea lo más pequeño que puede ser para lograrlo. Vas a recibir
+preguntas — son sobre el código, no sobre ti.
 
 `main` está protegida: todo entra por PR, con los tests en verde y la aprobación
-de uno de los cuatro. **Nadie aprueba su propio PR** — GitHub no lo permite.
+de alguien que sea code owner de las rutas que tocas. **Nadie aprueba su propio
+PR** — GitHub no lo permite.
 
 Hay una excepción y preferimos escribirla a que la descubras: **un mantenedor
 puede despachar solo un cambio rutinario**. Abre el PR y lo autoriza poniendo
