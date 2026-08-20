@@ -205,15 +205,43 @@ function apiRoutes(store, matcher, petStore, petMatcher) {
       return { rejected: 'desconocida' };
     }
 
-    // Sin cabecera de autorización se conserva, exacto, el comportamiento
-    // documentado de siempre (agent.md, "Variables de entorno"): sin API_KEY
-    // configurada los POST del API quedan ABIERTOS, para poder desarrollar en
-    // local sin ninguna credencial. Es la única puerta que falla abierta y
-    // sigue siendo deliberada — pero ojo: si hay llaves emitidas, API_KEY TIENE
-    // que estar configurada, o este camino le da alcance de operador a
-    // cualquiera que simplemente no mande cabecera.
-    if (!env.API_KEY) return OPERATOR_OPEN;
+    // Sin cabecera de autorización se conserva el comportamiento documentado de
+    // siempre (agent.md, "Variables de entorno"): sin API_KEY configurada los
+    // POST del API quedan ABIERTOS, para poder desarrollar en local sin ninguna
+    // credencial. Es la única puerta que falla abierta y sigue siendo
+    // deliberada, pero ahora tiene una condición VERIFICADA en vez de escrita
+    // (ver modoAbiertoSigueValido).
+    if (!env.API_KEY && (await modoAbiertoSigueValido())) return OPERATOR_OPEN;
     return { rejected: 'ausente' };
+  }
+
+  // El modo abierto solo es seguro mientras NO exista ninguna llave emitida.
+  // Antes eso era un párrafo de documentación, y documentarlo no lo evitaba: en
+  // un despliegue con llaves emitidas y API_KEY sin configurar, una petición SIN
+  // cabecera recibía OPERATOR_OPEN, o sea alcance de operador completo. Emitirle
+  // una llave `ingest` acotada a un voluntario le abría, de hecho, la puerta
+  // grande a cualquier anónimo. Ahora se verifica.
+  //
+  // Se puede cachear en UN SOLO sentido porque el predicado es monótono: una
+  // fila de api_keys no se borra nunca —revocar solo marca revoked_at (ver el
+  // DDL)—, así que "no hay ninguna llave" puede volverse falso pero nunca vuelve
+  // a ser cierto. Por eso el `false` se recuerda para siempre (cero consultas
+  // por request desde que exista una llave) y el `true` se vuelve a preguntar,
+  // que es lo que hace que emitir la primera llave cierre la puerta en el
+  // request siguiente sin reiniciar nada. En producción API_KEY está
+  // configurada, así que este camino ni se toca.
+  let sinLlavesEmitidas = null;
+  async function modoAbiertoSigueValido() {
+    if (sinLlavesEmitidas === false) return false;
+    try {
+      sinLlavesEmitidas = (await store.apiKeysList()).length === 0;
+    } catch (e) {
+      // Ante la duda, cerrado. Y sin cachear: un fallo de base no es una
+      // respuesta sobre si hay llaves.
+      console.error('[api-keys] no se pudo verificar si hay llaves emitidas — se cierra la puerta:', e.message);
+      return false;
+    }
+    return sinLlavesEmitidas;
   }
 
   // "Último uso", con throttle y en un solo statement (ver el adapter). Se
@@ -466,17 +494,59 @@ function apiRoutes(store, matcher, petStore, petMatcher) {
       // seguir sin saber qué tocó — o sea, sin poder limpiar. Y es también lo
       // que sostiene la regla de "no pisar lo ajeno" de arriba. Va DESPUÉS del
       // reporte, que ya está durable, y nunca lo tumba (ver src/logbook.js).
-      await logApiWrite(store, {
+      const bitacoraOk = await logApiWrite(store, {
         personId: result.person.id,
         updateId: result.update.id,
         apiKeyId: principal.id,
         action: result.personCreated ? 'crear' : 'actualizar'
       });
 
+      // Para una llave de ingesta esta bitácora no es observabilidad: es el
+      // control. El techo por hora lo cuenta countApiWrites sobre esta tabla, y
+      // el dueño de una ficha es su fila más antigua acá. Sin fila, la llave
+      // queda de hecho SIN techo y con permiso de pisar cualquier external_id
+      // —el chequeo de arriba es `if (owner && …)`— y nada afuera lo indica:
+      // el API seguiría respondiendo 201.
+      //
+      // Así que acá el fallo de bitácora SÍ falla el request, y esa es la
+      // manera más simple de que la regla de "falla CERRADO" sea cierta y no
+      // una declaración: el control es la escritura, entonces si la escritura
+      // no ocurrió, la operación no puede darse por buena. La alternativa
+      // —dejar de contar la cuota y el dueño sobre esta tabla— es un rediseño
+      // de las dos reglas para tapar un fallo de base que igual habría que
+      // atender.
+      //
+      // Lo que NO se pierde: el reporte ya está guardado (por eso se responde
+      // 503 y se devuelve person_id), y external_id hace el reintento
+      // idempotente, así que quien empuja reintenta sin duplicar nada.
+      //
+      // Para el operador se conserva la regla de las otras tres bitácoras: una
+      // bitácora caída nunca tumba un reporte, porque ahí no sostiene ningún
+      // control.
+      if (isIngest && !bitacoraOk) {
+        return res.status(503).json({
+          error:
+            'El reporte quedó guardado, pero no se pudo registrar en la bitácora de escrituras, ' +
+            'y esa bitácora es la que sostiene el techo por hora y la propiedad de las fichas de ' +
+            'esta llave. Se responde con error a propósito, en vez de seguir sin esos dos ' +
+            'controles. Reintentá con el mismo external_id: es idempotente.',
+          person_id: result.person.id,
+          external_id: externalId
+        });
+      }
+
       res.status(201).json({
         person_id: result.person.id,
         person_created: result.personCreated,
-        update: result.update,
+        // Por publicUpdate y no la fila cruda: `updates` lleva `contact` —el
+        // teléfono que la ficha le muestra a un rescatista como contacto de la
+        // familia— y `reporter` sin enmascarar. Con una llave de ingesta los dos
+        // van nulos (se descartan arriba), pero con una llave de operación la
+        // fila cruda devolvía el teléfono de la familia en el cuerpo de la
+        // respuesta, y esa respuesta termina en el registro de quien integra.
+        // La regla del repo —una fila de `updates` nunca sale sin pasar por
+        // acá— no tiene excepción por estar detrás de llave.
+        update: publicUpdate(result.update),
         photo_stored: !!photo,
         // Solo aparece cuando hubo coerción, y aparecer es el punto: un
         // voluntario tiene que poder ver que su hallazgo entró como CANDIDATO y

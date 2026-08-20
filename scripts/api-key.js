@@ -13,7 +13,7 @@
 //
 // Uso:
 //   npm run api-key -- listar
-//   npm run api-key -- emitir --alias "voluntario-1" --alcance ingest [--por "quien la emite"]
+//   npm run api-key -- emitir --alias "voluntario-1" --alcance ingest
 //   npm run api-key -- revocar --id 3
 //
 // Contra qué base corre: la misma que el servidor (src/store/index.js) — SQLite
@@ -44,12 +44,17 @@ function parseArgs(argv) {
 const USO = `
 Uso:
   npm run api-key -- listar
-  npm run api-key -- emitir --alias <alias> --alcance ${API_SCOPES.join('|')} [--por <quien>]
+  npm run api-key -- emitir --alias <alias> --alcance ${API_SCOPES.join('|')}
   npm run api-key -- revocar --id <id>
 
 Sobre --alias: es un ALIAS PÚBLICO, no el nombre legal ni el correo de nadie.
 Alcanza para saber a quién revocarle; guardar más convertiría la tabla en un
 registro de datos personales de voluntarios (Ley 1581).
+
+No hay bandera para anotar QUIÉN emite. La había (--por) y se quitó: era texto
+libre que terminaba en la base, o sea exactamente el nombre legal o el correo
+que --alias existe para no guardar. Quién emitió una llave se sabe por el canal
+por el que se entregó, no por esta tabla.
 `.trim();
 
 // Lo que hay que decirle a quien recibe una llave de ingesta. No es adorno: la
@@ -123,8 +128,7 @@ async function main() {
         label: alias,
         keyHash: hashApiKey(llave),
         keyPrefix: apiKeyPrefix(llave),
-        scope: alcance,
-        createdBy: (args.por || '').trim() || null
+        scope: alcance
       });
       console.log(`\nLlave #${fila.id} emitida, alcance "${alcance}", alias "${alias}".`);
       console.log('\n  ' + llave + '\n');
@@ -134,16 +138,27 @@ async function main() {
       if (alcance === 'ingest') console.log('\n' + ONBOARDING_INGEST);
       else {
         console.log(
-          '\nOJO: una llave de alcance "operator" puede TODO lo que puede API_KEY, incluido\n' +
-            'DELETE /api/people/:id, que es irreversible y se lleva las firmas faciales.'
+          '\nOJO: una llave de alcance "operator" abre todas las rutas con llave del API\n' +
+            '(suscripciones, reindex, cifras de operación, correo de prueba, bitácora de\n' +
+            'contactos externos), SALVO dos que verifican API_KEY directamente y que ninguna\n' +
+            'llave emitida puede usar: DELETE /api/people/:id —irreversible, se lleva las\n' +
+            'firmas faciales— y ALL /api/report/send.'
         );
       }
       return;
     }
 
     if (comando === 'revocar') {
-      const id = parseInt(args.id, 10);
-      if (!Number.isFinite(id)) throw new Error('Falta --id (mirá `npm run api-key -- listar`).');
+      // Se valida el TEXTO completo y no con parseInt: parseInt('3loquesea')
+      // devuelve 3, así que un --id con dedazo revocaba la llave #3 en vez de
+      // fallar. Revocar es una acción sobre una llave concreta y no se hace por
+      // aproximación.
+      const idCrudo = String(args.id ?? '').trim();
+      if (!/^[1-9]\d*$/.test(idCrudo)) {
+        throw new Error('Falta --id, o no es un entero positivo (mirá `npm run api-key -- listar`).');
+      }
+      const id = Number(idCrudo);
+      if (!Number.isSafeInteger(id)) throw new Error(`El --id ${idCrudo} no es un entero representable.`);
       const fila = await store.revokeApiKey(id, new Date().toISOString());
       if (!fila) {
         console.log(`La llave #${id} no existe o ya estaba revocada. La fila NUNCA se borra, a propósito:`);

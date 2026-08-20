@@ -62,6 +62,12 @@ async function logMerge(store, { personId, submittedName, score }) {
 // se RECHAZA: molesto, pero es la dirección segura. Lo que no puede pasar, igual
 // que en las otras tres, es que un fallo de bitácora tumbe un reporte que ya
 // está guardado.
+//
+// Por eso —y esta es la segunda diferencia con las otras tres— DEVUELVE si pudo
+// escribir. Sigue sin lanzar: quien llama decide qué hacer con el fallo. La
+// ruta del API usa eso para no seguir de largo cuando la que escribe es una
+// llave de ingesta, cuyos dos controles (el techo por hora y el dueño de la
+// ficha) se cuentan sobre esta misma tabla y desaparecerían en silencio.
 async function logApiWrite(store, { personId, updateId, apiKeyId, action }) {
   try {
     await store.insertApiWriteLog({
@@ -70,11 +76,13 @@ async function logApiWrite(store, { personId, updateId, apiKeyId, action }) {
       apiKeyId: apiKeyId ?? null,
       action
     });
+    return true;
   } catch (e) {
     console.error(
       `[logbook:api] no se pudo registrar la escritura (persona ${personId}, llave ${apiKeyId ?? 'entorno'}, ${action}) — el reporte sigue en pie:`,
       e.message
     );
+    return false;
   }
 }
 

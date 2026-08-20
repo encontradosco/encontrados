@@ -6,7 +6,7 @@ alcance. Para el detalle de cada endpoint, ver `agent.md`.
 ## Por qué existen
 
 Hasta agosto de 2026 el API tenía **una** llave: la variable de entorno
-`API_KEY`. Esa llave abre las siete superficies con llave, incluido
+`API_KEY`. Esa llave abre **todas** las superficies con llave, incluido
 `DELETE /api/people/:id` —que es irreversible y se lleva las firmas faciales— y
 `POST /api/diag/test-email`, que manda correo a cualquier dirección desde el
 dominio. Darle esa llave a alguien para que aporte datos era darle **escritura
@@ -17,7 +17,7 @@ operación, así que nada de lo que ya existe cambia.
 
 | | `operator` | `ingest` |
 |---|---|---|
-| Rutas | las siete de siempre | **solo** `POST /api/updates` |
+| Rutas | todas las rutas con llave, **salvo dos** (ver abajo) | **solo** `POST /api/updates` |
 | Estados que puede afirmar | todos | `missing`, `unknown` |
 | `safe` / `deceased` / `injured` | se guardan tal cual | se estacionan en `unknown` |
 | Puede sobreescribir por `external_id` | cualquiera | **solo las fichas que creó** |
@@ -25,6 +25,19 @@ operación, así que nada de lo que ya existe cambia.
 | `reporter` / `contact` | se guardan | se descartan |
 | Manda avisos a familias | sí | **no** |
 | Techo de escrituras | sin techo | 120 por hora |
+
+**`API_KEY` no es lo mismo que una llave `operator` emitida**, y la diferencia
+son dos rutas que verifican `API_KEY` directamente, sin pasar por el alcance:
+
+- `DELETE /api/people/:id` — el borrado a solicitud del titular. **Ninguna llave
+  emitida puede borrar**, ni con alcance `operator`. Es a propósito: es
+  irreversible y se lleva las firmas faciales.
+- `ALL /api/report/send` — el reporte operativo recurrente. Acepta `API_KEY` o el
+  `CRON_SECRET` de Vercel, y nada más.
+
+Todo lo demás que exige llave —suscripciones, `reindex`, cifras de operación,
+correo de prueba, la bitácora de contactos externos— sí lo abre una llave
+`operator`.
 
 ## Emitir una llave
 
@@ -34,7 +47,7 @@ alcance acotado sería peor que no hacer nada, porque permitiría emitir con dos
 clics una llave de poder total.
 
 ```bash
-npm run api-key -- emitir --alias voluntario-1 --alcance ingest --por nombre-de-quien-emite
+npm run api-key -- emitir --alias voluntario-1 --alcance ingest
 npm run api-key -- listar
 npm run api-key -- revocar --id 3
 ```
@@ -51,10 +64,15 @@ Tres cosas que conviene saber antes de correrlo:
 2. **`--alias` es un alias público.** No el nombre legal, no el correo, no el
    teléfono. Alcanza para saber a quién revocarle; guardar más convertiría la
    tabla en un registro de datos personales de voluntarios, con su propia
-   retención por definir (Ley 1581).
-3. **Si hay llaves emitidas, `API_KEY` tiene que estar configurada.** Sin ella el
-   API cae al modo abierto de desarrollo, que le da alcance de operación a
-   cualquiera que no mande cabecera.
+   retención por definir (Ley 1581). Por lo mismo **no hay bandera para anotar
+   quién emite**: era texto libre y guardaba exactamente lo que el alias existe
+   para no guardar. La columna `created_by` quedó en la tabla, sin usar.
+3. **Emitir la primera llave cierra el modo abierto de desarrollo.** Sin
+   `API_KEY` configurada y sin ninguna llave emitida, los `POST` quedan abiertos
+   para poder desarrollar en local sin credenciales. En cuanto existe una llave
+   emitida esa puerta se cierra sola, en el request siguiente: una petición sin
+   cabecera recibe 401 en vez de alcance de operación. Igual, **configurá
+   `API_KEY`** en cualquier despliegue.
 
 Entregala por un canal que no la deje escrita. Un gestor de contraseñas sirve
 para **entregar** el secreto una vez; el registro de quién tiene qué es la tabla,
@@ -109,11 +127,13 @@ esto: el adaptador del registro público manda `"Localizada sin vida"` a `unknow
 a propósito, porque *"adivinar sobre la muerte de alguien no se hace solo"*
 (`src/sources/colombiatebusca.js`). Acá se reusa ese principio.
 
-⚠️ **`unknown` no tiene salida todavía.** No existe rutina ni cola de revisión
-que convierta un `unknown` en `safe` o `deceased` — es el
-[issue #190](https://github.com/encontradosco/encontrados/issues/190). Con
-voluntarios corriendo la ingesta esa cola va a crecer mucho más rápido, así que
-#190 pasa de ser deuda a ser el cuello de botella de este frente.
+⚠️ **La salida de `unknown` es humana y es una cola.** Un `unknown` no se
+convierte solo en `safe` ni en `deceased`: sale por la cola de revisión de
+estado, donde una persona mira la evidencia y decide
+([issue #190](https://github.com/encontradosco/encontrados/issues/190),
+`src/statusReview.js`). Con voluntarios corriendo la ingesta esa cola va a
+crecer mucho más rápido que hoy, así que su capacidad —cuánta gente la
+atiende— es el cuello de botella de este frente.
 
 ## Quién escribió qué
 

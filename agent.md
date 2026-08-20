@@ -412,7 +412,7 @@ presencia y huella, nunca el valor).
 | `PORT` | 3000. Solo aplica a `npm run dev` / `npm start`; en Vercel nadie escucha un puerto. |
 | `DATABASE_URL` (o `POSTGRES_URL`, `STORAGE_URL`, `NEON_DATABASE_URL`…) | SQLite. En local, un archivo; **en Vercel, un `/tmp` efímero que se pierde**. |
 | `DB_PATH` | `./data/encontrados.db`. Solo para SQLite local. |
-| `API_KEY` | Los `POST` del API quedan **abiertos** —solo si no se presenta cabecera; un token presentado que no corresponde a ninguna llave emitida se rechaza igual— y `DELETE /api/people/:id` responde 503. Las lecturas de información de personas son públicas siempre, con o sin llave; la excepción es `GET /api/match-stats`, que es operativa y dispara búsquedas en Rekognition, así que pide llave. **Si hay llaves emitidas (`api_keys`), esta variable es obligatoria**: sin ella el modo abierto le da alcance de operación a cualquiera que no mande cabecera. |
+| `API_KEY` | Los `POST` del API quedan **abiertos** —solo si no se presenta cabecera; un token presentado que no corresponde a ninguna llave emitida se rechaza igual— y `DELETE /api/people/:id` responde 503. Las lecturas de información de personas son públicas siempre, con o sin llave; la excepción es `GET /api/match-stats`, que es operativa y dispara búsquedas en Rekognition, así que pide llave. **El modo abierto se cierra solo en cuanto existe una llave emitida** (`api_keys`): ahí una petición sin cabecera recibe 401 en vez de alcance de operación, sin necesidad de reiniciar. Igual, definí `API_KEY` en cualquier despliegue. |
 | `SENDGRID_API_KEY` | No sale ningún correo: ni verificación de suscripción, ni alertas, ni avisos. Se le hace `trim()` porque un salto de línea pegado sin querer devuelve 401. |
 | `EMAIL_FROM` | `a@torrenegra.com`. Tiene que ser un remitente verificado en SendGrid o SendGrid responde 403. |
 | `AVISO_EMAIL` | El aviso del rescatista no se manda. Falla en silencio: quien reportó ve su página de éxito igual. Y con `NOTIFY_MODE=relay` (el modo por omisión) tampoco sale ningún aviso a terceros: quedan en el log como `[notify:relevo] PERDIDO`. |
@@ -441,7 +441,7 @@ las pruebas apunten a sus servidores falsos. No se definen en producción.
 ## Llaves de API: dos alcances
 
 `API_KEY` es la llave de **operación** y sigue funcionando exactamente igual que
-siempre: abre las siete superficies con llave, incluido el `DELETE` irreversible.
+siempre: abre todas las superficies con llave, incluido el `DELETE` irreversible.
 Junto a ella hay llaves guardadas en la base (`api_keys`), que se emiten con
 `npm run api-key` y **pueden mucho menos**. El paso a paso está en
 [`docs/llaves-de-api.md`](docs/llaves-de-api.md); lo que hay que saber para leer
@@ -464,12 +464,18 @@ el código:
   que ya apareció, y publicar eso como desaparecida sería peor que no ingerir
   nada. Es el mismo principio con el que el adaptador del registro público manda
   `"Localizada sin vida"` a `unknown` (`src/sources/colombiatebusca.js`).
-  Cuidado: `unknown` **no tiene salida** todavía (#190), así que esto llena una
-  cola que hoy nadie atiende.
+  Cuidado: de `unknown` solo se sale por la cola de revisión de estado, que la
+  atiende una persona (#190, `src/statusReview.js`), así que una llave `ingest`
+  le agrega trabajo a esa cola.
 - `api_write_log` deja el rastro de qué llave escribió qué ficha, y hace un
-  segundo trabajo fácil de pasar por alto: es la **prueba de propiedad** de la
-  que depende la regla de arriba. Si no se pudo escribir, la ficha queda sin
-  dueño demostrable y la corrección siguiente se rechaza — falla cerrado.
+  segundo trabajo fácil de pasar por alto: sostiene **el techo por hora**
+  (`countApiWrites` lo cuenta sobre esa tabla) y la **prueba de propiedad** de la
+  que depende la regla de arriba. Por eso, cuando quien escribe es una llave
+  `ingest`, que la bitácora falle **falla el request** (503): el reporte ya quedó
+  guardado y el `external_id` hace el reintento idempotente, pero seguir de largo
+  dejaría a esa llave sin techo y con permiso de pisar cualquier ficha, sin que
+  nada lo indicara afuera. Para el operador se conserva la regla de las otras
+  bitácoras: un fallo de bitácora nunca tumba un reporte.
 - Emitir es hoy un script. El panel en `/admin` va en un PR aparte a propósito:
   agregar llaves por persona **sin** el alcance acotado permitiría emitir con dos
   clics una llave de poder total.
@@ -508,8 +514,9 @@ alguien, sí:
   y cuando no hay nada que purgar no gasta ni una llamada a Rekognition.
 - `DELETE /api/people/:id` — **con llave**, y deshabilitado (503) si no hay
   `API_KEY`. Exige `API_KEY` misma: ni siquiera una llave emitida con alcance
-  `operator` puede borrar (única asimetría entre las dos, y es la dirección
-  segura). Cumple el borrado que promete la política de privacidad, y se lleva
+  `operator` puede borrar, y es la dirección segura. Es una de las **dos** rutas
+  que verifican `API_KEY` directamente sin pasar por el alcance; la otra es
+  `ALL /api/report/send`. Cumple el borrado que promete la política de privacidad, y se lleva
   las dos copias del rastro: la fila (en cascada) y las firmas faciales de sus
   fotos, que viven en la colección de Rekognition y a las que la cascada no
   llega. **El orden importa y está elegido:** los `face_id` se leen antes del

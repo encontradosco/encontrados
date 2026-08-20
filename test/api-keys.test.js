@@ -40,8 +40,7 @@ async function emitir(store, { scope, label = 'alias-de-prueba' }) {
     label,
     keyHash: hashApiKey(llave),
     keyPrefix: apiKeyPrefix(llave),
-    scope,
-    createdBy: 'prueba'
+    scope
   });
   return { llave, fila };
 }
@@ -50,6 +49,16 @@ function push(base, llave, body) {
   return fetch(`${base}/api/updates`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${llave}` },
+    body: JSON.stringify(body)
+  });
+}
+
+// El mismo push SIN cabecera de autorización: es el que decide si el modo
+// abierto de desarrollo está abierto o cerrado.
+function pushSinCabecera(base, body) {
+  return fetch(`${base}/api/updates`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
   });
 }
@@ -448,4 +457,92 @@ test('cada escritura del API queda en la bitácora, con la llave que la hizo', a
   // La bitácora hereda la retención del esquema: se va con la persona.
   await app.store.deletePerson(personId);
   assert.equal(await app.store.countApiWrites(fila.id, desde), 0);
+});
+
+// ---------------------------------------------------------------------------
+// 3. Lo que la respuesta NO puede devolver, y la puerta que no puede quedar
+//    abierta
+// ---------------------------------------------------------------------------
+
+test('el 201 de una escritura NUNCA devuelve el contacto de la familia, ni con llave de operación', async (t) => {
+  const app = await startApp();
+  conLlaveDeOperacion(t, app);
+
+  const TELEFONO = '+573001234567';
+  const res = await push(app.base, LLAVE_OPERACION, {
+    name: 'Ana Prueba Diecisiete',
+    status: 'missing',
+    reporter: 'Quien Reporta Prueba',
+    contact: TELEFONO
+  });
+  assert.equal(res.status, 201);
+
+  const body = await res.json();
+  // El dato SÍ se guardó: la ficha lo necesita para que un rescatista pueda
+  // llegar a la familia. Lo que no puede es salir en la respuesta.
+  const guardado = await app.store.getLatestUpdate(body.person_id);
+  assert.equal(guardado.contact, TELEFONO, 'el contacto sí se guarda');
+
+  const crudo = JSON.stringify(body);
+  assert.ok(!crudo.includes(TELEFONO), 'el teléfono de la familia no puede viajar en la respuesta');
+  assert.equal(body.update.contact, undefined, 'la respuesta no lleva el campo contact');
+  assert.equal(body.update.reporter, undefined, 'reporter sale enmascarado, nunca crudo');
+  assert.ok(!crudo.includes('Quien Reporta Prueba'), 'ni el nombre de quien reporta, sin enmascarar');
+  // Y lo que sí tiene que seguir saliendo, porque de eso dependen el barrido y
+  // las pruebas que ya existen.
+  assert.equal(body.update.status, 'missing');
+  assert.ok(body.update.id);
+});
+
+test('emitir la primera llave CIERRA el modo abierto de desarrollo, en el request siguiente', async (t) => {
+  const app = await startApp();
+  // A propósito sin env.API_KEY: es el escenario que el modo abierto existe
+  // para servir, y el mismo en el que se volvía peligroso.
+  t.after(() => app.server.close());
+
+  // Sin ninguna llave emitida sigue abierto: desarrollar en local sin
+  // credenciales no se rompe.
+  const abierto = await pushSinCabecera(app.base, { name: 'Ana Prueba Dieciocho', status: 'missing' });
+  assert.equal(abierto.status, 201, 'sin llaves emitidas, el modo abierto de desarrollo sigue igual');
+
+  // Se emite una llave ACOTADA. Antes esto no cambiaba nada acá, y ese era el
+  // agujero: la llave más limitada que existe le daba, de hecho, alcance de
+  // operación completo a cualquier anónimo del mismo despliegue.
+  await emitir(app.store, { scope: 'ingest' });
+
+  const cerrado = await pushSinCabecera(app.base, { name: 'Ana Prueba Diecinueve', status: 'missing' });
+  assert.equal(cerrado.status, 401, 'con una llave emitida, una petición sin cabecera no puede pasar');
+});
+
+test('si la bitácora no se puede escribir, una llave de ingesta falla — no sigue sin sus dos controles', async (t) => {
+  const app = await startApp();
+  conLlaveDeOperacion(t, app);
+  const { llave } = await emitir(app.store, { scope: 'ingest' });
+
+  // La bitácora se cae. Es la tabla sobre la que se cuentan el techo por hora y
+  // la propiedad de las fichas, así que seguir de largo dejaría a esta llave sin
+  // ninguno de los dos y respondiendo 201 como si nada.
+  const original = app.store.insertApiWriteLog;
+  app.store.insertApiWriteLog = async () => {
+    throw new Error('la bitácora está caída');
+  };
+  t.after(() => {
+    app.store.insertApiWriteLog = original;
+  });
+
+  const res = await push(app.base, llave, { name: 'Ana Prueba Veinte', status: 'missing' });
+  assert.equal(res.status, 503);
+  const body = await res.json();
+  // El reporte NO se pierde: ya está guardado, y la respuesta dice con qué
+  // persona quedó para que quien empuja pueda reconciliar.
+  assert.ok(body.person_id, 'el reporte quedó guardado y la respuesta lo dice');
+  assert.ok(await app.store.getPerson(body.person_id));
+
+  // Para la llave de operación se conserva la regla de las otras bitácoras: no
+  // sostiene ningún control suyo, así que un fallo no puede tumbarle un reporte.
+  const operacion = await push(app.base, LLAVE_OPERACION, {
+    name: 'Ana Prueba Veintiuno',
+    status: 'missing'
+  });
+  assert.equal(operacion.status, 201, 'una bitácora caída nunca tumba el reporte de un operador');
 });

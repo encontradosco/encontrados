@@ -377,6 +377,15 @@ async function createPostgresAdapter(connectionString) {
     -- único rastro de qué escribió esa llave, que es justo lo que hace falta
     -- para limpiar después de revocarla.
     --
+    -- created_by queda SIN USAR a propósito, y no se quita. Se creó para anotar
+    -- quién emitió la llave, pero la única forma de llenarla era texto libre de
+    -- la línea de comandos, o sea justo el nombre legal o el correo que la regla
+    -- 3 de arriba existe para no guardar; la bandera que la llenaba se quitó
+    -- antes de mergear. La columna se deja porque quitarla es un cambio de
+    -- esquema y el hueco no cuesta nada: es NULL en todas las filas. Si alguna
+    -- vez hace falta saber quién emitió, que sea con un identificador de una
+    -- cuenta y no con lo que alguien escriba en una bandera.
+    --
     -- revoked_at y last_used_at van como TEXTO ISO en los DOS motores, por la
     -- misma razón que subscriptions.rescue_asked_at: se leen y se comparan en
     -- JS, y un TIMESTAMPTZ volvería como Date acá y como string en SQLite —
