@@ -242,12 +242,15 @@ test('in direct mode, a rescuer can subscribe and is alerted when someone report
   assert.match(text, /unsubscribe\?token=/);
 });
 
-test('removed flows are gone: no public search, no family alerts', async (t) => {
+test('removed flows are gone: no family alerts', async (t) => {
   const { server, base } = await startApp();
   t.after(() => server.close());
-  for (const path of ['/buscar', '/alerta', '/subscribe-by-name']) {
+  // /buscar is again a public name search (before reporting). The old family
+  // alert/subscribe surfaces stay gone.
+  for (const path of ['/alerta', '/subscribe-by-name']) {
     assert.equal((await fetch(`${base}${path}`)).status, 404, path);
   }
+  assert.equal((await fetch(`${base}/buscar`)).status, 200);
 });
 
 // Report photos are public on purpose. A RESCUER's photo is not: its bytes are

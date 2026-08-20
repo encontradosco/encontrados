@@ -169,6 +169,24 @@ h1.compact .subtle { font-family: var(--font-sans); font-weight: 400; font-size:
 .big-btn.report:hover { background: var(--accent-dark); }
 .big-btn.search { background: var(--accent); color: #fff; }
 .big-btn.search:hover { background: var(--accent-dark); }
+.search-first { text-align: center; margin: 0.75rem 0 0; }
+/* /buscar results: same name+photo row as home cards, without the #65 stretched
+   name link — these hits carry two CTAs and must not steal taps. */
+.card.search-hit {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+}
+.search-hit .search-actions {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 0.7rem;
+}
+.search-hit .search-actions .big-btn {
+  margin: 0;
+  padding: 0.75rem;
+  font-size: 0.95rem;
+}
 /* La alternativa de una pareja de acciones. Mismo tamaño y mismo peso de letra
    que la principal —no es "la opción chiquita"— pero en contorno, para que un
    ojo que barre la pantalla vea DOS caminos y no dos veces el mismo. */

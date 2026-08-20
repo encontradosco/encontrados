@@ -479,6 +479,26 @@ async function createPostgresAdapter(connectionString) {
         [personId]
       );
     },
+    // Same rule as latestUpdate, one row per person — for /buscar (and any
+    // listing that would otherwise N+1 getLatestUpdate).
+    async latestUpdatesForPeople(personIds) {
+      if (!personIds.length) return [];
+      return all(
+        `WITH ranked AS (
+           SELECT u.*,
+                  ROW_NUMBER() OVER (
+                    PARTITION BY u.person_id ORDER BY u.created_at DESC, u.id DESC
+                  ) AS rn
+           FROM updates u
+           WHERE u.person_id = ANY($1)
+             AND NOT (u.source = 'aggregator' AND u.status = 'safe')
+         )
+         SELECT id, person_id, status, message, location, lat, lng, source, source_url,
+                reporter, contact, external_id, created_at
+         FROM ranked WHERE rn = 1`,
+        [personIds]
+      );
+    },
     // Everyone whose LATEST update is 'missing' — not everyone who was EVER
     // reported missing. Under the old "has ANY missing update" filter a person
     // later confirmed alive stayed on the list forever: their family sees them
