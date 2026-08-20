@@ -56,6 +56,13 @@ const PIEZAS_VIGILADAS = [
     define: /function\s+notifySubscribers\s*\(/,
     porque: 'decide a quién se le escribe cuando aparece una novedad de una persona',
   },
+  {
+    nombre: 'resolveFicha',
+    define: /function\s+resolveFicha\s*\(/,
+    porque:
+      'cierra una ficha en SIN CONFIRMAR como A SALVO o FALLECIDO(A): cambia lo que el ' +
+      'listado público dice de alguien y manda el aviso a quien la está buscando',
+  },
 
   // --- El consentimiento y la promesa que se le hace a quien sube una foto ---
   {

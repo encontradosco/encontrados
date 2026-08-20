@@ -271,6 +271,85 @@ async function createPostgresAdapter(connectionString) {
     );
     CREATE INDEX IF NOT EXISTS idx_merge_log_person ON merge_log(person_id);
     CREATE INDEX IF NOT EXISTS idx_merge_log_created ON merge_log(created_at);
+
+    -- ===== COLA DE REVISIÓN DE ESTADO (#190) — inicio =====================
+    -- Una ficha en unknown no tiene salida, y eso es el issue #190: el
+    -- adaptador del registro público manda "Localizada sin vida" a unknown
+    -- A PROPÓSITO (src/sources/colombiatebusca.js) porque adivinar sobre la
+    -- muerte de alguien no se hace solo — y el efecto es que la ficha se queda
+    -- publicada como buscada indefinidamente aunque la confirmación exista.
+    -- Esta tabla es la constancia de la salida humana: quién decidió, cuándo,
+    -- y con qué evidencia.
+    --
+    -- Por qué NO hay un estado público nuevo. Se propuso "probablemente
+    -- encontrado" y se descartó por dos razones que gobiernan todo el diseño:
+    -- (a) unknown YA es ese estacionamiento, y un segundo duplicaría el
+    -- problema de la cola en vez de resolverlo; (b) un estado público es un
+    -- mensaje a una familia — si una madre lee "probablemente encontrado" en
+    -- la ficha de su hijo va a leer esperanza, y si era un homónimo esa
+    -- crueldad la causamos nosotros.
+    --
+    -- Por eso el marcador de "probable" vive ACÁ y es PRIVADO. Ninguna
+    -- superficie pública lee esta tabla, y publicUpdate (src/privacy.js)
+    -- enumera campo por campo lo que sale de una fila de updates, así que
+    -- nada de acá puede filtrarse por una copia en bloque.
+    --
+    -- Dos clases de fila, distinguidas por resolved:
+    --   resolved = false  constancia sin efecto: alguien miró la ficha y dejó
+    --                     escrito qué encontró. NO cambia el estado público y
+    --                     NO manda ningún aviso.
+    --   resolved = true   resolución aplicada: se escribió una fila en
+    --                     updates (update_id) y de ahí salieron los avisos.
+    --
+    -- author es el correo de la sesión de /admin. Es el único lugar del
+    -- esquema donde se persiste la identidad de un operador, y es deliberado:
+    -- sin eso la cola es un botón sin memoria. Es dato personal del EQUIPO,
+    -- no de una persona reportada ni de su familia, y hereda la misma
+    -- retención que todo lo demás.
+    --
+    -- El enlace a la noticia NO se guarda acá: va en updates.source_url,
+    -- que ya existe justamente para eso. Esta tabla guarda la DECISIÓN, no
+    -- los links.
+    --
+    -- evidence_note es la justificación privada de quien revisó, y NUNCA se
+    -- copia a updates.message: message sí sale al público.
+    --
+    -- Nada de "cuándo alcanza la evidencia" está codificado acá. El criterio
+    -- lo está escribiendo el frente de verificación; esta tabla registra la
+    -- evidencia y deja juzgar a la persona. Una regla de umbral incrustada en
+    -- el esquema quedaría obsoleta y sería la más difícil de cambiar.
+    --
+    -- created_at va como TEXTO ISO en los dos motores, con el mismo formato
+    -- por defecto en cada uno: un TIMESTAMPTZ vuelve como Date acá y como
+    -- string en SQLite, y esa diferencia se cuela en producción y no en las
+    -- pruebas.
+    --
+    -- Retención: hereda la del resto del esquema, ON DELETE CASCADE sobre
+    -- people(id). update_id es SET NULL y no CASCADE a propósito — la
+    -- constancia de una decisión no debe desaparecer porque se borró la fila
+    -- a la que apuntaba; desaparece con la persona, que es la regla.
+    CREATE TABLE IF NOT EXISTS status_review (
+      id SERIAL PRIMARY KEY,
+      person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+      probable_status TEXT NOT NULL CHECK (probable_status IN ('safe','deceased')),
+      evidence_note TEXT NOT NULL,
+      author TEXT NOT NULL,
+      resolved BOOLEAN NOT NULL DEFAULT false,
+      update_id INTEGER REFERENCES updates(id) ON DELETE SET NULL,
+      -- Cuántos suscriptores notificables había cuando la persona decidió: el
+      -- MISMO número que la pantalla le mostró antes de confirmar. El
+      -- resultado real de cada envío ya vive en contact_log.
+      recipients INTEGER,
+      -- En qué modo salió el aviso: 'direct' le llega al suscriptor,
+      -- 'relay' cae en el buzón de operación marcado [RETENIDO] y no sale
+      -- nada a terceros (ver notifyMode en src/notify.js). Sin esta columna,
+      -- el registro no dice si la familia se enteró o no.
+      notify_mode TEXT CHECK (notify_mode IN ('direct','relay')),
+      created_at TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+    );
+    CREATE INDEX IF NOT EXISTS idx_status_review_person ON status_review(person_id);
+    CREATE INDEX IF NOT EXISTS idx_status_review_created ON status_review(created_at);
+    -- ===== COLA DE REVISIÓN DE ESTADO (#190) — fin ========================
   `);
   if (hasTrgm) {
     await pool.query(`
@@ -978,6 +1057,55 @@ async function createPostgresAdapter(connectionString) {
         [personId, submittedName, score]
       );
     },
+    // ===== COLA DE REVISIÓN DE ESTADO (#190) — inicio =====================
+    // Ver el comentario gemelo en src/store/sqlite.js: la cola son las
+    // personas cuyo ÚLTIMO estado es `unknown`, con el mismo filtro de
+    // "último estado" que missingPeople, y sin bandera de "resuelto" porque
+    // resolver escribe una fila nueva en `updates` y la ficha sale sola.
+    async unknownPeople(limit) {
+      return all(
+        `WITH latest AS (
+           SELECT u.*,
+                  ROW_NUMBER() OVER (PARTITION BY u.person_id ORDER BY u.created_at DESC, u.id DESC) AS rn
+           FROM updates u
+           ${AGGREGATOR_SAFE_EXCLUSION}
+         )
+         SELECT p.id, p.full_name,
+                l.id AS update_id, l.status, l.message, l.location, l.source,
+                l.source_url, l.created_at AS last_report
+         FROM people p
+         JOIN latest l ON l.person_id = p.id AND l.rn = 1
+         WHERE l.status = 'unknown'
+         ORDER BY l.created_at DESC
+         LIMIT $1`,
+        [limit]
+      );
+    },
+    async insertStatusReview({ personId, probableStatus, evidenceNote, author, resolved, updateId, recipients, notifyMode }) {
+      return one(
+        `INSERT INTO status_review
+           (person_id, probable_status, evidence_note, author, resolved, update_id, recipients, notify_mode)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         RETURNING *`,
+        [
+          personId,
+          probableStatus,
+          evidenceNote,
+          author,
+          Boolean(resolved),
+          updateId ?? null,
+          Number.isFinite(recipients) ? recipients : null,
+          notifyMode ?? null
+        ]
+      );
+    },
+    async statusReviewsForPerson(personId) {
+      return all(
+        'SELECT * FROM status_review WHERE person_id = $1 ORDER BY created_at DESC, id DESC',
+        [personId]
+      );
+    },
+    // ===== COLA DE REVISIÓN DE ESTADO (#190) — fin ========================
     // Cuenta total y por superficie. `since` (ISO) filtra a lo escrito desde
     // ahí — se usa para la línea de "cambio desde el reporte anterior" del
     // correo operativo; sin `since`, es el acumulado histórico completo.

@@ -82,6 +82,23 @@
 /src/notify.js               @torrenegra @ni500 @yesid-lopez
 
 
+# === La salida de una ficha de la cola de revisión =========================
+# Acá vive el botón que cierra una ficha en SIN CONFIRMAR como A SALVO o
+# FALLECIDO(A) (#190). Dos consecuencias, y cada una alcanza sola para que la
+# decisión sea de una persona:
+#
+#   1. Cambia lo que el listado público dice de alguien. Una resolución
+#      equivocada sobre un homónimo le anuncia a una familia una muerte que no
+#      ocurrió.
+#   2. MANDA AVISOS. Resolver llama a notifySubscribers, así que este archivo
+#      le escribe a personas que están esperando noticias de un desaparecido.
+#
+# Ojo con la geografía: por ruta, este archivo caería en el catch-all, y el
+# corte por consecuencia lo trae acá. Es la clase de diferencia que CODEOWNERS
+# no puede ver por sí solo y que test/codeowners.test.js vigila.
+/src/statusReview.js         @torrenegra @ni500 @yesid-lopez
+
+
 # === La app pública ========================================================
 # INTERINO. Se relaja cuando se parta el archivo.
 #
