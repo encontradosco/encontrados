@@ -73,6 +73,20 @@
 /src/facematch.js            @torrenegra @ni500 @yesid-lopez
 /src/duplicates.js           @torrenegra @ni500 @yesid-lopez
 
+# Mascotas NO pasa por Rekognition: usa un servicio de embeddings propio por
+# HTTP, y es justamente por eso que esta superficie entró sin freno —los
+# patrones de arriba nombran a Rekognition y no la miran—. Pero es la misma
+# categoría: una foto que sale de este proceso hacia un tercero, y una
+# comparación que decide que dos fotos son el mismo animal. petfaces.js es el
+# análogo de faces.js, y petmatch.js el de facematch.js.
+#
+# petmatch.js se lleva además la promesa de privacidad de la superficie: el
+# borrado de la foto de quien encontró una mascota, que el código dejó a
+# propósito FUERA del try que puede fallar. Es el equivalente de RESCUE_PRIVACY
+# del lado de personas, y no tenía dónde vivir restringido.
+/src/petfaces.js             @torrenegra @ni500 @yesid-lopez
+/src/petmatch.js             @torrenegra @ni500 @yesid-lopez
+
 
 # === Privacidad y datos de contacto ========================================
 # Qué sale de un reporte hacia afuera —enmascarado o crudo— y a quién se le
@@ -80,6 +94,13 @@
 # alguien es materia de extorsión, no un campo más de un formulario.
 /src/privacy.js              @torrenegra @ni500 @yesid-lopez
 /src/notify.js               @torrenegra @ni500 @yesid-lopez
+
+# pets.js guarda el teléfono o el correo de quien perdió una mascota, y no
+# importa nada de privacy.js: en esa superficie no hay enmascarado de salida.
+# Es el mismo dato y el mismo riesgo que el de una familia que está buscando a
+# una persona; que del otro lado haya un animal no cambia de quién es el
+# teléfono.
+/src/pets.js                 @torrenegra @ni500 @yesid-lopez
 
 
 # === La salida de una ficha de la cola de revisión =========================
@@ -100,7 +121,7 @@
 
 
 # === La app pública ========================================================
-# INTERINO. Se relaja cuando se parta el archivo.
+# INTERINO. Cada archivo de acá se relaja cuando se parta.
 #
 # web.js son ~1.600 líneas donde conviven el copy más rutinario del sitio y lo
 # más delicado que tiene el proyecto: el bloque que muestra en pantalla el
@@ -116,6 +137,20 @@
 # web.js a lo rutinario. Ese refactor no cambia comportamiento observable, así
 # que es rutinario y no necesita esperar a nadie.
 /src/routes/web.js           @torrenegra @ni500 @yesid-lopez
+
+# routes/pets.js entra acá por la misma razón y con el mismo carácter INTERINO.
+# El bloque que le muestra el contacto del dueño a quien completa una
+# comparación vive ahí, mezclado con el copy, los formularios y el layout de
+# toda la superficie de mascotas. Como CODEOWNERS no distingue una línea de
+# otra (punto 3 arriba), hoy se restringe el archivo entero.
+#
+# Y hay que decir el precio de frente, porque es el mismo de web.js y va a
+# doler igual: es el archivo que más se va a tocar de la superficie de
+# mascotas, así que un arreglo de copy o de layout va a quedar esperando a una
+# persona sin necesitarlo. La salida también es la misma: sacar ese bloque a su
+# propio módulo y devolver routes/pets.js a lo rutinario. Ese refactor no
+# cambia comportamiento observable, así que es rutinario y no espera a nadie.
+/src/routes/pets.js          @torrenegra @ni500 @yesid-lopez
 
 
 # === Superficie pública y despliegue =======================================
