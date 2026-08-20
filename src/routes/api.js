@@ -516,9 +516,14 @@ function apiRoutes(store, matcher, petStore, petMatcher) {
       // de las dos reglas para tapar un fallo de base que igual habría que
       // atender.
       //
-      // Lo que NO se pierde: el reporte ya está guardado (por eso se responde
-      // 503 y se devuelve person_id), y external_id hace el reintento
-      // idempotente, así que quien empuja reintenta sin duplicar nada.
+      // Lo que NO se pierde: el reporte ya está guardado, y por eso se responde
+      // con person_id. Lo que SÍ hay que decirle a quien empuja es que no
+      // reintente a ciegas, porque la ficha quedó sin dueño demostrable: un
+      // reintento con el mismo external_id se rechaza con 403 (el LEFT JOIN de
+      // apiWriteOwnerByExternalId devuelve { api_key_id: null }, que NO es
+      // "libre" — ver el comentario de esa consulta), y uno sin external_id
+      // crea una ficha duplicada. Falla cerrado en los dos casos, y salir de
+      // ahí es trabajo de un operador, no del que empuja.
       //
       // Para el operador se conserva la regla de las otras tres bitácoras: una
       // bitácora caída nunca tumba un reporte, porque ahí no sostiene ningún
@@ -529,7 +534,9 @@ function apiRoutes(store, matcher, petStore, petMatcher) {
             'El reporte quedó guardado, pero no se pudo registrar en la bitácora de escrituras, ' +
             'y esa bitácora es la que sostiene el techo por hora y la propiedad de las fichas de ' +
             'esta llave. Se responde con error a propósito, en vez de seguir sin esos dos ' +
-            'controles. Reintentá con el mismo external_id: es idempotente.',
+            'controles. NO reintentes: la ficha quedó sin dueño demostrable, así que volver a ' +
+            'mandar el mismo external_id se rechaza con 403, y mandarlo sin external_id crearía ' +
+            'una ficha duplicada. Avisá de este error: lo resuelve un operador.',
           person_id: result.person.id,
           external_id: externalId
         });

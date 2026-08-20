@@ -546,3 +546,55 @@ test('si la bitácora no se puede escribir, una llave de ingesta falla — no si
   });
   assert.equal(operacion.status, 201, 'una bitácora caída nunca tumba el reporte de un operador');
 });
+
+test('la ficha que quedó sin dueño por un fallo de bitácora no la puede reclamar NADIE, ni quien la creó', async (t) => {
+  const app = await startApp();
+  conLlaveDeOperacion(t, app);
+  const { llave: llaveA } = await emitir(app.store, { scope: 'ingest', label: 'alias-a' });
+  const { llave: llaveB } = await emitir(app.store, { scope: 'ingest', label: 'alias-b' });
+  const EXTERNAL_ID = 'https://fuente.example/ficha/veintidos';
+
+  // La llave A crea la ficha con la bitácora caída: queda guardada, pero sin la
+  // fila que prueba de quién es.
+  const original = app.store.insertApiWriteLog;
+  app.store.insertApiWriteLog = async () => {
+    throw new Error('la bitácora está caída');
+  };
+  const primera = await push(app.base, llaveA, {
+    name: 'Ana Prueba Veintidos',
+    status: 'missing',
+    external_id: EXTERNAL_ID
+  });
+  assert.equal(primera.status, 503);
+  app.store.insertApiWriteLog = original;
+
+  // Una ficha sin dueño demostrable NO es una ficha libre. Esta es la mitad que
+  // importa: otra llave de ingesta no puede quedarse con ella, que es
+  // exactamente lo que el alcance existe para impedir.
+  const ajena = await push(app.base, llaveB, {
+    name: 'Ana Prueba Veintidos',
+    status: 'missing',
+    external_id: EXTERNAL_ID
+  });
+  assert.equal(ajena.status, 403, 'una ficha sin dueño no queda disponible para cualquiera');
+
+  // Y la otra mitad, que es el precio de la primera y por eso está escrita en la
+  // guía: ni siquiera quien la creó puede reintentar. Sin fila en la bitácora no
+  // hay forma de demostrar que es suya, así que el reintento también se rechaza
+  // y la ficha la tiene que resolver un operador.
+  const propia = await push(app.base, llaveA, {
+    name: 'Ana Prueba Veintidos',
+    status: 'missing',
+    external_id: EXTERNAL_ID
+  });
+  assert.equal(propia.status, 403, 'reintentar el 503 NO es idempotente: la guía no puede prometerlo');
+
+  // El operador sí puede, porque no está sujeto a la regla de propiedad: es la
+  // salida de la que habla la guía.
+  const operador = await push(app.base, LLAVE_OPERACION, {
+    name: 'Ana Prueba Veintidos',
+    status: 'missing',
+    external_id: EXTERNAL_ID
+  });
+  assert.equal(operador.status, 201, 'un operador puede resolver la ficha que quedó trabada');
+});

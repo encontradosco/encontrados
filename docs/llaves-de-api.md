@@ -151,10 +151,15 @@ Por eso, **si la bitácora no se puede escribir, una llave `ingest` recibe `503`
 no `201`. La ficha ya quedó guardada —no se pierde el hallazgo, y la respuesta
 trae su `person_id`—, pero seguir de largo dejaría a esa llave sin techo y con
 permiso de pisar cualquier `external_id`, sin que nada lo indicara afuera.
-**Reintentá con el mismo `external_id`: es idempotente.** Si aun así quedara una
-ficha sin fila en la bitácora, queda sin dueño demostrable y la siguiente
-corrección de esa misma llave se rechaza. Falla cerrado en los dos puntos, que es
-la dirección correcta.
+
+**Ese `503` no se reintenta**, y conviene saber por qué antes de programar un
+reintento automático: la ficha existe pero no tiene fila en la bitácora, o sea
+que quedó **sin dueño demostrable**. Volver a mandar el mismo `external_id`
+—con esa llave o con cualquier otra— se rechaza con `403`, porque una ficha sin
+dueño no es de nadie y la regla falla cerrado. Y mandarlo **sin** `external_id`
+crearía una ficha duplicada. Lo que hay que hacer es avisar: una bitácora caída
+es una falla de operación y la resuelve un operador (`API_KEY`), que no está
+sujeto a esta regla.
 
 Para una llave `operator` se conserva la regla de las otras bitácoras del repo:
 un fallo de bitácora **nunca** tumba un reporte, porque ahí no sostiene ningún
