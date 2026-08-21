@@ -179,10 +179,11 @@ y no aplica a los PRs que llegan desde un fork, que mira siempre una persona.
 
 ### Qué entra con una revisión y qué espera a una persona
 
-**Con la revisión de un solo mantenedor se mergea lo rutinario:** corrección de
-errores, texto y copy, refactors que no cambian comportamiento observable, y
-documentación. Ahí lo que manda es la velocidad — un arreglo urgente en medio de
-una emergencia no debería esperar a que coincidan dos husos horarios.
+**Con la revisión de un solo code owner de la ruta —de cualquiera de los dos
+anillos— se mergea lo rutinario:** corrección de errores, texto y copy,
+refactors que no cambian comportamiento observable, y documentación. Ahí lo
+que manda es la velocidad — un arreglo urgente en medio de una emergencia no
+debería esperar a que coincidan dos husos horarios.
 
 **Se detiene, y la decisión la toma una persona, en tres casos** — los mismos
 tres que mandan a issue:
