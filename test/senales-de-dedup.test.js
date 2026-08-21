@@ -163,12 +163,16 @@ test('un age que no es número ni texto entra como no declarado', async () => {
   await store.close();
 });
 
-// El agregador reenvía su instantánea con el mismo external_id, y el upsert
-// pisa las dos columnas con lo que traiga el reenvío. Esto fija esa semántica
-// a propósito: si el reenvío omite el departamento, la señal vuelve a "no
-// declarado". Es lo mismo que ya hacen `contact` y `reporter`, y falla hacia
-// no separar — que es el comportamiento de hoy, no una separación equivocada.
-test('un reenvío con el mismo external_id pisa el departamento y la edad', async () => {
+// El agregador reenvía su instantánea con el mismo external_id. Un valor nuevo
+// corrige el que había; la AUSENCIA de valor no borra nada.
+//
+// La diferencia importa porque estas dos columnas no son un dato más: son con
+// las que se decide si dos reportes son la misma persona, y una señal ausente
+// nunca veta. Si un reenvío que no las trae —el agregador actualizando solo el
+// estado, el bot, cualquier integrador— las pisara con NULL, apagaría el
+// guardrail de esa ficha sin que nadie se entere, y la próxima fusión mala
+// entraría por ahí. Por eso van con COALESCE y `contact`/`reporter` no.
+test('un reenvío con el mismo external_id corrige las señales, pero no las borra', async () => {
   const store = await freshStore();
   const { person } = await store.findOrCreatePerson('Persona Prueba Siete');
 
@@ -201,8 +205,19 @@ test('un reenvío con el mismo external_id pisa el departamento y la edad', asyn
     externalId: 'ficha-1'
   });
   assert.equal(sinSeñales.id, primero.id);
-  assert.equal(sinSeñales.department, null, 'un reenvío sin el dato lo deja en no declarado');
-  assert.equal(sinSeñales.age, null);
+  assert.equal(sinSeñales.department, 'Antioquia', 'un reenvío sin el dato no puede borrarlo');
+  assert.equal(sinSeñales.age, 36);
+
+  // Y un departamento fuera de la lista cerrada entra como null, así que
+  // tampoco puede borrar: canonicalDepartment lo degrada antes de llegar acá.
+  const conBasura = await store.addUpdate(person.id, {
+    status: 'safe',
+    location: 'Armenia',
+    source: 'aggregator',
+    externalId: 'ficha-1',
+    department: 'Departamento Que No Existe'
+  });
+  assert.equal(conBasura.department, 'Antioquia');
   await store.close();
 });
 
@@ -287,6 +302,13 @@ test('Postgres: el INSERT escribe department y age, en el orden de sus parámetr
     .map((c) => c.trim());
   assert.equal(args[columnas.indexOf('department')], 'Quindío');
   assert.equal(args[columnas.indexOf('age')], 34);
+
+  // El COALESCE del upsert se afirma acá y no ejecutando el reenvío, porque en
+  // Postgres no hay base contra la cual correrlo en las pruebas. El lado de
+  // SQLite sí se ejercita de verdad, más arriba; esto es lo que impide que los
+  // dos motores se desincronicen en la única regla que apaga el guardrail.
+  assert.match(sql, /department = COALESCE\(EXCLUDED\.department, updates\.department\)/i);
+  assert.match(sql, /age = COALESCE\(EXCLUDED\.age, updates\.age\)/i);
 });
 
 test('el formulario pide el departamento como lista cerrada, con salida', async (t) => {

@@ -400,7 +400,8 @@ async function createSqliteAdapter(dbPath) {
     // Same idempotent-upsert contract as the Postgres adapter: a repeated
     // externalId updates the existing row's status/message/location/lat/lng/
     // reporter/contact instead of inserting a duplicate. Without externalId,
-    // behavior is unchanged.
+    // behavior is unchanged. `department` y `age` van con COALESCE, igual que
+    // en Postgres y por el mismo motivo: ver el comentario de allá.
     async insertUpdate(
       personId,
       { status, message, location, lat, lng, source, sourceUrl, reporter, contact, externalId, department, age }
@@ -419,8 +420,8 @@ async function createSqliteAdapter(dbPath) {
              source_url = excluded.source_url,
              reporter = excluded.reporter,
              contact = excluded.contact,
-             department = excluded.department,
-             age = excluded.age`
+             department = COALESCE(excluded.department, updates.department),
+             age = COALESCE(excluded.age, updates.age)`
         )
         .run(
           personId,

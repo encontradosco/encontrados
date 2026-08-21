@@ -517,6 +517,12 @@ async function createPostgresAdapter(connectionString) {
     // new one (the aggregator re-sending its latest snapshot doesn't duplicate
     // the person's history). Without externalId, behavior is unchanged: a
     // plain insert every time.
+    //
+    // `department` y `age` son la excepción, y con COALESCE: un re-envío que no
+    // las trae deja de borrarlas. Son las señales con las que se decide si dos
+    // reportes son la misma persona, y una señal ausente nunca veta — así que
+    // pisarlas con NULL apagaría el guardrail de esa ficha en silencio. Un
+    // valor nuevo sigue ganando; solo la ausencia deja de significar borrado.
     async insertUpdate(
       personId,
       { status, message, location, lat, lng, source, sourceUrl, reporter, contact, externalId, department, age }
@@ -533,8 +539,8 @@ async function createPostgresAdapter(connectionString) {
            source_url = EXCLUDED.source_url,
            reporter = EXCLUDED.reporter,
            contact = EXCLUDED.contact,
-           department = EXCLUDED.department,
-           age = EXCLUDED.age
+           department = COALESCE(EXCLUDED.department, updates.department),
+           age = COALESCE(EXCLUDED.age, updates.age)
          RETURNING *`,
         [
           personId,
