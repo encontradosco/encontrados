@@ -199,15 +199,6 @@ test('un registro que ya juntó dos departamentos deja de absorber reportes', as
   await store.close();
 });
 
-// El external_id le gana al veto, a propósito: si el que llama dice «esta es la
-// misma ficha», esa afirmación de identidad pesa más que nuestro parecido de
-// nombres, y respetarla es lo que evita que cada reenvío fabrique una fila
-// nueva. Queda escrito porque es lo único que hace que el veto NO se cumpla, y
-// un agente que lo descubra midiendo va a creer que encontró un bug.
-// El botón «Yo la estoy buscando» sale de la ficha de alguien y trae su nombre
-// puesto: quien llegó por ahí ya afirmó de quién es este reporte. El veto está
-// para adivinar identidad, y acá no hay nada que adivinar — separar a quien
-// acaba de decir «es la misma persona» es peor que no tener el botón.
 test('el botón «Yo la estoy buscando» le gana al veto', async (t) => {
   const app = await createApp(await createSqliteAdapter(':memory:'), nullMatcher);
   const server = await new Promise((r) => {
@@ -241,10 +232,7 @@ test('el botón «Yo la estoy buscando» le gana al veto', async (t) => {
 
 // Cuando el upsert por external_id devuelve el update a su dueño original, la
 // persona que el veto acababa de insertar se queda sin nada. Una persona sin
-// updates no es un registro a medias: es un pase libre, porque el veto no puede
-// contradecir a un historial vacío. Sin esta limpieza, el próximo nombre
-// parecido —de cualquier departamento y cualquier edad— cae ahí, y #150 se
-// reabre por el costado, justo en el camino del agregador.
+// updates no es un registro a medias.
 test('el veto no deja una persona huérfana que después sirva de pase libre', async () => {
   const store = await freshStore();
   const { admitReport } = createReportAdmission({ store, matcher: nullMatcher });
@@ -298,8 +286,7 @@ test('un external_id que ya existe le gana al veto, y el reporte no se duplica',
   assert.equal(segundo.update.id, primero.update.id, 'el reenvío no puede duplicar la ficha');
   assert.equal(String(segundo.person.id), String(primero.person.id), 'el external_id manda sobre el veto');
   // Y entonces `blocked` no puede decir que separó a nadie: el veto se intentó,
-  // pero el upsert lo deshizo, y afirmar lo contrario sería un registro falso
-  // el día que el PR 3 escriba esto en el merge_log.
+  // pero el upsert lo deshizo.
   assert.equal(segundo.blocked, null);
   await store.close();
 });
@@ -325,9 +312,6 @@ test('un reporte web vetado entra igual, y sale como posible duplicado', async (
     assert.equal(res.status, 303, 'ningún veto puede costarle el reporte a una familia');
     return {
       id: Number(res.headers.get('location').match(/^\/person\/(\d+)\?/)[1]),
-      // El hallazgo de duplicado viaja en una cookie de vida corta, no en la
-      // URL: afirma que dos personas buscadas pueden ser una sola, y eso solo
-      // se le dice a quien acaba de reportar. Sin la cookie no hay aviso.
       cookie: (res.headers.getSetCookie() || []).map((c) => c.split(';')[0]).join('; ')
     };
   };

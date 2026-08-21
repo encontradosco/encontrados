@@ -76,16 +76,7 @@ function createStore(adapter) {
       .slice(0, limit);
   }
 
-  // Reuse an existing person when the name confidently matches; otherwise create.
-  //
-  // `signals` solo vetan la fusión por PARECIDO. Un nombre normalizado idéntico
-  // sigue cayendo en la misma persona: es una señal mucho más fuerte, y vetar
-  // ahí partiría a dos familiares reportando a la misma persona.
-  //
-  // `assertedPersonId` es una persona que dijo, con un clic, que este reporte
-  // es de ESA ficha. Contra ella no hay veto: nuestras señales existen para
-  // adivinar la identidad, y acá alguien ya la afirmó.
-  //
+  // Reusar una persona existente cuando el nombre o las señales permiten hacer un match.
   // Ojo: con `externalId`, addUpdate puede devolver el reporte a la persona de
   // la que este veto lo separó — ver el paso 4 de report-admission.
   async function findOrCreatePerson(fullName, signals = {}) {
@@ -94,11 +85,7 @@ function createStore(adapter) {
     const exact = await adapter.exactByNormalized(norm);
     if (exact) return { person: isoRow(exact), created: false };
 
-    // Se recorren TODOS los candidatos por encima del umbral, de mayor a menor
-    // parecido, no solo el mejor: que el más parecido esté vetado no dice nada
-    // del siguiente, y quedarse en el primero abriría un registro nuevo al lado
-    // de una persona con la que sí cuadraba. `blocked` guarda el primer
-    // rechazado — el que se habría fusionado antes de #150.
+    // Se recorren TODOS los candidatos por encima del umbral
     const incoming = {
       department: canonicalDepartment(signals.department),
       age: parseAge(signals.age)
@@ -124,10 +111,8 @@ function createStore(adapter) {
     return { person: isoRow(person), created: true, blocked };
   }
 
-  // `department` y `age` son las señales con las que #150 separa a dos personas
-  // que comparten un nombre parecido. Se guardan canonicalizadas o no se
-  // guardan: un departamento fuera de la lista entra como null, porque un valor
-  // que no compara con nada es indistinguible de no tener el dato.
+  // `department` y `age` son las señales con las que se separa a dos personas
+  // que comparten un nombre parecido.
   //
   // La normalización vive acá y no en cada handler por la misma razón que
   // `normalizeSourceUrl` vive en report-admission: una regla repetida en tres
