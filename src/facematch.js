@@ -115,6 +115,7 @@ async function notifyFaceMatch(store, sub, matchedPerson, similarity, contact, u
   // sale solo.
   const alOperador = async (delivered) => {
     const res = await relayToOperators({
+      store,
       reason:
         'Coincidencia facial con quien dice haber rescatado a esta persona' +
         (unverified ? ' (suscripción SIN verificar)' : ''),
@@ -298,6 +299,7 @@ async function requestRescueConfirmation(store, address, person, { contact, simi
       `[facematch:rescate] ${address} ya tiene una pregunta abierta — no se le pregunta por ${person.full_name}`
     );
     const relayRes = await relayToOperators({
+      store,
       reason: 'Segunda coincidencia para un número que ya tiene una pregunta de rescate abierta',
       channel: 'whatsapp',
       address,

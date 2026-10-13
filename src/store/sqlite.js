@@ -220,6 +220,23 @@ async function createSqliteAdapter(dbPath) {
     CREATE INDEX IF NOT EXISTS idx_status_review_person ON status_review(person_id);
     CREATE INDEX IF NOT EXISTS idx_status_review_created ON status_review(created_at);
     -- ===== COLA DE REVISIÓN DE ESTADO (#190) — fin ========================
+
+    -- ===== AVISOS EN DISCORD — inicio ====================================
+    -- Un id por cada mensaje que la app publicó en el canal privado de
+    -- mantenedores (src/discord.js). Existe para cumplir la retención: esos
+    -- mensajes llevan datos de personas y se borran a los 30 días, y Discord
+    -- solo deja borrar un mensaje si se sabe su id. A propósito NO guarda el
+    -- texto, ni la persona, ni nada que identifique a nadie: el id de un
+    -- mensaje y el del webhook que lo escribió, y cuándo. La fila se borra
+    -- cuando el mensaje se borra.
+    CREATE TABLE IF NOT EXISTS discord_avisos (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      message_id TEXT NOT NULL UNIQUE,
+      webhook_id TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_discord_avisos_created ON discord_avisos(created_at);
+    -- ===== AVISOS EN DISCORD — fin ======================================
   `);
 
   // Older dev databases: add the GPS columns if missing.
@@ -801,6 +818,30 @@ async function createSqliteAdapter(dbPath) {
       db.prepare(
         'INSERT INTO merge_log (person_id, submitted_name, score) VALUES (?, ?, ?)'
       ).run(personId, submittedName, score);
+    },
+    // Avisos publicados en Discord, para borrarlos a los 30 días (src/discord.js).
+    async insertDiscordAviso({ messageId, webhookId }) {
+      db.prepare('INSERT OR IGNORE INTO discord_avisos (message_id, webhook_id) VALUES (?, ?)').run(
+        messageId,
+        webhookId
+      );
+    },
+    async listExpiredDiscordAvisos({ webhookId, before, limit = 100, offset = 0 }) {
+      return db
+        .prepare(
+          `SELECT message_id, webhook_id, created_at FROM discord_avisos
+           WHERE webhook_id = ? AND created_at < ?
+           ORDER BY created_at ASC, id ASC LIMIT ? OFFSET ?`
+        )
+        .all(webhookId, before, limit, offset);
+    },
+    async countExpiredDiscordAvisosOfOtherWebhooks({ webhookId, before }) {
+      return db
+        .prepare('SELECT COUNT(*) AS n FROM discord_avisos WHERE webhook_id <> ? AND created_at < ?')
+        .get(webhookId, before).n;
+    },
+    async deleteDiscordAviso(messageId) {
+      db.prepare('DELETE FROM discord_avisos WHERE message_id = ?').run(messageId);
     },
     // ===== COLA DE REVISIÓN DE ESTADO (#190) — inicio =====================
     // Todos los que están en la cola: las personas cuyo ÚLTIMO estado es

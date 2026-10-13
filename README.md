@@ -40,9 +40,15 @@ reconocimiento facial y el correo quedan apagados, igual que fuera de Docker.
 
 1. Importa el repo en Vercel (framework: **Other**). `vercel.json` enruta todo a la función `api/index.js` (Express completo); `/public` lo sirve el CDN.
 2. Agrega **Vercel Postgres / Neon** al proyecto → define `POSTGRES_URL` (o `DATABASE_URL`). El esquema y los índices `pg_trgm` se crean solos en el primer arranque.
-3. Variables de entorno (ver `.env.example`): `BASE_URL`, `SENDGRID_API_KEY` (remitente fijo: `a@torrenegra.com`), `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_REGION` (Rekognition), y cuando haya credenciales de WhatsApp: `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_VERIFY_TOKEN`. Opcional: `API_KEY`.
+3. Variables de entorno (ver `.env.example`): `BASE_URL`, `SENDGRID_API_KEY` (remitente fijo: `a@torrenegra.com`), `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_REGION` (Rekognition), `DISCORD_AVISOS_WEBHOOK_URL` (avisos al equipo, ver abajo) y `CRON_SECRET` (los cron de `vercel.json`). Opcional: `API_KEY`.
 
-### WhatsApp (Meta Cloud API) — pendiente de credenciales; el canal está implementado pero sin referencias en la interfaz hasta activarlo
+### Avisos al equipo: canal privado de Discord
+
+Los avisos de rescatistas, los avisos retenidos por el modo relevo y el respaldo de `/ideas` y `/bug` se publican en un **canal privado de mantenedores** por un webhook de Discord (`DISCORD_AVISOS_WEBHOOK_URL`). A partir de los **30 días**, un cron diario (`/api/avisos/purge`) intenta borrar cada mensaje; si Discord falla, el borrado se atrasa al día siguiente, y lo que no se puede borrar solo se reporta para borrarlo a mano. Sin esa variable, van por correo a `AVISO_EMAIL`. El detalle está en [`docs/avisos-de-rescatista.md`](docs/avisos-de-rescatista.md).
+
+### WhatsApp (Meta Cloud API) — apagado
+
+La app ya no tiene credenciales de WhatsApp en producción: no contesta mensajes ni manda plantillas, y `POST /webhooks/whatsapp` responde 403. El código sigue en el repo; si alguien de la comunidad quiere reactivar el canal con un número propio, estos son los pasos:
 
 1. En [Meta for Developers](https://developers.facebook.com), crea una app con el producto WhatsApp y toma `WHATSAPP_TOKEN` y `WHATSAPP_PHONE_NUMBER_ID`.
 2. Configura el webhook apuntando al **relevo** que verifica la firma HMAC de Meta, no a este servidor: el relevo reenvía el cuerpo intacto a `https://encontrados.co/webhooks/whatsapp` agregando la cabecera `X-Relay-Secret`. Verify token = `WHATSAPP_VERIFY_TOKEN`, suscrito al campo `messages`.

@@ -4,13 +4,16 @@ Este documento describe **el camino completo de un aviso**, desde que alguien
 llena el formulario hasta que la familia se entera — y, sobre todo, **por qué el
 camino tiene los frenos que tiene**.
 
-Está escrito para un mantenedor que abre el buzón hoy y tiene que decidir qué
-hacer con lo que llegó. No es teoría: los criterios de abajo se aplican a mano.
+Está escrito para un mantenedor que abre el canal de avisos hoy y tiene que
+decidir qué hacer con lo que llegó. No es teoría: los criterios de abajo se
+aplican a mano.
 
-> **Estado, a 11 de agosto de 2026.** Los pasos 1 y 2 están vivos. El paso 3 se
-> manda **uno por uno, a mano**: no hay envío masivo ni respuesta automática.
-> Cada vez que este documento dice "se le escribe", significa *una persona lo
-> escribe*.
+> **Estado, a octubre de 2026.** Los avisos llegan al **canal privado de
+> mantenedores en Discord** (`DISCORD_AVISOS_WEBHOOK_URL`), y se borran solos a
+> los 30 días. Los pasos 1 y 2 están vivos. El paso 3 se manda **uno por uno, a
+> mano**: no hay envío masivo ni respuesta automática, y **la app ya no responde
+> por WhatsApp** (ver §5). Cada vez que este documento dice "se le escribe",
+> significa *una persona lo escribe*.
 
 ---
 
@@ -39,9 +42,31 @@ Al recibirlo, la app hace dos cosas:
    que **nunca se renderiza en una página pública** (`publicUpdate()` en
    `src/privacy.js`) — la página pública no puede anunciar dónde encontrar a una
    persona vulnerable.
-2. **Manda un correo a `AVISO_EMAIL`.** Es "best effort": si el correo falla, el
-   aviso ya está guardado, pero **nadie se entera de que llegó**. Ese buzón es el
-   único disparador en tiempo real que tiene el equipo.
+2. **Lo publica en el canal privado de mantenedores en Discord**, por el webhook
+   de `DISCORD_AVISOS_WEBHOOK_URL`. Si esa variable no está puesta, cae al
+   correo de `AVISO_EMAIL`, como antes — **un aviso va a un solo destino, nunca a
+   los dos**. Es "best effort": si la entrega falla, el aviso ya está guardado,
+   pero **nadie se entera de que llegó** (queda como `fallido` en la bitácora,
+   canal `relevo`). Ese canal es el único disparador en tiempo real que tiene el
+   equipo.
+
+### El canal privado y su retención
+
+- **Lo ven solo quienes tienen el rol de mantenedor.** El mensaje lleva el
+  teléfono de quien avisa y dónde dice que está una persona vulnerable: dar ese
+  rol es dar acceso a esos datos.
+- **A partir de los 30 días, cada mensaje se borra.** La app registra cada
+  mensaje que publica en la tabla `discord_avisos`, que guarda tres campos:
+  `message_id`, `webhook_id` y `created_at`. **No guarda el texto del mensaje
+  ni nada de la persona.** Un cron diario (`/api/avisos/purge`, `vercel.json`)
+  intenta borrar lo que pasó el umbral con la credencial del mismo webhook, sin
+  bot. Los 30 días son el umbral, no una garantía: si Discord falla, el borrado
+  se reintenta al día siguiente y el resultado del cron lo cuenta (`failed`,
+  `pending`).
+- **Si se cambia el webhook**, los mensajes del anterior ya no se pueden borrar
+  solos: la purga los cuenta como `orphans` y hay que borrarlos a mano.
+- Nadie puede mencionar a nadie desde un aviso (`allowed_mentions` vacío): un
+  `@everyone` escrito en el formulario no notifica.
 
 Nada más pasa solo. **La app no le escribe a ninguna familia por un aviso.**
 
@@ -89,7 +114,7 @@ localizada **si la vio o habló con ella**.
 ```mermaid
 flowchart TD
     A["Rescatista llena el formulario<br/>(teléfono + dónde está la persona)"] --> B["La app guarda el aviso en la ficha<br/>(estado missing, contacto no público)"]
-    B --> C["Correo a AVISO_EMAIL"]
+    B --> C["Mensaje al canal privado de Discord<br/>(o correo a AVISO_EMAIL si no está configurado)"]
     C --> D{"Triage<br/>(§4)"}
     D -->|no accionable| E["No se contacta a nadie.<br/>Si vale la pena, se le pregunta a quien avisó<br/>qué quiso decir."]
     D -->|dudoso| F["Se llama primero a quien avisó<br/>para aclarar el dato."]
@@ -123,9 +148,9 @@ desambigua el malentendido más común del formulario:
 Ese mensaje también dice de frente **que nunca pedimos dinero**, y cómo darse de
 baja del canal.
 
-Va por WhatsApp, **desde fuera de la app**: el canal de WhatsApp de encontrados.co
-está implementado pero dormido (ver `WHATSAPP_TOKEN` en `agent.md`), así que hoy
-lo manda un mantenedor desde el número operativo del equipo, uno por uno.
+Lo manda **una persona, desde fuera de la app**, uno por uno. La app ya no
+tiene credenciales de WhatsApp: sin `WHATSAPP_TOKEN` no sale ningún mensaje por
+ese canal, ni pregunta ni respuesta automática (ver `agent.md`).
 
 ### Paso 4 — La respuesta la lee una persona
 
@@ -221,7 +246,9 @@ una familia, y un umbral que se puede leer, probar y discutir es auditable;
 
 | | Estado |
 |---|---|
-| Formulario de aviso y correo a `AVISO_EMAIL` | **Vivo** |
+| Formulario de aviso y mensaje al canal privado de Discord | **Vivo.** Correo a `AVISO_EMAIL` solo si el canal no está configurado |
+| Borrado de los mensajes del canal a los 30 días | **Vivo**, cron diario |
+| Respuesta automática por WhatsApp | **Apagada.** La app no tiene credenciales de WhatsApp |
 | El aviso queda en la ficha sin cambiar el estado a «localizada» | **Vivo** |
 | Triage de los avisos que llegan | **Vivo**, se corre sobre la cola |
 | Mensaje de confirmación al rescatista (paso 3) | **Vivo, pero uno por uno.** Sin envío masivo |
@@ -251,7 +278,7 @@ una familia, y un umbral que se puede leer, probar y discutir es auditable;
 
 ## Para el mantenedor que llegó hasta acá
 
-Si tienes un aviso enfrente **ahora mismo**: léelo contra la tabla de señales de
+Si tienes un aviso enfrente **ahora mismo** en el canal: léelo contra la tabla de señales de
 §4, decide el veredicto, y si es accionable manda la pregunta del paso 3. Lo que
 **no** puedes hacer, con ningún veredicto, es escribirle a la familia — y en la
 mayoría de los casos ni siquiera podrías: su contacto está en el registro de

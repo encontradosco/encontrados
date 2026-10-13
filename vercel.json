@@ -7,6 +7,7 @@
   "crons": [
     { "path": "/api/report/send", "schedule": "0 12 * * *" },
     { "path": "/api/report/send", "schedule": "0 18 * * *" },
-    { "path": "/api/report/send", "schedule": "0 0 * * *" }
+    { "path": "/api/report/send", "schedule": "0 0 * * *" },
+    { "path": "/api/avisos/purge", "schedule": "30 9 * * *" }
   ]
 }
