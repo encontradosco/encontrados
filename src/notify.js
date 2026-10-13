@@ -2,6 +2,7 @@
 // All fire-and-forget with logging — a failed notification must never block a report.
 const env = require('./env');
 const { logContact, resultFromSend } = require('./logbook');
+const { discordWebhookUrl, postAviso } = require('./discord');
 
 const STATUS_LABEL = {
   safe: 'A SALVO',
@@ -55,6 +56,23 @@ function avisoEmail() {
   return (process.env.AVISO_EMAIL || env.AVISO_EMAIL || '').trim();
 }
 
+// A dónde van los avisos al equipo. Si DISCORD_AVISOS_WEBHOOK_URL está puesta,
+// al canal privado de mantenedores en Discord y SOLO ahí; si no, al correo
+// AVISO_EMAIL, como siempre. Que el correo sea el respaldo cuando falta la
+// variable —y no cuando Discord falla— es a propósito: un aviso que sale por
+// dos lados lo atienden dos personas, y el buzón deja de tener dueño el día que
+// el canal entra en vivo. Devuelve null si no hay ningún destino configurado.
+function operatorDestination() {
+  if (discordWebhookUrl()) return { kind: 'discord', label: 'el canal privado de Discord' };
+  const to = avisoEmail();
+  return to ? { kind: 'email', label: to, to } : null;
+}
+
+async function deliverToOperators(store, dest, subject, body) {
+  if (dest.kind === 'discord') return postAviso(store, { subject, body });
+  return sendEmail(dest.to, subject, body);
+}
+
 // Prefijo estable y grepeable, tanto en el buzón como en los logs.
 const RELAY_SUBJECT_PREFIX = '[RETENIDO]';
 const CHANNEL_LABEL = { email: 'correo', whatsapp: 'WhatsApp' };
@@ -67,21 +85,24 @@ const CHANNEL_LABEL = { email: 'correo', whatsapp: 'WhatsApp' };
 // caso sigue abierto y necesita a un humano. La primera línea del cuerpo tiene
 // que decir cuál de los dos casos es — un operador que lee "no se envió" cuando
 // sí se envió va a mandar el mismo aviso dos veces.
-async function relayToOperators({ reason, channel, address, subject, text, person, details = [], delivered = false }) {
-  const to = avisoEmail();
+//
+// `store` es para que, si el aviso sale por Discord, quede registrado el id del
+// mensaje y se pueda borrar a los 30 días. Sin store el aviso sale igual.
+async function relayToOperators({ store, reason, channel, address, subject, text, person, details = [], delivered = false }) {
+  const dest = operatorDestination();
   const ficha = person ? `${env.BASE_URL}/person/${person.id}` : null;
   const trace =
     `motivo="${reason}" canal=${channel} destino=${address} ` +
     `persona=${person ? person.id : '?'} ficha=${ficha || '-'}`;
 
-  if (!to) {
+  if (!dest) {
     // El relevo está activo y no hay a dónde relevar. Caer a envío directo
     // reabriría en silencio justo el riesgo que el relevo existe para cerrar,
     // y encima cuando la configuración ya está rota — así que no sale nada.
     // Este log es la ÚNICA copia que queda del aviso, por eso lleva el texto
     // completo: perderlo es peor que tenerlo en el log del operador.
     console.error(
-      `[notify:relevo] PERDIDO — ${delivered ? 'copia de seguimiento' : 'relevo activo'} y AVISO_EMAIL sin configurar. ${trace}\n${text}`
+      `[notify:relevo] PERDIDO — ${delivered ? 'copia de seguimiento' : 'relevo activo'} y ni DISCORD_AVISOS_WEBHOOK_URL ni AVISO_EMAIL configuradas. ${trace}\n${text}`
     );
     return { ok: false, relayed: false, error: 'AVISO_EMAIL no configurada' };
   }
@@ -131,12 +152,12 @@ async function relayToOperators({ reason, channel, address, subject, text, perso
     .join('\n');
 
   const relaySubject = `${RELAY_SUBJECT_PREFIX} ${reason} — ${person ? person.full_name : 'sin persona'}`;
-  const result = await sendEmail(to, relaySubject, body);
+  const result = await deliverToOperators(store, dest, relaySubject, body);
   if (!result.ok) {
-    console.error(`[notify:relevo] PERDIDO — el relevo a ${to} falló (${result.error || result.status}). ${trace}\n${text}`);
+    console.error(`[notify:relevo] PERDIDO — el relevo a ${dest.label} falló (${result.error || result.status}). ${trace}\n${text}`);
     return { ...result, relayed: false };
   }
-  console.log(`[notify:relevo] retenido y relevado a ${to} — ${trace}`);
+  console.log(`[notify:relevo] retenido y relevado a ${dest.label} — ${trace}`);
   return { ...result, relayed: true };
 }
 
@@ -158,9 +179,12 @@ function logSafe(value) {
 // rescatista (POST /rescate/aviso) y el respaldo de /ideas y /bug cuando
 // GitHub no responde. Antes cada uno reimplementaba el mismo "si hay buzón,
 // mandar; si no, loguear y degradar" con su propia forma.
-async function mailOperators(subject, body) {
-  const to = avisoEmail();
-  if (!to) {
+//
+// El nombre se quedó de cuando el único destino era el correo: hoy manda a
+// donde diga operatorDestination() — Discord si está configurado.
+async function mailOperators(subject, body, { store } = {}) {
+  const dest = operatorDestination();
+  if (!dest) {
     // Este log lleva el asunto y NO el cuerpo, al revés que el de
     // `relayToOperators`. La diferencia es deliberada: allá el texto se vuelca
     // porque el log es la ÚNICA copia que queda del aviso, y ese comentario lo
@@ -171,10 +195,12 @@ async function mailOperators(subject, body) {
     // avisa y el lugar donde dice que está la persona: en zona de desastre ese
     // par es materia de extorsión, no un campo más. El asunto alcanza para
     // saber qué se perdió e ir a buscarlo.
-    console.error(`[notify:operadores] PERDIDO — AVISO_EMAIL sin configurar. asunto="${logSafe(subject)}"`);
+    console.error(
+      `[notify:operadores] PERDIDO — ni DISCORD_AVISOS_WEBHOOK_URL ni AVISO_EMAIL configuradas. asunto="${logSafe(subject)}"`
+    );
     return { ok: false, error: 'AVISO_EMAIL no configurada' };
   }
-  return sendEmail(to, subject, body);
+  return deliverToOperators(store, dest, subject, body);
 }
 
 // Returns { ok, status, error } and logs loudly — email silence is a bug we
@@ -419,6 +445,7 @@ async function notifySubscribers(store, person, update, { skipAddress, skipAddre
       let res;
       if (relay) {
         res = await relayToOperators({
+          store,
           reason: 'Actualización de estado para quien sigue a esta persona',
           channel: s.channel,
           address: s.address,
@@ -469,6 +496,7 @@ module.exports = {
   relayEnabled,
   relayToOperators,
   mailOperators,
+  operatorDestination,
   logSafe,
   avisoEmail,
   rescueConfirmTemplate,

@@ -350,6 +350,26 @@ async function createPostgresAdapter(connectionString) {
     CREATE INDEX IF NOT EXISTS idx_status_review_person ON status_review(person_id);
     CREATE INDEX IF NOT EXISTS idx_status_review_created ON status_review(created_at);
     -- ===== COLA DE REVISIÓN DE ESTADO (#190) — fin ========================
+
+    -- ===== AVISOS EN DISCORD — inicio ====================================
+    -- Un id por cada mensaje que la app publicó en el canal privado de
+    -- mantenedores (src/discord.js). Existe para cumplir la retención: esos
+    -- mensajes llevan datos de personas y se borran a los 30 días, y Discord
+    -- solo deja borrar un mensaje si se sabe su id. A propósito NO guarda el
+    -- texto, ni la persona, ni nada que identifique a nadie: el id de un
+    -- mensaje y el del webhook que lo escribió, y cuándo. La fila se borra
+    -- cuando el mensaje se borra.
+    -- created_at como TEXTO ISO, con el mismo formato que SQLite (ver
+    -- status_review): la comparación con la fecha de corte es de strings en
+    -- los dos motores.
+    CREATE TABLE IF NOT EXISTS discord_avisos (
+      id SERIAL PRIMARY KEY,
+      message_id TEXT NOT NULL UNIQUE,
+      webhook_id TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+    );
+    CREATE INDEX IF NOT EXISTS idx_discord_avisos_created ON discord_avisos(created_at);
+    -- ===== AVISOS EN DISCORD — fin ======================================
   `);
   if (hasTrgm) {
     await pool.query(`
@@ -1056,6 +1076,32 @@ async function createPostgresAdapter(connectionString) {
         'INSERT INTO merge_log (person_id, submitted_name, score) VALUES ($1, $2, $3)',
         [personId, submittedName, score]
       );
+    },
+    // Avisos publicados en Discord, para borrarlos a los 30 días (src/discord.js).
+    async insertDiscordAviso({ messageId, webhookId }) {
+      await pool.query(
+        'INSERT INTO discord_avisos (message_id, webhook_id) VALUES ($1, $2) ON CONFLICT (message_id) DO NOTHING',
+        [messageId, webhookId]
+      );
+    },
+    async listExpiredDiscordAvisos({ webhookId, before, limit = 100 }) {
+      const { rows } = await pool.query(
+        `SELECT message_id, webhook_id, created_at FROM discord_avisos
+         WHERE webhook_id = $1 AND created_at < $2
+         ORDER BY created_at ASC, id ASC LIMIT $3`,
+        [webhookId, before, limit]
+      );
+      return rows;
+    },
+    async countExpiredDiscordAvisosOfOtherWebhooks({ webhookId, before }) {
+      const { rows } = await pool.query(
+        'SELECT COUNT(*)::int AS n FROM discord_avisos WHERE webhook_id <> $1 AND created_at < $2',
+        [webhookId, before]
+      );
+      return rows[0].n;
+    },
+    async deleteDiscordAviso(messageId) {
+      await pool.query('DELETE FROM discord_avisos WHERE message_id = $1', [messageId]);
     },
     // ===== COLA DE REVISIÓN DE ESTADO (#190) — inicio =====================
     // Ver el comentario gemelo en src/store/sqlite.js: la cola son las

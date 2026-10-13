@@ -184,4 +184,56 @@ async function fakePetMatcher() {
   };
 }
 
-module.exports = { fakeSendgrid, fakeGithub, fakeWhatsApp, fakeVercelOAuth, fakePetMatcher };
+// Stand-in del webhook de Discord: responde como Discord con ?wait=true (el
+// mensaje con su id) y deja borrar por id. `failNext(status, body)` hace que
+// SOLO la siguiente petición falle, igual que en fakeGithub.
+async function fakeDiscordWebhook() {
+  const received = [];
+  const failures = [];
+  const live = new Set();
+  let n = 0;
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => (body += c));
+    req.on('end', () => {
+      received.push({ method: req.method, url: req.url, body: body ? JSON.parse(body) : null });
+      const fail = failures.shift();
+      if (fail) {
+        res.writeHead(fail.status, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify(fail.body || { message: 'error' }));
+      }
+      if (req.method === 'POST') {
+        const id = String(900000000000000000n + BigInt(++n));
+        live.add(id);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ id, content: JSON.parse(body).content }));
+      }
+      if (req.method === 'DELETE') {
+        const id = decodeURIComponent(req.url.split('/messages/')[1] || '');
+        if (!live.delete(id)) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ message: 'Unknown Message', code: 10008 }));
+        }
+        return res.writeHead(204).end();
+      }
+      res.writeHead(405).end();
+    });
+  });
+  await new Promise((r) => server.listen(0, r));
+  const url = `http://127.0.0.1:${server.address().port}/api/webhooks/111222333/token-de-prueba`;
+  process.env.DISCORD_AVISOS_WEBHOOK_URL = url;
+  return {
+    url,
+    received,
+    live,
+    failNext(status, body) {
+      failures.push({ status, body });
+    },
+    stop() {
+      server.close();
+      delete process.env.DISCORD_AVISOS_WEBHOOK_URL;
+    }
+  };
+}
+
+module.exports = { fakeSendgrid, fakeGithub, fakeWhatsApp, fakeVercelOAuth, fakePetMatcher, fakeDiscordWebhook };

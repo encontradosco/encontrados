@@ -112,16 +112,26 @@ persona** — ver [`CONTRIBUTING.md`](CONTRIBUTING.md) y [`CLAUDE.md`](CLAUDE.md
   libre y que nada parsea — es lo que se le muestra a un rescatista tras una
   coincidencia. `POST /report` sigue aceptando el campo `contact` a secas.
 - `/ideas` y `/bug`: los dos enlaces del pie. Lo que se envía se abre como issue
-  en GitHub (`GITHUB_TOKEN`); sin token cae a correo a `AVISO_EMAIL` para
+  en GitHub (`GITHUB_TOKEN`); sin token cae al destino del equipo (abajo) para
   abrirlo a mano — nunca se pierde. Los formularios avisan que **es público**
   y mandan a `/report` a quien en realidad busca a alguien: un issue queda
   indexado para siempre y ahí no puede terminar el teléfono de una familia.
 - Producción: Vercel (función serverless única + Postgres/Neon). Dev/tests: SQLite.
 - Remitente de correo fijo: `a@torrenegra.com` (SendGrid).
 - Suscripciones por correo requieren verificación; toda alerta lleva enlace de baja.
+- **El destino de los avisos al equipo** (`operatorDestination()` en
+  `src/notify.js`): el aviso de rescatista, los avisos retenidos por el relevo y
+  el respaldo de `/ideas` y `/bug` van a **un solo** destino. Con
+  `DISCORD_AVISOS_WEBHOOK_URL`, al canal privado de mantenedores en Discord
+  (`src/discord.js`); sin ella, a `AVISO_EMAIL`. Nunca a los dos, y si Discord
+  falla no cae al correo: un aviso con dos copias lo atienden dos personas.
+  Cada mensaje en Discord se publica con `?wait=true` para recibir su id, que
+  se guarda en `discord_avisos` (solo ids, ni texto ni persona), y el cron
+  diario `/api/avisos/purge` lo borra a los 30 días con el mismo webhook. Un
+  mensaje de más de 2000 caracteres se parte, y cada parte se registra.
 - **Modo relevo (`NOTIFY_MODE`, por omisión `relay`).** Ningún aviso a un
-  tercero sale solo: se manda a `AVISO_EMAIL` para que una persona verifique al
-  destinatario y lo enrute. La razón es dura: entregarle el contacto de una
+  tercero sale solo: se manda al destino del equipo (arriba) para que una
+  persona verifique al destinatario y lo enrute. La razón es dura: entregarle el contacto de una
   familia a un desconocido que dice haber rescatado a alguien es un vector de
   extorsión, y el aviso de coincidencia facial lleva ese contacto en el cuerpo.
   Se releva `notifySubscribers()` (`src/notify.js`, correo y WhatsApp) y
@@ -229,7 +239,10 @@ hay framework de frontend ni paso de build: lo que se lee es lo que corre.
   no puede entrar. `DELETE /api/contact-log/:ref` lo retira, y solo puede
   tocar filas `source = 'operador'`. Detalle:
   [`docs/contactos-fuera-de-la-app.md`](docs/contactos-fuera-de-la-app.md).
-- `src/routes/webhooks.js` — WhatsApp (Meta Cloud API), dormido. El `GET` es el
+- `src/routes/webhooks.js` — WhatsApp (Meta Cloud API), apagado: producción ya
+  no tiene `WHATSAPP_TOKEN` ni `WHATSAPP_RELAY_SECRET`, así que el `POST`
+  responde 403 y la app no le contesta a nadie (`test/discord-avisos.test.js`
+  lo fija). El `GET` es el
   handshake y es una lectura; el `POST` escribe en la base y exige la
   credencial del relevo (`WHATSAPP_RELAY_SECRET`, cabecera `X-Relay-Secret`).
 - `src/adminAuth.js` + `src/routes/admin.js` — "Sign in with Vercel" para
@@ -415,15 +428,17 @@ presencia y huella, nunca el valor).
 | `API_KEY` | Los `POST` del API quedan **abiertos** y `DELETE /api/people/:id` responde 503. Las lecturas de información de personas son públicas siempre, con o sin llave; la excepción es `GET /api/match-stats`, que es operativa y dispara búsquedas en Rekognition, así que pide llave. |
 | `SENDGRID_API_KEY` | No sale ningún correo: ni verificación de suscripción, ni alertas, ni avisos. Se le hace `trim()` porque un salto de línea pegado sin querer devuelve 401. |
 | `EMAIL_FROM` | `a@torrenegra.com`. Tiene que ser un remitente verificado en SendGrid o SendGrid responde 403. |
-| `AVISO_EMAIL` | El aviso del rescatista no se manda. Falla en silencio: quien reportó ve su página de éxito igual. Y con `NOTIFY_MODE=relay` (el modo por omisión) tampoco sale ningún aviso a terceros: quedan en el log como `[notify:relevo] PERDIDO`. |
-| `NOTIFY_MODE` | `relay`. Los avisos a terceros se retienen y se relevan a `AVISO_EMAIL`; `direct` los manda derecho al destinatario. Cualquier otro valor cae a `relay`: el interruptor falla cerrado. |
-| `GITHUB_TOKEN` | `/ideas` y `/bug` siguen funcionando pero caen a correo a `AVISO_EMAIL`. El síntoma es un tracker vacío, que se parece mucho a que nadie escribió. |
+| `DISCORD_AVISOS_WEBHOOK_URL` | Los avisos al equipo van a `AVISO_EMAIL`, como antes. Con ella, van **solo** al canal privado de Discord y se borran a los 30 días (necesita `CRON_SECRET` para el cron de borrado). Es una credencial de escritura que no expira: nunca en un log, un issue ni un mensaje. |
+| `CRON_SECRET` | Los cron de Vercel (`/api/report/send`, `/api/avisos/purge`) responden 401: fallan cerrados. Vercel la manda sola en cada cron si está definida. |
+| `AVISO_EMAIL` | Solo importa si `DISCORD_AVISOS_WEBHOOK_URL` no está. Sin ninguna de las dos, el aviso del rescatista no se manda. Falla en silencio: quien reportó ve su página de éxito igual. Y con `NOTIFY_MODE=relay` (el modo por omisión) tampoco sale ningún aviso a terceros: quedan en el log como `[notify:relevo] PERDIDO`. |
+| `NOTIFY_MODE` | `relay`. Los avisos a terceros se retienen y se relevan al destino del equipo (Discord o `AVISO_EMAIL`); `direct` los manda derecho al destinatario. Cualquier otro valor cae a `relay`: el interruptor falla cerrado. |
+| `GITHUB_TOKEN` | `/ideas` y `/bug` siguen funcionando pero caen al destino del equipo (Discord o `AVISO_EMAIL`). El síntoma es un tracker vacío, que se parece mucho a que nadie escribió. |
 | `GITHUB_REPO` | `encontradosco/encontrados`. |
 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | Sin reconocimiento facial: las fotos se guardan pero no se indexan ni coinciden. Las miniaturas igual se generan, centradas. `POST /api/reindex` las recoge después. |
 | `AWS_REGION` | `us-east-1`. |
 | `FACE_COLLECTION_ID` | `aqui-faces` — el nombre anterior al cambio de marca, a propósito. **No lo renombres**: apuntaría a una colección nueva y vacía y rompería el matching de todos los que ya están indexados. |
 | `FACE_MATCH_THRESHOLD` | 90. |
-| `WHATSAPP_TOKEN` / `WHATSAPP_PHONE_NUMBER_ID` | El canal queda dormido (que es su estado actual). |
+| `WHATSAPP_TOKEN` / `WHATSAPP_PHONE_NUMBER_ID` | No sale ningún mensaje por WhatsApp: ni respuestas automáticas ni plantillas (`sendWhatsApp` devuelve "no configurado" sin llamar a Meta). Es el estado de producción desde octubre de 2026. `WHATSAPP_TEMPLATE_*` no hacen nada sin ellas. |
 | `WHATSAPP_VERIFY_TOKEN` | `encontrados-verify`. Es el handshake del webhook de Meta. |
 | `WHATSAPP_RELAY_SECRET` | `POST /webhooks/whatsapp` responde **403 a todo**. Es la única variable que al faltar cierra en vez de abrir: ese POST escribe en la base, y su único cliente legítimo es el relevo que verifica la firma de Meta y reenvía. El `GET` del handshake no la usa. Se genera con `openssl rand -hex 32`. |
 | `VERCEL_APP_CLIENT_ID` / `VERCEL_APP_CLIENT_SECRET` | `/admin/login/start` responde **503**: no arranca un login de "Sign in with Vercel" a medias. Ver `docs/admin-auth-setup.md` para crear la App en el dashboard. |
@@ -447,8 +462,8 @@ alguien, sí:
 - `GET /api/diag` — **sin llave.** Configuración y autodiagnóstico en vivo:
   motor de base de datos y si responde, conteos, estado del matcher, fotos
   pendientes de indexar, presencia de cada credencial y el bloque
-  `notifications` (modo de entrega, si hay buzón de relevo, y la combinación
-  fatal `relay_without_mailbox`). Nunca muestra un secreto: de la llave de
+  `notifications` (modo de entrega, a dónde van los avisos al equipo
+  —`operator_destination`—, y la combinación fatal `relay_without_mailbox`). Nunca muestra un secreto: de la llave de
   SendGrid enseña largo y prefijo, y del buzón solo si está puesto. Es lo
   primero que hay que mirar cuando algo "no está pasando" en producción.
 - `GET /api/diag/sendgrid?email=…` — **sin llave.** Le pregunta a SendGrid por
@@ -456,6 +471,10 @@ alguien, sí:
   del dominio. Un 202 al enviar solo significa "aceptado"; acá están las
   razones por las que aun así el correo no llegó.
 - `GET /health` — un `{ ok: true }` para el monitoreo.
+- `ALL /api/avisos/purge` — **con llave o `CRON_SECRET`**. Borra del canal
+  privado de Discord los avisos con más de 30 días. Lo corre el cron de Vercel
+  una vez al día; correrlo a mano no adelanta nada que no haya vencido. Devuelve
+  conteos (`deleted`, `alreadyGone`, `failed`, `orphans`), nunca contenido.
 - `POST /api/diag/test-email` — **con llave.** Manda un correo real y traduce
   la respuesta de SendGrid a una frase accionable. Gasta cuota, así que no es
   un `GET`.
