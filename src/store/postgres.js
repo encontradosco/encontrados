@@ -1084,12 +1084,12 @@ async function createPostgresAdapter(connectionString) {
         [messageId, webhookId]
       );
     },
-    async listExpiredDiscordAvisos({ webhookId, before, limit = 100 }) {
+    async listExpiredDiscordAvisos({ webhookId, before, limit = 100, offset = 0 }) {
       const { rows } = await pool.query(
         `SELECT message_id, webhook_id, created_at FROM discord_avisos
          WHERE webhook_id = $1 AND created_at < $2
-         ORDER BY created_at ASC, id ASC LIMIT $3`,
-        [webhookId, before, limit]
+         ORDER BY created_at ASC, id ASC LIMIT $3 OFFSET $4`,
+        [webhookId, before, limit, offset]
       );
       return rows;
     },

@@ -195,65 +195,89 @@ async function postAviso(store, { subject, body }) {
 // cron de Vercel una vez al día. Solo toca mensajes del webhook ACTUAL — los de
 // un webhook anterior no los puede borrar, y se cuentan aparte para que alguien
 // los borre a mano.
-async function purgeExpiredAvisos(store, { now = new Date(), limit = 100 } = {}) {
+//
+// Trabaja por lotes de `limit` hasta vaciar lo vencido o agotar `budgetMs`
+// (la función tiene 120 s en Vercel). Si se acaba el presupuesto con trabajo
+// pendiente, el resultado lo dice (`pending: true`, `ok: false`) y el cron del
+// día siguiente sigue desde donde quedó: nunca se presenta un lote como una
+// purga completa.
+async function purgeExpiredAvisos(store, { now = new Date(), limit = 100, budgetMs = 60000 } = {}) {
   const url = discordWebhookUrl();
   if (!url) return { ok: true, skipped: 'DISCORD_AVISOS_WEBHOOK_URL no configurada', deleted: 0 };
   const webhookId = webhookIdOf(url);
   if (!webhookId) return { ok: false, error: 'DISCORD_AVISOS_WEBHOOK_URL no tiene forma de webhook de Discord' };
 
   const before = new Date(now.getTime() - RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
-  const rows = await store.listExpiredDiscordAvisos({ webhookId, before, limit });
   const orphans = await store.countExpiredDiscordAvisosOfOtherWebhooks({ webhookId, before });
+  const startedAt = Date.now();
 
+  let candidates = 0;
   let deleted = 0;
   let alreadyGone = 0;
   let failed = 0;
   let stoppedBy = null;
-  for (const row of rows) {
-    const r = await discordFetch(withPath(url, `/messages/${encodeURIComponent(row.message_id)}`), {
-      method: 'DELETE'
-    });
-    if (r.ok) {
-      deleted++;
-      await store.deleteDiscordAviso(row.message_id);
-      continue;
+  let pending = false;
+  // Los que fallaron se quedan en la tabla y, por orden, al principio de la
+  // lista: `offset: failed` los salta para que el siguiente lote no los vuelva
+  // a pedir.
+  batches: for (;;) {
+    if (Date.now() - startedAt >= budgetMs) {
+      pending = (await store.listExpiredDiscordAvisos({ webhookId, before, limit: 1, offset: failed })).length > 0;
+      break;
     }
-    let code = null;
-    if (r.res) {
-      try {
-        code = (await r.res.json()).code;
-      } catch {
-        /* sin cuerpo */
+    const rows = await store.listExpiredDiscordAvisos({ webhookId, before, limit, offset: failed });
+    if (!rows.length) break;
+    candidates += rows.length;
+
+    for (const row of rows) {
+      const r = await discordFetch(withPath(url, `/messages/${encodeURIComponent(row.message_id)}`), {
+        method: 'DELETE'
+      });
+      if (r.ok) {
+        deleted++;
+        await store.deleteDiscordAviso(row.message_id);
+        continue;
       }
+      let code = null;
+      if (r.res) {
+        try {
+          code = (await r.res.json()).code;
+        } catch {
+          /* sin cuerpo */
+        }
+      }
+      if (r.status === 404 && code === UNKNOWN_MESSAGE) {
+        // Ya lo borró alguien a mano: la promesa se cumplió igual.
+        alreadyGone++;
+        await store.deleteDiscordAviso(row.message_id);
+        continue;
+      }
+      if (r.status === 404 && code === UNKNOWN_WEBHOOK) {
+        // El webhook ya no existe: ningún borrado más va a funcionar. Se
+        // detiene sin soltar las filas — siguen siendo mensajes por borrar.
+        stoppedBy = 'el webhook ya no existe';
+        break batches;
+      }
+      if (r.status === 429) {
+        stoppedBy = 'rate limit de Discord';
+        break batches;
+      }
+      failed++;
+      console.error(`[discord:avisos] no se pudo borrar el mensaje ${row.message_id} (HTTP ${r.status}); se reintenta mañana.`);
     }
-    if (r.status === 404 && code === UNKNOWN_MESSAGE) {
-      // Ya lo borró alguien a mano: la promesa se cumplió igual.
-      alreadyGone++;
-      await store.deleteDiscordAviso(row.message_id);
-      continue;
-    }
-    if (r.status === 404 && code === UNKNOWN_WEBHOOK) {
-      // El webhook ya no existe: ningún borrado más va a funcionar. Se
-      // detiene sin soltar las filas — siguen siendo mensajes por borrar.
-      stoppedBy = 'el webhook ya no existe';
-      break;
-    }
-    if (r.status === 429) {
-      stoppedBy = 'rate limit de Discord';
-      break;
-    }
-    failed++;
-    console.error(`[discord:avisos] no se pudo borrar el mensaje ${row.message_id} (HTTP ${r.status}); se reintenta mañana.`);
+
+    if (rows.length < limit) break;
   }
 
   const result = {
-    ok: !stoppedBy && failed === 0,
+    ok: !stoppedBy && !pending && failed === 0,
     retentionDays: RETENTION_DAYS,
-    candidates: rows.length,
+    candidates,
     deleted,
     alreadyGone,
     failed,
     orphans,
+    pending,
     ...(stoppedBy ? { stoppedBy } : {})
   };
   if (orphans > 0) {

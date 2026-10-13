@@ -55,10 +55,14 @@ Al recibirlo, la app hace dos cosas:
 - **Lo ven solo quienes tienen el rol de mantenedor.** El mensaje lleva el
   teléfono de quien avisa y dónde dice que está una persona vulnerable: dar ese
   rol es dar acceso a esos datos.
-- **Cada mensaje se borra a los 30 días.** La app guarda el id de cada mensaje
-  que publica (tabla `discord_avisos`: el id y nada más) y un cron diario
-  (`/api/avisos/purge`, `vercel.json`) lo borra con la credencial del mismo
-  webhook. No hace falta un bot.
+- **A partir de los 30 días, cada mensaje se borra.** La app registra cada
+  mensaje que publica en la tabla `discord_avisos`, que guarda tres campos:
+  `message_id`, `webhook_id` y `created_at`. **No guarda el texto del mensaje
+  ni nada de la persona.** Un cron diario (`/api/avisos/purge`, `vercel.json`)
+  intenta borrar lo que pasó el umbral con la credencial del mismo webhook, sin
+  bot. Los 30 días son el umbral, no una garantía: si Discord falla, el borrado
+  se reintenta al día siguiente y el resultado del cron lo cuenta (`failed`,
+  `pending`).
 - **Si se cambia el webhook**, los mensajes del anterior ya no se pueden borrar
   solos: la purga los cuenta como `orphans` y hay que borrarlos a mano.
 - Nadie puede mencionar a nadie desde un aviso (`allowed_mentions` vacío): un

@@ -44,7 +44,7 @@ reconocimiento facial y el correo quedan apagados, igual que fuera de Docker.
 
 ### Avisos al equipo: canal privado de Discord
 
-Los avisos de rescatistas, los avisos retenidos por el modo relevo y el respaldo de `/ideas` y `/bug` se publican en un **canal privado de mantenedores** por un webhook de Discord (`DISCORD_AVISOS_WEBHOOK_URL`). Cada mensaje se borra solo a los **30 días** (cron `/api/avisos/purge`). Sin esa variable, van por correo a `AVISO_EMAIL`. El detalle está en [`docs/avisos-de-rescatista.md`](docs/avisos-de-rescatista.md).
+Los avisos de rescatistas, los avisos retenidos por el modo relevo y el respaldo de `/ideas` y `/bug` se publican en un **canal privado de mantenedores** por un webhook de Discord (`DISCORD_AVISOS_WEBHOOK_URL`). A partir de los **30 días**, un cron diario (`/api/avisos/purge`) intenta borrar cada mensaje; si Discord falla, el borrado se atrasa al día siguiente, y lo que no se puede borrar solo se reporta para borrarlo a mano. Sin esa variable, van por correo a `AVISO_EMAIL`. El detalle está en [`docs/avisos-de-rescatista.md`](docs/avisos-de-rescatista.md).
 
 ### WhatsApp (Meta Cloud API) — apagado
 

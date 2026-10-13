@@ -826,14 +826,14 @@ async function createSqliteAdapter(dbPath) {
         webhookId
       );
     },
-    async listExpiredDiscordAvisos({ webhookId, before, limit = 100 }) {
+    async listExpiredDiscordAvisos({ webhookId, before, limit = 100, offset = 0 }) {
       return db
         .prepare(
           `SELECT message_id, webhook_id, created_at FROM discord_avisos
            WHERE webhook_id = ? AND created_at < ?
-           ORDER BY created_at ASC, id ASC LIMIT ?`
+           ORDER BY created_at ASC, id ASC LIMIT ? OFFSET ?`
         )
-        .all(webhookId, before, limit);
+        .all(webhookId, before, limit, offset);
     },
     async countExpiredDiscordAvisosOfOtherWebhooks({ webhookId, before }) {
       return db

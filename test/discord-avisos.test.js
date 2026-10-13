@@ -225,6 +225,35 @@ test(`la purga borra a los ${RETENTION_DAYS} días, y solo entonces`, async (t) 
   assert.equal(third.candidates, 0);
 });
 
+test('la purga sigue lote tras lote, y si se le acaba el tiempo lo dice', async (t) => {
+  const discord = await fakeDiscordWebhook();
+  t.after(() => discord.stop());
+  const store = await memoryStore();
+  for (let i = 0; i < 7; i++) {
+    await relayToOperators({ store, reason: 'r', channel: 'email', address: 'a@ejemplo.com', subject: 's', text: 't', person: null });
+  }
+  const later = new Date(Date.now() + (RETENTION_DAYS + 1) * DAY);
+
+  // Sin presupuesto: no se presenta como purga completa.
+  const none = await purgeExpiredAvisos(store, { now: later, limit: 3, budgetMs: 0 });
+  assert.equal(none.pending, true);
+  assert.equal(none.ok, false);
+
+  // Un fallo en el primer lote no frena los siguientes ni se vuelve a pedir.
+  discord.failNext(500);
+  const res = await purgeExpiredAvisos(store, { now: later, limit: 3 });
+  assert.equal(res.candidates, 7, 'más allá del primer lote');
+  assert.equal(res.deleted, 6);
+  assert.equal(res.failed, 1);
+  assert.equal(res.pending, false);
+  assert.equal(discord.received.filter((r) => r.method === 'DELETE').length, 7, 'el que falló no se reintenta en la misma corrida');
+
+  const next = await purgeExpiredAvisos(store, { now: later, limit: 3 });
+  assert.equal(next.deleted, 1);
+  assert.equal(next.ok, true);
+  assert.equal(discord.live.size, 0);
+});
+
 test('la purga se detiene si el webhook ya no existe, sin soltar lo pendiente', async (t) => {
   const discord = await fakeDiscordWebhook();
   t.after(() => discord.stop());

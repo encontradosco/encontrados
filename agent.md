@@ -30,8 +30,10 @@ persona** — ver [`CONTRIBUTING.md`](CONTRIBUTING.md) y [`CLAUDE.md`](CLAUDE.md
   - El contacto de quien reporta solo se muestra a un rescatista tras una
     coincidencia facial; nunca en páginas públicas.
 - Toda la interfaz y los mensajes al usuario son **en español**.
-- Canales activos: web, API REST y **WhatsApp** (activo desde el 12-ago-2026;
-  antes estaba implementado pero dormido y la interfaz no podía nombrarlo).
+- Canales activos: web y API REST. **WhatsApp** sigue implementado (estuvo
+  activo del 12-ago-2026 a octubre de 2026), pero está **apagado en
+  producción**: sin credenciales, no manda ni contesta nada y su `POST`
+  responde 403.
   (Telegram fue retirado.)
 - WhatsApp — la regla que manda sobre todas las demás en ese canal:
   **por WhatsApp NUNCA sale el contacto de una familia.** Ni en texto libre
@@ -127,7 +129,10 @@ persona** — ver [`CONTRIBUTING.md`](CONTRIBUTING.md) y [`CLAUDE.md`](CLAUDE.md
   falla no cae al correo: un aviso con dos copias lo atienden dos personas.
   Cada mensaje en Discord se publica con `?wait=true` para recibir su id, que
   se guarda en `discord_avisos` (solo ids, ni texto ni persona), y el cron
-  diario `/api/avisos/purge` lo borra a los 30 días con el mismo webhook. Un
+  diario `/api/avisos/purge` intenta borrarlo a partir de los 30 días con el
+  mismo webhook. Los 30 días son el umbral, no una garantía: un fallo de
+  Discord lo atrasa al día siguiente (`failed`), un presupuesto agotado deja
+  `pending: true`, y los de un webhook anterior (`orphans`) se borran a mano. Un
   mensaje de más de 2000 caracteres se parte, y cada parte se registra.
 - **Modo relevo (`NOTIFY_MODE`, por omisión `relay`).** Ningún aviso a un
   tercero sale solo: se manda al destino del equipo (arriba) para que una
