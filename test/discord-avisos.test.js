@@ -353,3 +353,93 @@ test('sin WHATSAPP_TOKEN la app no le contesta a nadie por WhatsApp', async (t) 
   assert.equal((await inbound('AYUDA')).status, 403);
   assert.equal(wa.received.length, 0);
 });
+
+// AVISO_EMAIL deja de ser obligatoria: con el canal de Discord puesto, el
+// correo se puede retirar de producción sin que el formulario lo note.
+test('con Discord y SIN AVISO_EMAIL el formulario de rescate funciona y el aviso llega al canal', async (t) => {
+  const discord = await fakeDiscordWebhook();
+  const sg = await fakeSendgrid();
+  delete process.env.AVISO_EMAIL;
+  const { server, base, store } = await startApp();
+  t.after(() => {
+    discord.stop();
+    sg.stop();
+    server.close();
+  });
+
+  const { person } = await store.findOrCreatePerson('Persona Prueba Sin Correo');
+  const res = await fetch(`${base}/rescate/aviso`, {
+    method: 'POST',
+    body: new URLSearchParams({ person_id: String(person.id), phone: '300 000 0005', location: 'Albergue de prueba' })
+  });
+  assert.equal(res.status, 200);
+  assert.match(await res.text(), /Aviso enviado/);
+  assert.equal(posts(discord).length, 1, 'el aviso llega al canal aunque no haya buzón');
+  assert.equal(sg.received.length, 0);
+  const relevo = (await store.contactLogCounts()).find((r) => r.channel === 'relevo');
+  assert.equal(relevo.result, 'enviado');
+});
+
+// Sin ningún destino el aviso no sale a ningún lado, pero quien avisa no se
+// entera de nuestro problema: el aviso ya quedó en la ficha y la bitácora dice
+// que falló, con un motivo que nombra las dos variables.
+test('sin Discord ni AVISO_EMAIL el formulario no se rompe y el aviso queda en la ficha', async (t) => {
+  delete process.env.DISCORD_AVISOS_WEBHOOK_URL;
+  delete process.env.AVISO_EMAIL;
+  const sg = await fakeSendgrid();
+  const { server, base, store } = await startApp();
+  t.after(() => {
+    sg.stop();
+    server.close();
+  });
+
+  const { person } = await store.findOrCreatePerson('Persona Prueba Sin Destino');
+  const res = await fetch(`${base}/rescate/aviso`, {
+    method: 'POST',
+    body: new URLSearchParams({ person_id: String(person.id), phone: '300 000 0006', location: 'Hospital de prueba' })
+  });
+  assert.equal(res.status, 200);
+  assert.match(await res.text(), /Aviso enviado/);
+  assert.equal(sg.received.length, 0);
+  const updates = await store.getUpdates(person.id);
+  assert.ok(
+    updates.some((u) => u.source === 'rescate'),
+    'el aviso vive en la ficha aunque no haya a quién avisarle'
+  );
+  const relevo = (await store.contactLogCounts()).find((r) => r.channel === 'relevo');
+  assert.equal(relevo.result, 'fallido', 'nunca se finge que salió algo que no salió');
+
+  const { mailOperators } = require('../src/notify');
+  const direct = await mailOperators('Asunto de prueba', 'cuerpo de prueba');
+  assert.equal(direct.ok, false);
+  assert.match(direct.error, /DISCORD_AVISOS_WEBHOOK_URL/);
+  assert.match(direct.error, /AVISO_EMAIL/);
+});
+
+test('un aviso partido que sale a medias se reporta como parcial, no como "no salió nada"', async (t) => {
+  const discord = await fakeDiscordWebhook();
+  t.after(() => discord.stop());
+  const store = await memoryStore();
+
+  discord.passNext();
+  discord.failNext(500);
+  const longText = Array.from({ length: 80 }, (_, i) => `Línea de prueba número ${i} con algo de relleno para alargarla.`).join('\n');
+  const { postAviso } = require('../src/discord');
+  const result = await postAviso(store, { subject: 'Asunto de prueba', body: longText });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.partial, true);
+  assert.equal(result.messageIds.length, 1, 'la parte que sí salió se conoce por su id');
+  assert.match(result.error, /^parcial: 1 de \d+ partes publicadas/);
+  const rows = await store.listExpiredDiscordAvisos({
+    webhookId: '111222333',
+    before: new Date(Date.now() + DAY).toISOString()
+  });
+  assert.equal(rows.length, 1, 'la parte publicada queda registrada para su borrado a los 30 días');
+
+  // Y si falla desde la primera parte, no es parcial.
+  discord.failNext(500);
+  const none = await postAviso(store, { subject: 'Asunto de prueba', body: 'corto' });
+  assert.equal(none.ok, false);
+  assert.equal(none.partial, false);
+});

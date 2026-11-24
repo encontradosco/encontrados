@@ -9,8 +9,8 @@ decidir qué hacer con lo que llegó. No es teoría: los criterios de abajo se
 aplican a mano.
 
 > **Estado, a octubre de 2026.** Los avisos llegan al **canal privado de
-> mantenedores en Discord** (`DISCORD_AVISOS_WEBHOOK_URL`), y se borran solos a
-> los 30 días. Los pasos 1 y 2 están vivos. El paso 3 se manda **uno por uno, a
+> mantenedores en Discord** (`DISCORD_AVISOS_WEBHOOK_URL`), y un cron intenta
+> borrarlos a partir de los 30 días. Los pasos 1 y 2 están vivos. El paso 3 se manda **uno por uno, a
 > mano**: no hay envío masivo ni respuesta automática, y **la app ya no responde
 > por WhatsApp** (ver §5). Cada vez que este documento dice "se le escribe",
 > significa *una persona lo escribe*.
@@ -48,7 +48,12 @@ Al recibirlo, la app hace dos cosas:
    los dos**. Es "best effort": si la entrega falla, el aviso ya está guardado,
    pero **nadie se entera de que llegó** (queda como `fallido` en la bitácora,
    canal `relevo`). Ese canal es el único disparador en tiempo real que tiene el
-   equipo.
+   equipo. Sin ninguna de las dos variables el formulario sigue funcionando:
+   quien avisa ve su página de éxito y el aviso queda en la ficha, pero no le
+   llega a nadie.
+   Un aviso largo se parte en varios mensajes. Si sale la primera parte y falla
+   una siguiente, el log dice **`PARCIAL`** y cuántas partes llegaron: en el
+   canal hay un aviso incompleto, y hay que completarlo desde la ficha.
 
 ### El canal privado y su retención
 

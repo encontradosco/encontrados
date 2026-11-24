@@ -68,6 +68,11 @@ function operatorDestination() {
   return to ? { kind: 'email', label: to, to } : null;
 }
 
+// Lo que queda en contact_log y en los logs cuando no hay a dónde mandar un
+// aviso. Nombra las dos variables: desde que existe el canal de Discord, que
+// falte el correo ya no significa que falte el destino.
+const NO_DESTINATION = 'sin destino para avisos: ni DISCORD_AVISOS_WEBHOOK_URL ni AVISO_EMAIL configuradas';
+
 async function deliverToOperators(store, dest, subject, body) {
   if (dest.kind === 'discord') return postAviso(store, { subject, body });
   return sendEmail(dest.to, subject, body);
@@ -104,7 +109,7 @@ async function relayToOperators({ store, reason, channel, address, subject, text
     console.error(
       `[notify:relevo] PERDIDO — ${delivered ? 'copia de seguimiento' : 'relevo activo'} y ni DISCORD_AVISOS_WEBHOOK_URL ni AVISO_EMAIL configuradas. ${trace}\n${text}`
     );
-    return { ok: false, relayed: false, error: 'AVISO_EMAIL no configurada' };
+    return { ok: false, relayed: false, error: NO_DESTINATION };
   }
 
   const body = [
@@ -198,7 +203,7 @@ async function mailOperators(subject, body, { store } = {}) {
     console.error(
       `[notify:operadores] PERDIDO — ni DISCORD_AVISOS_WEBHOOK_URL ni AVISO_EMAIL configuradas. asunto="${logSafe(subject)}"`
     );
-    return { ok: false, error: 'AVISO_EMAIL no configurada' };
+    return { ok: false, error: NO_DESTINATION };
   }
   return deliverToOperators(store, dest, subject, body);
 }

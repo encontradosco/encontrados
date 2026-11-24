@@ -229,6 +229,11 @@ async function fakeDiscordWebhook() {
     failNext(status, body) {
       failures.push({ status, body });
     },
+    // Deja pasar la siguiente petición antes de la próxima falla en cola:
+    // así se prueba un aviso partido cuya parte 1 sale y la 2 no.
+    passNext() {
+      failures.push(null);
+    },
     stop() {
       server.close();
       delete process.env.DISCORD_AVISOS_WEBHOOK_URL;

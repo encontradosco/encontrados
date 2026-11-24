@@ -169,10 +169,22 @@ async function postAviso(store, { subject, body }) {
     });
     if (!r.ok) {
       const detail = r.res ? (await r.res.text().catch(() => '')).slice(0, 300) : r.error;
+      // Si ya salió alguna parte, el canal tiene un aviso A MEDIAS. No es lo
+      // mismo que "no salió nada": quien opere tiene que saber que hay un
+      // mensaje incompleto en el canal, y cuál es la última parte que llegó.
+      const partial = messageIds.length > 0;
       console.error(
-        `[discord:avisos] FALLÓ ${r.status} al publicar la parte ${i + 1}/${chunks.length} en el webhook de Discord: ${detail}`
+        `[discord:avisos] ${partial ? 'PARCIAL' : 'FALLÓ'} ${r.status} al publicar la parte ${i + 1}/${chunks.length} ` +
+          `en el webhook de Discord${partial ? ` (en el canal quedaron ${messageIds.length} de ${chunks.length} partes)` : ''}: ${detail}`
       );
-      return { ok: false, status: r.status, error: detail || `HTTP ${r.status}`, messageIds };
+      const error = detail || `HTTP ${r.status}`;
+      return {
+        ok: false,
+        partial,
+        status: r.status,
+        error: partial ? `parcial: ${messageIds.length} de ${chunks.length} partes publicadas — ${error}` : error,
+        messageIds
+      };
     }
     let message = null;
     try {
