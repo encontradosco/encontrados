@@ -4,7 +4,8 @@ const {
   sendVerificationEmail,
   notifyMode,
   relayEnabled,
-  avisoEmail
+  avisoEmail,
+  operatorDestination
 } = require('../notify');
 const { STATUSES } = require('../people');
 const {
@@ -19,6 +20,7 @@ const { backfillUnindexedPetPhotos } = require('../petmatch');
 const { publicUpdate } = require('../privacy');
 const gh = require('../github');
 const { sendReport } = require('../report');
+const { purgeExpiredAvisos, discordWebhookUrl } = require('../discord');
 const { createReportAdmission } = require('../report-admission');
 
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
@@ -440,6 +442,20 @@ function apiRoutes(store, matcher, petStore, petMatcher) {
     })
   );
 
+  // ALL /api/avisos/purge — borra del canal privado de Discord los avisos al
+  // equipo con más de 30 días (ver src/discord.js). Lo dispara el cron de
+  // Vercel una vez al día. Mismo cerrojo que /report/send y por la misma
+  // razón: tiene efecto de lado, así que falla CERRADO sin credencial. Sin
+  // DISCORD_AVISOS_WEBHOOK_URL no hace nada y lo dice.
+  router.all(
+    '/avisos/purge',
+    requireKeyOrCron,
+    wrap(async (req, res) => {
+      const result = await purgeExpiredAvisos(store);
+      res.status(result.ok ? 200 : 502).json(result);
+    })
+  );
+
   // GET /api/diag/sendgrid — ask SendGrid about deliverability for an address:
   // suppressions (bounce/block/spam/invalid), verified senders, and whether the
   // sending domain is authenticated (SPF/DKIM). A 202 from the send API only
@@ -547,9 +563,14 @@ function apiRoutes(store, matcher, petStore, petMatcher) {
         notifications: {
           mode: notifyMode(),
           relay_mailbox_present: !!avisoEmail(),
-          // Relevo activo y sin buzón: no sale nada, para nadie, y el único
+          // A dónde van HOY los avisos al equipo: 'discord' (el canal privado,
+          // si DISCORD_AVISOS_WEBHOOK_URL está puesta), 'email' (AVISO_EMAIL) o
+          // null. Solo el tipo y la presencia, nunca la URL: es una credencial.
+          operator_destination: operatorDestination() ? operatorDestination().kind : null,
+          discord_webhook_present: !!discordWebhookUrl(),
+          // Relevo activo y sin destino: no sale nada, para nadie, y el único
           // rastro es una línea "[notify:relevo] PERDIDO" en los logs.
-          relay_without_mailbox: relayEnabled() && !avisoEmail()
+          relay_without_mailbox: relayEnabled() && !operatorDestination()
         },
         faces: {
           aws_key_present: !!process.env.AWS_ACCESS_KEY_ID,

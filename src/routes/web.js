@@ -931,9 +931,11 @@ ${RESCUE_FOOTER}`
         contact: `${phone} · la persona puede ser localizada en: ${location}`
       });
 
-      // Best effort: the aviso already lives in the timeline; this mail is the
-      // operators' real-time signal to go relay it to the source registry. An
-      // email failure must never lose the aviso.
+      // Best effort: the aviso already lives in the timeline; this message
+      // (to the maintainers' private Discord channel, or to AVISO_EMAIL when
+      // that channel is not configured) is the operators' real-time signal to
+      // go relay it to the source registry. A delivery failure must never lose
+      // the aviso.
       const relayResult = await mailOperators(
         `Aviso de rescatista — ${person.full_name}`,
         [
@@ -947,7 +949,8 @@ ${RESCUE_FOOTER}`
           `Dónde puede ser localizada: ${location}`,
           '',
           'Siguiente paso: verificar y hacer llegar el aviso a la fuente del reporte (Colombia Te Busca: llenar su formulario de información en nombre del rescatista).'
-        ].join('\n')
+        ].join('\n'),
+        { store }
       );
       // Bitácora (#116): esto es un aviso OPERATIVO al equipo — pide que un
       // operador verifique y reenvíe a la fuente — no un aviso a una persona.
@@ -1408,7 +1411,8 @@ ${feedbackForm(kind, values)}
               `Resumen: ${summary}`,
               '',
               details || '(sin detalles)'
-            ].join('\n')
+            ].join('\n'),
+            { store }
           );
           if (!result.ok) {
             console.error(`[${kind}] PERDIDO — sin GitHub y sin este respaldo por correo (${result.error}): "${logSafe(summary)}"`);

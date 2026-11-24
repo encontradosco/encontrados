@@ -330,6 +330,13 @@ function createStore(adapter) {
     return adapter.insertMergeLog(fields);
   }
 
+  // Pasan derecho al adaptador: los ids de los avisos publicados en Discord,
+  // para su borrado a los 30 días (src/discord.js).
+  const insertDiscordAviso = (fields) => adapter.insertDiscordAviso(fields);
+  const listExpiredDiscordAvisos = (q) => adapter.listExpiredDiscordAvisos(q);
+  const countExpiredDiscordAvisosOfOtherWebhooks = (q) => adapter.countExpiredDiscordAvisosOfOtherWebhooks(q);
+  const deleteDiscordAviso = (messageId) => adapter.deleteDiscordAviso(messageId);
+
   // ---- Cola de revisión de estado (#190) --------------------------------
   // Pass-through, igual que la bitácora: la lógica de qué significa una ficha
   // en la cola y de qué hace falta para resolverla vive en
@@ -446,6 +453,10 @@ function createStore(adapter) {
     insertMatchLog,
     insertContactLog,
     insertMergeLog,
+    insertDiscordAviso,
+    listExpiredDiscordAvisos,
+    countExpiredDiscordAvisosOfOtherWebhooks,
+    deleteDiscordAviso,
     getUnknownPeople,
     insertStatusReview,
     statusReviewsForPerson,
